@@ -1,0 +1,267 @@
+import hashlib
+import json
+import os
+import re
+import shutil
+import sys
+import tempfile
+import uuid
+from typing import Any, Dict, List, Optional
+
+from PySide6.QtCore import QObject, Signal
+
+from ffstudio.config import APP_DIR, DATA_DIR, PREVIEW_DIR, SCHEMA_FILE, AppConfig
+from ffstudio.environment import create_process_environment, is_facefusion_root, probe_python_version, version_tuple
+from ffstudio.runner import ProcessRunner
+from ffstudio.schema import Schema, build_option_args, schema_is_stale
+
+MINIMUM_PYTHON = (3, 13)
+# facefusion's video content check reports its running result as "rate = <percent>", above 10 the target is blocked
+CONTENT_RATE_PATTERN = re.compile(r'rate = ([\d.]+)')
+CONTENT_RATE_LIMIT = 10.0
+# content_check.py prints one of these per target
+CONTENT_RESULT_PREFIX = 'CONTENT_RESULT '
+CONTENT_CHECK_DIR = os.path.join(PREVIEW_DIR, 'nsfw_check')
+
+
+class Session(QObject):
+	"""shared state between pages: config, option schema, option values and the process runner"""
+	schema_changed = Signal()
+	schema_loading = Signal(bool)
+	value_changed = Signal(str, object)
+	favorites_changed = Signal()
+	busy_changed = Signal(bool, str)
+	notify = Signal(str, str, str)
+	# owner, one result per target, exit code
+	content_checked = Signal(str, list, int)
+
+	def __init__(self) -> None:
+		super().__init__()
+		self.config = AppConfig()
+		self.schema : Optional[Schema] = Schema.load()
+		self.values : Dict[str, Any] = {}
+		self.runner = ProcessRunner(self)
+		self.task = ''
+		self.python_version : Optional[str] = None
+		self.schema_runner = ProcessRunner(self)
+		self.schema_runner.finished.connect(self.on_schema_finished)
+		self.schema_log : List[str] = []
+		self.schema_runner.log.connect(self.schema_log.append)
+		self.runner.finished.connect(self.on_runner_finished)
+		self.runner.started.connect(self.on_runner_started)
+		self.runner.progress.connect(self.on_runner_progress)
+		self.runner.log.connect(self.on_runner_log)
+		self.facefusion_running = False
+		# what the current run said, used to explain a failure that facefusion does not explain itself
+		self.content_rate = 0.0
+		self.run_messages : List[str] = []
+		# the page that started the running nsfw check, and what it found so far
+		self.content_check_owner = ''
+		self.content_results : List[Dict[str, Any]] = []
+		self.init_values()
+
+	# configuration
+
+	@property
+	def facefusion_root(self) -> str:
+		return self.config.get('facefusion_root') or ''
+
+	@property
+	def python_path(self) -> str:
+		return self.config.get('python_path') or ''
+
+	def is_configured(self) -> bool:
+		return is_facefusion_root(self.facefusion_root) and os.path.isfile(self.python_path)
+
+	def check_python(self) -> Optional[str]:
+		self.python_version = probe_python_version(self.python_path) if os.path.isfile(self.python_path) else None
+		return self.python_version
+
+	def python_supported(self) -> bool:
+		return version_tuple(self.python_version) >= MINIMUM_PYTHON
+
+	def save(self) -> None:
+		self.config.set('options', self.values)
+		self.config.save()
+
+	# option values
+
+	def init_values(self) -> None:
+		stored = self.config.get('options') or {}
+		self.values = {}
+		if self.schema:
+			for dest, option in self.schema.options.items():
+				self.values[dest] = stored.get(dest, option.get('default'))
+			# drop values that no longer exist in the installed facefusion
+			for dest in list(self.values):
+				resolved = self.schema.resolve(dest, self.values)
+				value = self.values.get(dest)
+				if resolved.get('choices') and value is not None and not resolved.get('multiple'):
+					if str(value) not in [ str(choice) for choice in resolved.get('choices') ]:
+						self.values[dest] = resolved.get('default')
+
+	def set_value(self, dest : str, value : Any) -> None:
+		self.values[dest] = value
+		self.value_changed.emit(dest, value)
+
+	def processors(self) -> List[str]:
+		return list(self.values.get('processors') or [])
+
+	# favorite options, shown again in their own box on the studio page
+
+	def favorites(self) -> List[str]:
+		return list(self.config.get('favorite_options') or [])
+
+	def toggle_favorite(self, dest : str) -> None:
+		favorites = self.favorites()
+		if dest in favorites:
+			favorites.remove(dest)
+		else:
+			favorites.append(dest)
+		self.config.set('favorite_options', favorites)
+		self.favorites_changed.emit()
+
+	# schema
+
+	def refresh_schema(self, force : bool = False) -> bool:
+		if not self.is_configured():
+			return False
+		if not force and not schema_is_stale(self.schema, self.facefusion_root):
+			return False
+		if self.schema_runner.is_running():
+			return True
+		os.makedirs(DATA_DIR, exist_ok = True)
+		self.schema_log.clear()
+		script = os.path.join(APP_DIR, 'schema_dump.py')
+		self.schema_loading.emit(True)
+		self.schema_runner.start(self.python_path, [ script, self.facefusion_root, SCHEMA_FILE ], self.facefusion_root, create_process_environment(self.python_path))
+		return True
+
+	def on_schema_finished(self, exit_code : int, _ : float) -> None:
+		self.schema_loading.emit(False)
+		if exit_code == 0:
+			self.schema = Schema.load()
+			self.init_values()
+			self.schema_changed.emit()
+			self.notify.emit('success', 'Options loaded', 'FaceFusion %s · %d options' % (self.schema.version, len(self.schema.options)))
+		else:
+			tail = '\n'.join(self.schema_log[-6:])
+			self.notify.emit('error', 'Could not read FaceFusion options', tail or 'exit code %d' % exit_code)
+
+	# running facefusion
+
+	def set_task(self, task : str) -> None:
+		self.task = task
+		self.busy_changed.emit(bool(task), task)
+
+	def run_facefusion(self, task : str, command_args : List[str], script : str = 'facefusion.py') -> bool:
+		if self.runner.is_running():
+			self.notify.emit('warning', 'Busy', 'FaceFusion is already running: ' + self.task)
+			return False
+		if not self.is_configured():
+			self.notify.emit('error', 'FaceFusion not set up', 'Choose the FaceFusion folder and Python environment in Setup.')
+			return False
+		self.save()
+		self.set_task(task)
+		self.facefusion_running = True
+		return self.runner.start(self.python_path, [ script ] + command_args, self.facefusion_root, create_process_environment(self.python_path))
+
+	def on_runner_started(self, _ : str) -> None:
+		self.content_rate = 0.0
+		self.run_messages = []
+
+	def on_runner_progress(self, title : str, _ : float, status : str) -> None:
+		match = CONTENT_RATE_PATTERN.search(status) if title == 'analysing' else None
+		if match:
+			self.content_rate = max(self.content_rate, float(match.group(1)))
+
+	def on_runner_log(self, line : str) -> None:
+		if line.startswith(CONTENT_RESULT_PREFIX):
+			try:
+				self.content_results.append(json.loads(line[len(CONTENT_RESULT_PREFIX):]))
+			except ValueError:
+				pass
+		elif not re.match(r'\[FACEFUSION\.\w+\] processing step \d+ of \d+$', line):
+			self.run_messages.append(line)
+
+	def nsfw_block_message(self, image_target : bool) -> Optional[str]:
+		"""explains a failed run that was stopped by facefusion's nsfw content check
+
+		facefusion exits with code 1 and prints no error when its content check blocks a target.
+		a video shows the check's rate in its progress line, which is proof enough,
+		an image shows nothing at all, so a failure without any message only suggests a block
+		and the caller confirms it with run_content_check
+		"""
+		if self.content_rate > CONTENT_RATE_LIMIT:
+			return "FaceFusion's NSFW filter found explicit content in %.0f%% of the checked frames (the limit is 10%%) and refused to process this video." % min(self.content_rate, 100)
+		if image_target and not self.run_messages:
+			return "FaceFusion stopped without giving a reason, which usually means its NSFW filter refused the target image."
+		return None
+
+	def nsfw_block_is_certain(self) -> bool:
+		return self.content_rate > CONTENT_RATE_LIMIT
+
+	def run_content_check(self, owner : str, targets : List[str], trim_start : Optional[int] = None, trim_end : Optional[int] = None) -> bool:
+		"""runs facefusion's own nsfw check on the targets without processing them, content_checked reports back to the owner"""
+		if not self.is_configured():
+			self.notify.emit('error', 'FaceFusion not set up', 'Choose the FaceFusion folder and Python environment in Setup.')
+			return False
+		if self.runner.is_running():
+			self.notify.emit('warning', 'Busy', 'Already running: ' + self.task)
+			return False
+		shutil.rmtree(CONTENT_CHECK_DIR, ignore_errors = True)
+		self.content_check_owner = owner
+		self.content_results = []
+		providers = ','.join(self.values.get('execution_providers') or [])
+		device_ids = ','.join(str(device_id) for device_id in self.values.get('execution_device_ids') or [])
+		trim = [ str(trim_start if trim_start is not None else -1), str(trim_end if trim_end is not None else -1) ]
+		args = [ os.path.join(APP_DIR, 'content_check.py'), CONTENT_CHECK_DIR, providers, device_ids ] + trim + [ '--' ] + targets
+		task = 'NSFW check: ' + (os.path.basename(targets[0]) if len(targets) == 1 else '%d targets' % len(targets))
+		return self.run_python(task, args, self.facefusion_root)
+
+	def on_runner_finished(self, exit_code : int, _ : float) -> None:
+		if self.facefusion_running and exit_code != 0:
+			self.clear_facefusion_temp()
+		self.facefusion_running = False
+		self.set_task('')
+		if self.content_check_owner:
+			owner, self.content_check_owner = self.content_check_owner, ''
+			self.content_checked.emit(owner, list(self.content_results), exit_code)
+
+	def facefusion_temp_dir(self) -> str:
+		# mirrors facefusion: <temp_path>/<sha1 of the machine id>/facefusion/<output name>/
+		temp_path = self.values.get('temp_path') or tempfile.gettempdir()
+		return os.path.join(temp_path, hashlib.sha1(str(uuid.getnode()).encode()).hexdigest(), 'facefusion')
+
+	def clear_facefusion_temp(self) -> None:
+		# facefusion removes its extracted frames itself, except when Stop kills it or it crashes
+		shutil.rmtree(self.facefusion_temp_dir(), ignore_errors = True)
+
+	def clear_preview_files(self) -> None:
+		shutil.rmtree(PREVIEW_DIR, ignore_errors = True)
+
+	def run_python(self, task : str, args : List[str], working_dir : str, python_path : Optional[str] = None) -> bool:
+		if self.runner.is_running():
+			self.notify.emit('warning', 'Busy', 'Already running: ' + self.task)
+			return False
+		python_path = python_path or self.python_path
+		self.set_task(task)
+		return self.runner.start(python_path, args, working_dir, create_process_environment(python_path))
+
+	def run_program(self, task : str, program : str, args : List[str], working_dir : str, environment = None) -> bool:
+		if self.runner.is_running():
+			self.notify.emit('warning', 'Busy', 'Already running: ' + self.task)
+			return False
+		self.set_task(task)
+		return self.runner.start(program, args, working_dir, environment)
+
+	def option_args(self, values : Optional[Dict[str, Any]] = None, groups : Optional[List[str]] = None) -> List[str]:
+		if not self.schema:
+			return []
+		values = values if values is not None else self.values
+		args = [ '--processors' ] + list(values.get('processors') or self.schema.options.get('processors', {}).get('default') or [])
+		return args + build_option_args(self.schema, values, groups)
+
+
+def app_python() -> str:
+	return sys.executable
