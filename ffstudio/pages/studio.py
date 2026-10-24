@@ -17,7 +17,7 @@ from ffstudio.faces import FACE_GROUPS, MASK_GROUPS, FaceProbe, describe_faces, 
 from ffstudio.media import GIF_EXTENSIONS, VideoReader, extension, format_timecode, media_kind, read_frame, read_image, thumbnail, to_pixmap, write_image
 from ffstudio.nsfw import BLOCKED_STATUS, NsfwDialog, describe_result, show_blocked_bar
 from ffstudio.option_panel import FavoritesPanel, OptionPanel
-from ffstudio.output_name import AUTOMATIC_TEMPLATE, NAME_EXAMPLES, NAME_TAGS, build_output_path, clean_name, unknown_tags
+from ffstudio.output_name import AUTOMATIC_TEMPLATE, NAME_EXAMPLES, NAME_TAGS, build_output, build_output_path, unknown_tags
 from ffstudio.session import Session, folder_is_writable
 from ffstudio.widgets import LockButton, PreviewView, ProcessorArea, ProcessorButton, Splitter, StateButton, Thumbnail, add_edit_button, collect_drop_paths, guard_wheel, join_split_buttons
 
@@ -80,15 +80,124 @@ class StripScroll(SingleDirectionScrollArea):
 		QTimer.singleShot(0, self.fit)
 
 
+def run_tag_values(session : Session) -> Dict[str, str]:
+	"""the file name tags that come from the settings and the clock rather than from the files"""
+	processors = session.processors()
+	model = next((str(session.values.get(processor + '_model')) for processor in processors if session.values.get(processor + '_model')), '')
+	now = datetime.now()
+	return\
+	{
+		'processors': '-'.join(processor.split('_')[-1] if '_' in processor else processor for processor in processors[:3]) or 'out',
+		'model': model,
+		'date': now.strftime('%Y-%m-%d'),
+		'time': now.strftime('%H-%M-%S')
+	}
+
+
+class SourceSelection:
+	"""the sources behind a SourceCard: which there are, which are used and what they are called
+
+	the page sets session and source_card, and gets on_sources_changed('list' | 'names' | 'selection') after each change
+	"""
+	SOURCE_KEYS = ('source_paths', 'unused_source_paths', 'source_names')
+
+	def load_sources(self) -> None:
+		paths_key, unused_key, names_key = self.SOURCE_KEYS
+		config = self.session.config
+		self.source_paths : List[str] = [ path for path in config.get(paths_key) or [] if os.path.exists(path) ]
+		self.unused_sources : List[str] = [ path for path in config.get(unused_key) or [] if path in self.source_paths ]
+		# names given to sources by clicking the name under a thumbnail, {source} in the file name uses them
+		self.source_names : Dict[str, str] = { path: name for path, name in (config.get(names_key) or {}).items() if path in self.source_paths }
+		self.source_anchor = ''
+
+	def store_sources(self) -> None:
+		paths_key, unused_key, names_key = self.SOURCE_KEYS
+		self.session.config.set(paths_key, self.source_paths)
+		self.session.config.set(unused_key, self.unused_sources)
+		self.session.config.set(names_key, self.source_names)
+
+	def on_sources_changed(self, change : str) -> None:
+		pass
+
+	def add_sources(self, paths : List[str]) -> None:
+		accepted = [ path for path in paths if media_kind(path) in [ 'image', 'audio' ] and path not in self.source_paths ]
+		rejected = [ path for path in paths if media_kind(path) not in [ 'image', 'audio' ] ]
+		if rejected:
+			self.session.notify.emit('warning', 'Skipped files', 'Sources must be images or audio: ' + ', '.join(os.path.basename(path) for path in rejected[:3]))
+		# what was just added becomes the selection for its kind
+		added_kinds = { media_kind(path) for path in accepted }
+		self.unused_sources = list(dict.fromkeys(self.unused_sources + [ path for path in self.source_paths if media_kind(path) in added_kinds ]))
+		if accepted:
+			self.source_anchor = accepted[0]
+		self.set_sources(self.source_paths + accepted)
+
+	def remove_source(self, path : str) -> None:
+		self.set_sources([ source for source in self.source_paths if source != path ])
+
+	def set_sources(self, paths : List[str]) -> None:
+		self.source_paths = paths
+		self.unused_sources = [ path for path in self.unused_sources if path in paths ]
+		self.source_names = { path: name for path, name in self.source_names.items() if path in paths }
+		self.store_sources()
+		self.source_card.refresh(paths)
+		self.on_sources_changed('list')
+
+	def source_name(self, path : str) -> str:
+		return self.source_names.get(path) or os.path.splitext(os.path.basename(path))[0]
+
+	def rename_source(self, path : str, name : str) -> None:
+		if name:
+			self.source_names[path] = name
+		else:
+			self.source_names.pop(path, None)
+		self.store_sources()
+		self.on_sources_changed('names')
+
+	def active_sources(self) -> List[str]:
+		return [ path for path in self.source_paths if path not in self.unused_sources ]
+
+	def on_source_clicked(self, path : str, modifiers : Qt.KeyboardModifier) -> None:
+		"""explorer style selection: click picks one, ctrl+click adds or removes, shift+click picks a range
+
+		images and audio are picked separately, so one face and one audio file can be used together
+		"""
+		kind = media_kind(path)
+		same_kind = [ source for source in self.source_paths if media_kind(source) == kind ]
+		used = set(self.active_sources())
+		ctrl = bool(modifiers & Qt.KeyboardModifier.ControlModifier)
+		if modifiers & Qt.KeyboardModifier.ShiftModifier and self.source_anchor in same_kind:
+			start, end = sorted([ same_kind.index(self.source_anchor), same_kind.index(path) ])
+			if not ctrl:
+				used -= set(same_kind)
+			used |= set(same_kind[start:end + 1])
+		elif ctrl:
+			used ^= { path }
+			self.source_anchor = path
+		else:
+			used = (used - set(same_kind)) | { path }
+			self.source_anchor = path
+		self.set_unused_sources([ source for source in self.source_paths if source not in used ])
+
+	def set_unused_sources(self, unused : List[str]) -> None:
+		self.unused_sources = unused
+		self.store_sources()
+		self.source_card.refresh_selection()
+		self.on_sources_changed('selection')
+
+	def toggle_all_sources(self) -> None:
+		# with any source left out this selects all of them, otherwise it clears the selection
+		self.set_unused_sources([] if self.unused_sources else list(self.source_paths))
+
+
 class SourceCard(SimpleCardWidget):
-	def __init__(self, page : 'StudioPage') -> None:
+	def __init__(self, page : QWidget, title : str = 'Source', empty_text : str = 'Drop face images (or audio for lip sync) here\nor click to browse') -> None:
 		super().__init__(page)
 		self.page = page
 		self.setAcceptDrops(True)
 		layout = QVBoxLayout(self)
 		layout.setContentsMargins(16, 12, 12, 14)
 		layout.setSpacing(8)
-		header = card_header('Source', self)
+		header = card_header(title, self)
 		self.count_label = elastic(CaptionLabel('', self))
 		self.count_label.installEventFilter(ToolTipFilter(self.count_label))
 		self.count_label.setTextColor('#707070', '#9a9a9a')
@@ -104,7 +213,7 @@ class SourceCard(SimpleCardWidget):
 		header.addWidget(clear_button)
 		layout.addLayout(header)
 
-		self.empty = PreviewView('Drop face images (or audio for lip sync) here\nor click to browse', self)
+		self.empty = PreviewView(empty_text, self)
 		self.empty.setMinimumHeight(96)
 		self.empty.setMaximumHeight(96)
 		self.empty.clicked.connect(self.browse)
@@ -488,18 +597,15 @@ class NameTagsView(FlyoutViewBase):
 		self.page.output_name_edit.setFocus()
 
 
-class StudioPage(QWidget):
+class StudioPage(SourceSelection, QWidget):
 	def __init__(self, session : Session, parent : Optional[QWidget] = None) -> None:
 		super().__init__(parent)
 		self.setObjectName('studio')
 		self.session = session
-		self.source_paths : List[str] = [ path for path in session.config.get('source_paths') or [] if os.path.exists(path) ]
+		self.load_sources()
 		self.target_path : str = session.config.get('target_path') or ''
 		if self.target_path and not os.path.exists(self.target_path):
 			self.target_path = ''
-		self.unused_sources : List[str] = [ path for path in session.config.get('unused_source_paths') or [] if path in self.source_paths ]
-		# names given to sources by clicking the name under a thumbnail, {source} in the file name uses them
-		self.source_names : Dict[str, str] = { path: name for path, name in (session.config.get('source_names') or {}).items() if path in self.source_paths }
 		self.view = 'target'
 		self.last_output = ''
 		self.pending_output = ''
@@ -508,7 +614,6 @@ class StudioPage(QWidget):
 		self.result_info : dict = {}
 		self.pending_info : dict = {}
 		self.result_reader : Optional[VideoReader] = None
-		self.source_anchor = ''
 		self.blocked_target = ''
 		# the last nsfw check result for the target, and whether that check followed a refused run
 		self.content_result : Optional[dict] = None
@@ -752,81 +857,14 @@ class StudioPage(QWidget):
 				return os.path.dirname(path)
 		return os.path.expanduser('~')
 
-	def add_sources(self, paths : List[str]) -> None:
-		accepted = [ path for path in paths if media_kind(path) in [ 'image', 'audio' ] and path not in self.source_paths ]
-		rejected = [ path for path in paths if media_kind(path) not in [ 'image', 'audio' ] ]
-		if rejected:
-			self.session.notify.emit('warning', 'Skipped files', 'Sources must be images or audio: ' + ', '.join(os.path.basename(path) for path in rejected[:3]))
-		# what was just added becomes the selection for its kind
-		added_kinds = { media_kind(path) for path in accepted }
-		self.unused_sources = list(dict.fromkeys(self.unused_sources + [ path for path in self.source_paths if media_kind(path) in added_kinds ]))
-		if accepted:
-			self.source_anchor = accepted[0]
-		self.set_sources(self.source_paths + accepted)
-
-	def remove_source(self, path : str) -> None:
-		self.set_sources([ source for source in self.source_paths if source != path ])
-
-	def set_sources(self, paths : List[str]) -> None:
-		self.source_paths = paths
-		self.unused_sources = [ path for path in self.unused_sources if path in paths ]
-		self.source_names = { path: name for path, name in self.source_names.items() if path in paths }
-		self.session.config.set('source_paths', paths)
-		self.session.config.set('unused_source_paths', self.unused_sources)
-		self.session.config.set('source_names', self.source_names)
-		self.source_card.refresh(paths)
-		self.mapping_card.refresh_sources()
-		self.refresh_name_preview()
-		self.schedule_live_preview()
-
-	def source_name(self, path : str) -> str:
-		return self.source_names.get(path) or os.path.splitext(os.path.basename(path))[0]
-
-	def rename_source(self, path : str, name : str) -> None:
-		if name:
-			self.source_names[path] = name
+	def on_sources_changed(self, change : str) -> None:
+		if change == 'selection':
+			self.mapping_card.refresh_text()
 		else:
-			self.source_names.pop(path, None)
-		self.session.config.set('source_names', self.source_names)
-		self.mapping_card.refresh_sources()
+			self.mapping_card.refresh_sources()
 		self.refresh_name_preview()
-
-	def active_sources(self) -> List[str]:
-		return [ path for path in self.source_paths if path not in self.unused_sources ]
-
-	def on_source_clicked(self, path : str, modifiers : Qt.KeyboardModifier) -> None:
-		"""explorer style selection: click picks one, ctrl+click adds or removes, shift+click picks a range
-
-		images and audio are picked separately, so one face and one audio file can be used together
-		"""
-		kind = media_kind(path)
-		same_kind = [ source for source in self.source_paths if media_kind(source) == kind ]
-		used = set(self.active_sources())
-		ctrl = bool(modifiers & Qt.KeyboardModifier.ControlModifier)
-		if modifiers & Qt.KeyboardModifier.ShiftModifier and self.source_anchor in same_kind:
-			start, end = sorted([ same_kind.index(self.source_anchor), same_kind.index(path) ])
-			if not ctrl:
-				used -= set(same_kind)
-			used |= set(same_kind[start:end + 1])
-		elif ctrl:
-			used ^= { path }
-			self.source_anchor = path
-		else:
-			used = (used - set(same_kind)) | { path }
-			self.source_anchor = path
-		self.set_unused_sources([ source for source in self.source_paths if source not in used ])
-
-	def set_unused_sources(self, unused : List[str]) -> None:
-		self.unused_sources = unused
-		self.session.config.set('unused_source_paths', self.unused_sources)
-		self.source_card.refresh_selection()
-		self.mapping_card.refresh_text()
-		self.refresh_name_preview()
-		self.schedule_live_preview()
-
-	def toggle_all_sources(self) -> None:
-		# with any source left out this selects all of them, otherwise it clears the selection
-		self.set_unused_sources([] if self.unused_sources else list(self.source_paths))
+		if change != 'names':
+			self.schedule_live_preview()
 
 	def apply_filter(self, text : str) -> None:
 		self.processor_panel.set_filter(text)
@@ -996,21 +1034,16 @@ class StudioPage(QWidget):
 
 	def name_tag_values(self) -> Dict[str, str]:
 		"""what each file name tag stands for right now"""
-		processors = self.session.processors()
 		sources = self.active_sources()
 		ordered = [ path for path in sources if media_kind(path) == 'image' ] + [ path for path in sources if media_kind(path) != 'image' ]
-		model = next((str(self.session.values.get(processor + '_model')) for processor in processors if self.session.values.get(processor + '_model')), '')
-		now = datetime.now()
-		return\
+		values = run_tag_values(self.session)
+		values.update(
 		{
 			'target': os.path.splitext(os.path.basename(self.target_path))[0],
 			'source': '+'.join(self.source_name(path) for path in ordered),
-			'processors': '-'.join(processor.split('_')[-1] if '_' in processor else processor for processor in processors[:3]) or 'out',
-			'model': model,
-			'frame': str(self.target_card.current_frame_index()),
-			'date': now.strftime('%Y-%m-%d'),
-			'time': now.strftime('%H-%M-%S')
-		}
+			'frame': str(self.target_card.current_frame_index())
+		})
+		return values
 
 	def output_extension(self) -> str:
 		if media_kind(self.target_path) == 'image' and any(media_kind(path) == 'audio' for path in self.active_sources()):
@@ -1019,15 +1052,7 @@ class StudioPage(QWidget):
 
 	def build_output(self) -> Tuple[str, bool]:
 		"""the output path and whether it replaces a file, inside <source name>\\Images or Videos when Sub-Folders is on"""
-		template = self.output_name_edit.text()
-		values = self.name_tag_values()
-		path, replaces = build_output_path(template, values, self.output_dir(), self.output_extension())
-		if self.subfolders_button.isChecked():
-			# a typed extension can turn an image target into a video, so the kind comes from the built name
-			kind = 'Images' if media_kind(path) == 'image' else 'Videos'
-			folder = os.path.join(self.output_dir(), clean_name(values.get('source') or '') or 'No source', kind)
-			path, replaces = build_output_path(template, values, folder, self.output_extension())
-		return path, replaces
+		return build_output(self.output_name_edit.text(), self.name_tag_values(), self.output_dir(), self.output_extension(), self.subfolders_button.isChecked())
 
 	def suggest_output_path(self) -> str:
 		return self.build_output()[0]

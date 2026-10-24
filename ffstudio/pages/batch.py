@@ -4,16 +4,20 @@ from typing import Any, Dict, List, Optional
 
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QFileDialog, QHBoxLayout, QVBoxLayout, QWidget
-from qfluentwidgets import BodyLabel, CaptionLabel, ComboBox, FluentIcon, LineEdit, ListWidget, PrimaryPushButton, ProgressBar, PushButton, SimpleCardWidget, StrongBodyLabel, SubtitleLabel, ToolTipFilter
+from qfluentwidgets import BodyLabel, CaptionLabel, ComboBox, FluentIcon, Flyout, FlyoutAnimationType, LineEdit, ListWidget, PrimaryPushButton, ProgressBar, PushButton, SimpleCardWidget, StrongBodyLabel, SubtitleLabel, TogglePushButton, ToolTipFilter
 
 from ffstudio.media import media_kind
 from ffstudio.nsfw import BLOCKED_TITLE, NsfwDialog, show_blocked_bar
+from ffstudio.output_name import build_output, unknown_tags
 from ffstudio.pages.setup import form_row, section_card
+from ffstudio.pages.studio import NameTagsView, SourceCard, SourceSelection, elastic, run_tag_values
 from ffstudio.session import Session, explain_error, folder_is_writable
+from ffstudio.widgets import add_edit_button
 
-SOURCE_FILTERS = [ ('*.jpg', 'JPG images'), ('*.png', 'PNG images'), ('*.webp', 'WebP images'), ('*.*', 'All files') ]
 TARGET_FILTERS = [ ('*.mp4', 'MP4 videos'), ('*.jpg', 'JPG images'), ('*.png', 'PNG images'), ('*.mov', 'MOV videos'), ('*.webm', 'WebM videos'), ('*.*', 'All files') ]
-DEFAULT_TEMPLATE = '{target_name}-{source_name}{target_extension}'
+DEFAULT_TEMPLATE = '{target}_{source}'
+# the placeholders of the first batch file names, read as the tags that replaced them
+OLD_PLACEHOLDERS = { '{target_name}': '{target}', '{source_name}': '{source}', '{target_extension}': '', '{index}': '{n}' }
 LIST_LIMIT = 500
 STATUS_PREFIX =\
 {
@@ -25,51 +29,91 @@ STATUS_PREFIX =\
 }
 
 
-class BatchPage(QWidget):
+def upgrade_template(template : str) -> str:
+	for old, new in OLD_PLACEHOLDERS.items():
+		template = template.replace(old, new)
+	return template
+
+
+class BatchPage(SourceSelection, QWidget):
+	SOURCE_KEYS = ('batch_source_paths', 'batch_unused_source_paths', 'batch_source_names')
+
 	def __init__(self, session : Session, parent : Optional[QWidget] = None) -> None:
 		super().__init__(parent)
 		self.setObjectName('batch')
 		self.session = session
 		self.running = False
-		# one entry per output: source, target, output path, status
+		# one entry per output: sources, target, output path, status
 		self.items : List[Dict[str, Any]] = []
+		self.pairs_count = 0
 		# nsfw check results by target, from NSFW Check or from confirming refused images after a batch
 		self.check_results : Dict[str, Dict[str, Any]] = {}
 		self.current = -1
 		self.started_count = 0
 		self.confirming = False
 		self.stopped = False
+		self.load_sources()
 		stored = session.config.get('batch') or {}
+		# typing and setting changes replan the outputs once they settle
+		self.refresh_timer = QTimer(self)
+		self.refresh_timer.setSingleShot(True)
+		self.refresh_timer.setInterval(200)
+		self.refresh_timer.timeout.connect(self.refresh_matches)
 
 		layout = QVBoxLayout(self)
 		layout.setContentsMargins(24, 16, 24, 16)
 		layout.setSpacing(12)
 		title = QHBoxLayout()
 		title.addWidget(SubtitleLabel('Batch', self))
-		hint = CaptionLabel('Runs every source against every target, one output at a time, using the processors and options from Studio', self)
+		hint = CaptionLabel('Runs every selected face against every target, one output at a time, using the processors and options from Studio. Selected audio goes into every run.', self)
 		hint.setTextColor('#707070', '#9a9a9a')
-		title.addWidget(hint)
-		title.addStretch(1)
+		title.addWidget(elastic(hint), 1)
 		layout.addLayout(title)
 
-		card, form = section_card('Inputs and output', '', self)
-		self.source_dir, self.source_filter = self.folder_row(form, card, 'Source faces', stored.get('source_dir', ''), SOURCE_FILTERS, stored.get('source_filter', '*.jpg'), optional = True)
-		self.target_dir, self.target_filter = self.folder_row(form, card, 'Targets', stored.get('target_dir', ''), TARGET_FILTERS, stored.get('target_filter', '*.mp4'))
-		self.output_dir = LineEdit(card)
-		self.output_dir.setText(stored.get('output_dir', os.path.join(session.config.get('output_dir') or '', 'batch')))
+		self.source_card = SourceCard(self, 'Source faces', 'Drop face images (or audio for lip sync) here or click to browse\nLeave empty for processors that need no source')
+		layout.addWidget(self.source_card)
+
+		card, form = section_card('Targets and output', '', self)
+		self.target_dir = LineEdit(card)
+		self.target_dir.setText(stored.get('target_dir', ''))
+		self.target_dir.setPlaceholderText('Folder with the target images or videos')
+		self.target_dir.setClearButtonEnabled(True)
+		self.target_filter = ComboBox(card)
+		patterns = [ pattern for pattern, _ in TARGET_FILTERS ]
+		for pattern, name in TARGET_FILTERS:
+			self.target_filter.addItem('%s  (%s)' % (name, pattern), userData = pattern)
+		self.target_filter.setCurrentIndex(patterns.index(stored.get('target_filter')) if stored.get('target_filter') in patterns else 0)
+		self.target_filter.setFixedWidth(210)
+		self.target_filter.currentIndexChanged.connect(self.refresh_matches)
+		target_browse = PushButton(FluentIcon.FOLDER, 'Browse', card)
+		target_browse.clicked.connect(lambda: self.browse(self.target_dir))
+		form.addLayout(form_row('Target folder', [ self.target_dir, self.target_filter, target_browse ], card))
+		self.output_dir_edit = LineEdit(card)
+		self.output_dir_edit.setText(stored.get('output_dir', os.path.join(session.config.get('output_dir') or '', 'batch')))
 		output_browse = PushButton(FluentIcon.FOLDER, 'Browse', card)
-		output_browse.clicked.connect(lambda: self.browse(self.output_dir))
-		form.addLayout(form_row('Output folder', [ self.output_dir, output_browse ], card))
-		self.template = LineEdit(card)
-		self.template.setText(stored.get('template', DEFAULT_TEMPLATE))
-		form.addLayout(form_row('File name', [ self.template ], card))
-		tokens = CaptionLabel('Placeholders: {index}  {source_name}  {target_name}  {target_extension} (includes the dot)', card)
-		tokens.setTextColor('#707070', '#9a9a9a')
-		form.addLayout(form_row('', [ tokens ], card))
+		output_browse.clicked.connect(lambda: self.browse(self.output_dir_edit))
+		form.addLayout(form_row('Output folder', [ self.output_dir_edit, output_browse ], card))
+		self.output_name_edit = LineEdit(card)
+		self.output_name_edit.setPlaceholderText('File name (automatic)')
+		self.output_name_edit.setClearButtonEnabled(True)
+		self.output_name_edit.setText(upgrade_template(stored.get('template', DEFAULT_TEMPLATE)))
+		self.tags_button = add_edit_button(self.output_name_edit, FluentIcon.TAG, 'File name tags and examples')
+		self.tags_button.clicked.connect(self.show_name_tags)
+		self.subfolders_button = TogglePushButton('Sub-Folders', card)
+		self.subfolders_button.setToolTip('Save into <output folder>\\<source name>\\Images or Videos, created as needed')
+		self.subfolders_button.installEventFilter(ToolTipFilter(self.subfolders_button))
+		self.subfolders_button.setChecked(bool(stored.get('subfolders')))
+		self.subfolders_button.toggled.connect(self.refresh_matches)
+		form.addLayout(form_row('File name', [ self.output_name_edit, self.subfolders_button ], card))
+		# what the first file will be called, so tags can be checked before a run
+		self.name_preview_label = elastic(CaptionLabel('', card))
+		self.name_preview_label.setTextColor('#707070', '#9a9a9a')
+		self.name_preview_label.installEventFilter(ToolTipFilter(self.name_preview_label))
+		form.addLayout(form_row('', [ self.name_preview_label ], card))
 		layout.addWidget(card)
 
-		for edit in [ self.source_dir, self.target_dir, self.output_dir, self.template ]:
-			edit.textChanged.connect(self.refresh_matches)
+		for edit in [ self.target_dir, self.output_dir_edit, self.output_name_edit ]:
+			edit.textChanged.connect(self.refresh_timer.start)
 
 		matches_card = SimpleCardWidget(self)
 		matches_layout = QVBoxLayout(matches_card)
@@ -116,61 +160,106 @@ class BatchPage(QWidget):
 		session.runner.log.connect(self.on_log)
 		session.runner.finished.connect(self.on_finished)
 		session.content_checked.connect(self.on_content_checked)
+		session.value_changed.connect(lambda *_: self.refresh_timer.start())
+		self.source_card.refresh(self.source_paths)
 		self.refresh_matches()
 
-	def folder_row(self, form : QVBoxLayout, card : QWidget, label : str, folder : str, filters, current_filter : str, optional : bool = False):
-		edit = LineEdit(card)
-		edit.setText(folder)
-		edit.setPlaceholderText('Optional, leave empty for processors without a source' if optional else 'Folder')
-		edit.setClearButtonEnabled(True)
-		combo = ComboBox(card)
-		for pattern, name in filters:
-			combo.addItem('%s  (%s)' % (name, pattern), userData = pattern)
-		combo.setCurrentIndex(max(0, [ pattern for pattern, _ in filters ].index(current_filter) if current_filter in [ pattern for pattern, _ in filters ] else 0))
-		combo.setFixedWidth(210)
-		combo.currentIndexChanged.connect(self.refresh_matches)
-		browse = PushButton(FluentIcon.FOLDER, 'Browse', card)
-		browse.clicked.connect(lambda: self.browse(edit))
-		form.addLayout(form_row(label, [ edit, combo, browse ], card))
-		return edit, combo
+	def on_sources_changed(self, change : str) -> None:
+		self.refresh_matches()
+
+	def last_dir(self) -> str:
+		folder = self.target_dir.text().strip()
+		if os.path.isdir(folder):
+			return folder
+		return os.path.dirname(self.source_paths[0]) if self.source_paths else os.path.expanduser('~')
 
 	def browse(self, edit : LineEdit) -> None:
 		path = QFileDialog.getExistingDirectory(self, 'Choose folder', edit.text() or os.path.expanduser('~'))
 		if path:
 			edit.setText(os.path.normpath(path))
 
-	def pattern(self, edit : LineEdit, combo : ComboBox) -> str:
-		folder = edit.text().strip()
-		return os.path.join(folder, combo.currentData()) if folder else ''
+	def output_dir(self) -> str:
+		return self.output_dir_edit.text().strip()
 
-	def effective_template(self) -> str:
-		template = self.template.text().strip() or DEFAULT_TEMPLATE
-		if not self.source_dir.text().strip():
-			template = template.replace('-{source_name}', '').replace('{source_name}', '')
-		return template
+	def target_pattern(self) -> str:
+		folder = self.target_dir.text().strip()
+		return os.path.join(folder, self.target_filter.currentData()) if folder else ''
+
+	def runs(self) -> List[Dict[str, Any]]:
+		"""one run per selected face and target, the selected audio goes into each of them"""
+		targets = sorted(glob.glob(self.target_pattern())) if self.target_pattern() else []
+		sources = self.active_sources()
+		images = [ path for path in sources if media_kind(path) == 'image' ]
+		audio = [ path for path in sources if media_kind(path) == 'audio' ]
+		return [ { 'source': image, 'sources': ([ image ] if image else []) + audio, 'target': target } for image in images or [ None ] for target in targets ]
+
+	def name_tag_values(self, run : Optional[Dict[str, Any]] = None) -> Dict[str, str]:
+		"""what each file name tag stands for in a run, the first planned one when none is given"""
+		run = run or (self.items[0] if self.items else { 'sources': self.active_sources()[:1], 'target': '' })
+		values = run_tag_values(self.session)
+		values.update(
+		{
+			'target': os.path.splitext(os.path.basename(run.get('target') or ''))[0],
+			'source': '+'.join(self.source_name(path) for path in run.get('sources')),
+			'frame': '0'
+		})
+		return values
+
+	def output_extension(self, run : Optional[Dict[str, Any]] = None) -> str:
+		run = run or (self.items[0] if self.items else { 'sources': [], 'target': '' })
+		target = run.get('target') or ''
+		if media_kind(target) == 'image' and any(media_kind(path) == 'audio' for path in run.get('sources')):
+			return '.mp4'
+		return os.path.splitext(target)[1].lower() or '.mp4'
 
 	def refresh_matches(self) -> None:
 		if self.running:
 			return
-		sources = sorted(glob.glob(self.pattern(self.source_dir, self.source_filter))) if self.source_dir.text().strip() else []
-		targets = sorted(glob.glob(self.pattern(self.target_dir, self.target_filter))) if self.target_dir.text().strip() else []
-		pairs = [ (source, target) for source in sources for target in targets ] if sources else [ (None, target) for target in targets ]
-		template = self.effective_template()
-		output_dir = self.output_dir.text().strip()
+		self.refresh_timer.stop()
+		self.save()
+		template = self.output_name_edit.text()
+		output_dir = self.output_dir()
+		subfolders = self.subfolders_button.isChecked()
+		# outputs planned earlier in the list count as taken, so {n} keeps counting across the batch
+		taken : set = set()
 		self.items = []
-		for index, (source, target) in enumerate(pairs):
-			target_name, target_extension = os.path.splitext(os.path.basename(target))
-			try:
-				name = template.format(index = index, source_name = os.path.splitext(os.path.basename(source))[0] if source else '', target_name = target_name, target_extension = target_extension.lower())
-			except (KeyError, IndexError, ValueError):
-				name = ''
-			self.items.append({ 'source': source, 'target': target, 'name': name, 'output': os.path.join(output_dir, name) if name else '', 'status': '' })
+		for run in self.runs():
+			path, replaces = build_output(template, self.name_tag_values(run), output_dir, self.output_extension(run), subfolders, taken)
+			key = os.path.normcase(path)
+			name = os.path.relpath(path, output_dir) if subfolders and output_dir else os.path.basename(path)
+			self.items.append(dict(run, output = path, name = name, replaces = replaces, repeated = key in taken, status = ''))
+			taken.add(key)
+		self.pairs_count = len(self.items)
 		self.refresh_list()
-		if sources:
-			self.summary.setText('%d sources × %d targets = %d outputs' % (len(sources), len(targets), len(pairs)))
-		else:
-			self.summary.setText('%d targets' % len(targets))
-		self.pairs_count = len(pairs)
+		faces = len({ item.get('source') for item in self.items if item.get('source') })
+		targets = len({ item.get('target') for item in self.items })
+		self.summary.setText('%d faces × %d targets = %d outputs' % (faces, targets, len(self.items)) if faces else '%d targets' % targets)
+		self.refresh_name_preview()
+
+	def refresh_name_preview(self) -> None:
+		template = self.output_name_edit.text()
+		if not self.items:
+			self.name_preview_label.setText('Choose a target folder to see the file names')
+			self.name_preview_label.setToolTip('')
+			return
+		first = self.items[0]
+		notes = [ 'and %d more' % (len(self.items) - 1) ] if len(self.items) > 1 else []
+		if not template.strip():
+			notes.append('automatic name, click the tag button to build your own')
+		repeated = sum(1 for item in self.items if item.get('repeated'))
+		if repeated:
+			notes.append('%d %s the same name as another, add {source} or {n}' % (repeated, 'output has' if repeated == 1 else 'outputs have'))
+		replaces = sum(1 for item in self.items if item.get('replaces') and not item.get('repeated'))
+		if replaces:
+			notes.append('%s, add {n} to keep both' % ('replaces an existing file' if replaces == 1 else '%d replace existing files' % replaces))
+		unknown = unknown_tags(template)
+		if unknown:
+			notes.append('unknown tag %s is kept as typed' % ', '.join(unknown))
+		self.name_preview_label.setText('Saves As:  %s%s' % (first.get('name'), ('   ·   ' + '   ·   '.join(notes)) if notes else ''))
+		self.name_preview_label.setToolTip(first.get('output'))
+
+	def show_name_tags(self) -> None:
+		Flyout.make(NameTagsView(self), self.tags_button, self.window(), FlyoutAnimationType.DROP_DOWN)
 
 	def item_status(self, item : Dict[str, Any]) -> str:
 		if item.get('status'):
@@ -179,10 +268,9 @@ class BatchPage(QWidget):
 		return 'skip' if result and result.get('blocked') else ''
 
 	def item_text(self, item : Dict[str, Any]) -> str:
-		name = item.get('name') or '⚠ invalid file name template'
-		source = item.get('source')
 		reason = item.get('reason') if self.item_status(item) == 'failed' else ''
-		return STATUS_PREFIX.get(self.item_status(item), '') + '%s  ←  %s%s' % (name, os.path.basename(item.get('target')), ('  +  ' + os.path.basename(source)) if source else '') + ('  ·  ' + reason if reason else '')
+		sources = ''.join('  +  ' + self.source_name(path) for path in item.get('sources'))
+		return STATUS_PREFIX.get(self.item_status(item), '') + '%s  ←  %s%s' % (item.get('name'), os.path.basename(item.get('target')), sources) + ('  ·  ' + reason if reason else '')
 
 	def refresh_list(self) -> None:
 		self.match_list.clear()
@@ -203,12 +291,11 @@ class BatchPage(QWidget):
 	def save(self) -> None:
 		self.session.config.set('batch',
 		{
-			'source_dir': self.source_dir.text().strip(),
-			'source_filter': self.source_filter.currentData(),
 			'target_dir': self.target_dir.text().strip(),
 			'target_filter': self.target_filter.currentData(),
-			'output_dir': self.output_dir.text().strip(),
-			'template': self.template.text().strip()
+			'output_dir': self.output_dir(),
+			'template': self.output_name_edit.text().strip(),
+			'subfolders': self.subfolders_button.isChecked()
 		})
 
 	# running, one facefusion run per output so a refused target only fails its own output
@@ -219,16 +306,17 @@ class BatchPage(QWidget):
 		if not self.pairs_count:
 			self.session.notify.emit('warning', 'Nothing to do', 'No target files match the folder and filter.')
 			return
-		output_dir = self.output_dir.text().strip()
-		if not output_dir:
+		if not self.output_dir():
 			self.session.notify.emit('warning', 'No output folder', 'Choose where the results go.')
 			return
-		if not all(item.get('name') for item in self.items):
-			self.session.notify.emit('warning', 'Invalid file name', 'The file name template has an unknown placeholder.')
+		if any(item.get('repeated') for item in self.items):
+			self.session.notify.emit('warning', 'Same file name', 'Some outputs would get the same name and replace each other. Add {source} or {n} to the file name.')
 			return
-		if not folder_is_writable(output_dir):
-			self.session.notify.emit('error', 'Cannot save to this folder', 'Windows does not allow saving to %s. Choose another output folder, such as Videos or Documents.' % output_dir)
-			return
+		# with Sub-Folders on every source has its own folder, each is checked and created here
+		for folder in sorted({ os.path.dirname(item.get('output')) for item in self.items }):
+			if not folder_is_writable(folder):
+				self.session.notify.emit('error', 'Cannot save to this folder', 'Windows does not allow saving to %s. Choose another output folder, such as Videos or Documents.' % folder)
+				return
 		for item in self.items:
 			# targets the nsfw check flagged would only be refused, so they are not run
 			item['status'] = 'blocked' if self.item_status(item) == 'skip' else ''
@@ -260,8 +348,8 @@ class BatchPage(QWidget):
 		self.refresh_item(self.current)
 		self.started_count += 1
 		args = [ 'run' ]
-		if item.get('source'):
-			args += [ '-s', item.get('source') ]
+		if item.get('sources'):
+			args += [ '-s' ] + item.get('sources')
 		args += [ '-t', item.get('target'), '-o', item.get('output') ]
 		values = dict(self.session.values)
 		values.update({ 'reference_frame_index': 0, 'trim_frame_start': None, 'trim_frame_end': None })
@@ -338,7 +426,7 @@ class BatchPage(QWidget):
 		if counts.get('blocked'):
 			show_blocked_bar(self.window(), "FaceFusion's NSFW filter flagged %d of the outputs in this batch, so they were skipped. The other outputs were made as normal." % counts.get('blocked'))
 		else:
-			self.session.notify.emit('warning' if counts.get('failed') else 'success', 'Batch finished', '%s in %s' % (summary, self.output_dir.text()))
+			self.session.notify.emit('warning' if counts.get('failed') else 'success', 'Batch finished', '%s in %s' % (summary, self.output_dir()))
 
 	# nsfw check
 

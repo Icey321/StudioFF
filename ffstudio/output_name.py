@@ -1,6 +1,6 @@
 import os
 import re
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 from ffstudio.media import media_kind
 
@@ -54,11 +54,17 @@ def split_extension(name : str, fallback : str) -> Tuple[str, str]:
 	return name, fallback
 
 
-def build_output_path(template : str, values : Dict[str, str], output_dir : str, fallback_ext : str) -> Tuple[str, bool]:
+def build_output_path(template : str, values : Dict[str, str], output_dir : str, fallback_ext : str, taken : Optional[Set[str]] = None) -> Tuple[str, bool]:
 	"""returns the output path and whether it replaces an existing file
 
 	an empty template is the automatic name, which like {n} never overwrites: it adds _2, _3 ... instead
+	taken holds paths planned for other outputs of the same batch, they count as existing files
 	"""
+	taken = taken or set()
+
+	def exists(path : str) -> bool:
+		return os.path.exists(path) or os.path.normcase(path) in taken
+
 	automatic = not template.strip()
 	template = template.strip() or AUTOMATIC_TEMPLATE
 	counting = bool(re.search(r'\{n\}', template, re.IGNORECASE))
@@ -66,13 +72,24 @@ def build_output_path(template : str, values : Dict[str, str], output_dir : str,
 	path = os.path.join(output_dir, (stem or 'output') + ext)
 	if counting:
 		counter = 1
-		while os.path.exists(path):
+		while exists(path):
 			counter += 1
 			stem, ext = split_extension(expand(template, values, counter), fallback_ext)
 			path = os.path.join(output_dir, (stem or 'output') + ext)
 	elif automatic:
 		base, counter = stem or 'output', 2
-		while os.path.exists(path):
+		while exists(path):
 			path = os.path.join(output_dir, '%s_%d%s' % (base, counter, ext))
 			counter += 1
-	return path, os.path.exists(path)
+	return path, exists(path)
+
+
+def build_output(template : str, values : Dict[str, str], output_dir : str, fallback_ext : str, subfolders : bool, taken : Optional[Set[str]] = None) -> Tuple[str, bool]:
+	"""the output path and whether it replaces a file, inside <source name>\\Images or Videos when subfolders is on"""
+	path, replaces = build_output_path(template, values, output_dir, fallback_ext, taken)
+	if subfolders:
+		# a typed extension can turn an image target into a video, so the kind comes from the built name
+		kind = 'Images' if media_kind(path) == 'image' else 'Videos'
+		folder = os.path.join(output_dir, clean_name(values.get('source') or '') or 'No source', kind)
+		path, replaces = build_output_path(template, values, folder, fallback_ext, taken)
+	return path, replaces
