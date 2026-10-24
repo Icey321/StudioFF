@@ -81,6 +81,12 @@ class MainWindow(FluentWindow):
 			self.move(geometry.x() + (geometry.width() - self.width()) // 2, geometry.y() + (geometry.height() - self.height()) // 2)
 
 	def startup(self) -> None:
+		from ffstudio.updater import read_update_result
+		update_result = read_update_result()
+		if update_result and update_result[0]:
+			self.show_notification('success', 'FaceFusion Studio updated', 'You are now on %s.' % update_result[1])
+		elif update_result:
+			self.show_notification('error', 'The update did not install', '%s. FaceFusion Studio stayed on v%s.' % (update_result[1][:1].upper() + update_result[1][1:].rstrip('.'), APP_VERSION))
 		self.setup_page.check_studio_update(quiet = True)
 		if not self.session.is_configured():
 			self.switchTo(self.setup_page)

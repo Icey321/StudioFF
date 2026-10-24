@@ -30,7 +30,7 @@ FaceFusion itself is not included: install FaceFusion v4 separately, then point 
 - **Models**: download the lite or full model set, see what's installed, and delete models to free space.
 - **Benchmark**: runs FaceFusion's benchmark on your hardware and exports the results as a shareable image.
 - **Console**: the full FaceFusion log and the exact command line.
-- **Setup**: point the app at an existing FaceFusion v4 or install it from scratch, then check GitHub for FaceFusion updates. FaceFusion Studio checks for its own new releases at startup, and an orange dot on the Setup gear means one is out.
+- **Setup**: point the app at an existing FaceFusion v4 or install it from scratch, then check GitHub for FaceFusion updates. FaceFusion Studio checks for its own new releases at startup, and an orange dot on the Setup gear means one is out. **Update to vX** downloads it, closes the app, swaps in the new files and opens it again; settings, presets and FaceFusion are kept. A copy that is a git checkout updates through git instead.
 - **Fluent design**: light and dark themes that follow Windows, and settings remembered between runs.
 
 ## Install

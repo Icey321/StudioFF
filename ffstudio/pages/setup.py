@@ -5,14 +5,15 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
-from PySide6.QtWidgets import QAbstractButton, QButtonGroup, QFileDialog, QHBoxLayout, QLabel, QSizePolicy, QVBoxLayout, QWidget
-from qfluentwidgets import BodyLabel, CaptionLabel, CheckBox, ColorPickerButton, ComboBox, EditableComboBox, FluentIcon, HyperlinkButton, IconWidget, InfoBarIcon, LineEdit, PrimaryPushButton, PushButton, SearchLineEdit, SimpleCardWidget, SingleDirectionScrollArea, StrongBodyLabel, SubtitleLabel, SwitchButton, ToolTipFilter, TransparentToolButton
+from PySide6.QtWidgets import QAbstractButton, QApplication, QButtonGroup, QFileDialog, QHBoxLayout, QLabel, QSizePolicy, QVBoxLayout, QWidget
+from qfluentwidgets import BodyLabel, CaptionLabel, CheckBox, ColorPickerButton, ComboBox, EditableComboBox, FluentIcon, HyperlinkButton, IconWidget, InfoBarIcon, LineEdit, MessageBox, PrimaryPushButton, ProgressBar, PushButton, SearchLineEdit, SimpleCardWidget, SingleDirectionScrollArea, StrongBodyLabel, SubtitleLabel, SwitchButton, ToolTipFilter, TransparentToolButton
 
 from ffstudio import APP_REPOSITORY, APP_VERSION
 from ffstudio.environment import check_dependencies, create_process_environment, fetch_github_build, fetch_latest_release, find_conda, find_conda_base, find_python_candidates, has_nvidia_gpu, is_facefusion_root, is_newer_version, probe_python_version, read_facefusion_build, read_facefusion_version, read_windows_version, version_tuple
 from ffstudio.main_window import DEFAULT_ACCENT, apply_theme
 from ffstudio.option_panel import OptionPanel
 from ffstudio.session import MINIMUM_PYTHON, Session
+from ffstudio.updater import download_release, is_git_checkout, start_helper
 from ffstudio.widgets import ChoiceButton
 
 # the theme buttons: key, text, icon and tooltip
@@ -107,6 +108,9 @@ class SetupPage(QWidget):
 	studio_update_checked = Signal(object, bool)
 	# true while github has a newer FaceFusion Studio release than this one
 	studio_update_found = Signal(bool)
+	studio_download_progress = Signal(int, int)
+	# the folder of the downloaded files, or an error
+	studio_download_finished = Signal(str, str)
 
 	def __init__(self, session : Session, parent : Optional[QWidget] = None) -> None:
 		super().__init__(parent)
@@ -169,6 +173,8 @@ class SetupPage(QWidget):
 		session.runner.finished.connect(self.on_runner_finished)
 		self.update_checked.connect(self.on_update_checked)
 		self.studio_update_checked.connect(self.on_studio_update_checked)
+		self.studio_download_progress.connect(self.on_studio_download_progress)
+		self.studio_download_finished.connect(self.on_studio_download_finished)
 		self.refresh_status()
 
 	# search
@@ -552,6 +558,12 @@ class SetupPage(QWidget):
 		layout.addLayout(form_row('Latest release', [ self.studio_release_label ], card))
 		buttons = QHBoxLayout()
 		buttons.addSpacing(138)
+		self.studio_install_button = PrimaryPushButton(FluentIcon.DOWNLOAD, 'Update FaceFusion Studio', card)
+		self.studio_install_button.clicked.connect(self.install_studio_update)
+		self.studio_install_button.hide()
+		self.studio_release = {}
+		buttons.addWidget(self.studio_install_button)
+		buttons.addSpacing(4)
 		self.studio_update_button = PushButton(FluentIcon.UPDATE, 'Check for Studio Updates', card)
 		self.studio_update_button.clicked.connect(lambda: self.check_studio_update())
 		self.studio_release_link = HyperlinkButton('https://github.com/%s/releases' % APP_REPOSITORY, 'Open Releases', card, FluentIcon.GITHUB)
@@ -560,12 +572,18 @@ class SetupPage(QWidget):
 		buttons.addWidget(self.studio_update_button)
 		buttons.addSpacing(4)
 		buttons.addWidget(self.studio_release_link)
-		for button in [ self.studio_update_button, self.studio_release_link ]:
+		for button in [ self.studio_install_button, self.studio_update_button, self.studio_release_link ]:
 			button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
 		buttons.addSpacing(8)
 		buttons.addWidget(self.studio_update_status, 1)
 		buttons.addStretch(0)
 		layout.addLayout(buttons)
+		self.studio_download_bar = ProgressBar(card)
+		self.studio_download_bar.hide()
+		download_row = QHBoxLayout()
+		download_row.addSpacing(138)
+		download_row.addWidget(self.studio_download_bar, 1)
+		layout.addLayout(download_row)
 		return card
 
 	def check_studio_update(self, quiet : bool = False) -> None:
@@ -586,7 +604,7 @@ class SetupPage(QWidget):
 		self.studio_update_checked.emit(release, quiet)
 
 	def on_studio_update_checked(self, release : Dict[str, str], quiet : bool) -> None:
-		self.studio_update_button.setEnabled(True)
+		self.studio_update_button.setEnabled(self.studio_download_bar.isHidden())
 		if release.get('error'):
 			if not quiet:
 				self.studio_update_status.set_status('error', 'Could not reach GitHub: %s' % release['error'])
@@ -594,6 +612,12 @@ class SetupPage(QWidget):
 		tag = release['tag']
 		self.studio_release_label.setText('  ·  '.join(part for part in [ tag, release['date'][:10] ] if part) or 'No releases yet')
 		newer = is_newer_version(tag, APP_VERSION)
+		self.studio_release = release if newer else {}
+		self.studio_install_button.setText('Update to %s' % tag if newer else 'Update FaceFusion Studio')
+		self.studio_install_button.setVisible(newer and bool(release.get('zip')))
+		# a git checkout is updated with git, copying a release over it would mix the two
+		self.studio_install_button.setEnabled(not is_git_checkout() and self.studio_download_bar.isHidden())
+		self.studio_install_button.setToolTip('This copy of the app is a git checkout, so it updates through git' if is_git_checkout() else '')
 		if newer:
 			self.studio_release_link.setUrl(release['url'])
 			self.studio_release_link.setText('Download %s' % tag)
@@ -606,6 +630,57 @@ class SetupPage(QWidget):
 			self.studio_update_status.setVisible(not quiet or self.studio_update_status.isVisible())
 		self.studio_release_link.adjustSize()
 		self.studio_update_found.emit(newer)
+
+	def install_studio_update(self, confirm : bool = True) -> None:
+		tag = self.studio_release.get('tag', '')
+		if not tag:
+			return
+		text = 'FaceFusion Studio downloads %s, closes, updates itself and opens again. Your settings, presets and FaceFusion stay as they are.' % tag
+		if self.session.runner.is_running():
+			text += '\n\nFaceFusion is still running "%s", the update stops it.' % self.session.task
+		if confirm and not MessageBox('Update FaceFusion Studio to %s?' % tag, text, self.window()).exec():
+			return
+		self.studio_install_button.setEnabled(False)
+		self.studio_update_button.setEnabled(False)
+		self.studio_download_bar.setRange(0, 0)
+		self.studio_download_bar.show()
+		self.studio_update_status.set_status('info', 'Downloading %s…' % tag)
+		self.studio_update_status.show()
+		threading.Thread(target = self.download_studio_update, args = (self.studio_release['zip'],), daemon = True).start()
+
+	def download_studio_update(self, zip_url : str) -> None:
+		try:
+			source = download_release(zip_url, self.studio_download_progress.emit)
+		except Exception as exception:
+			self.studio_download_finished.emit('', str(exception))
+			return
+		self.studio_download_finished.emit(source, '')
+
+	def on_studio_download_progress(self, done : int, total : int) -> None:
+		if total:
+			self.studio_download_bar.setRange(0, total)
+			self.studio_download_bar.setValue(done)
+		self.studio_update_status.set_status('info', 'Downloading %s…  %.1f MB' % (self.studio_release.get('tag', ''), done / 1048576))
+
+	def on_studio_download_finished(self, source : str, error : str) -> None:
+		self.studio_download_bar.hide()
+		self.studio_update_button.setEnabled(True)
+		self.studio_install_button.setEnabled(True)
+		if error:
+			self.studio_update_status.set_status('error', 'The download failed: %s' % error)
+			return
+		self.studio_update_status.set_status('info', 'Closing to install %s…' % self.studio_release['tag'])
+		window = self.window()
+		# the running job was already confirmed in the update question
+		if self.session.runner.is_running():
+			self.session.runner.stop()
+			self.session.clear_facefusion_temp()
+		window.close()
+		if window.isVisible():
+			self.studio_update_status.set_status('warning', 'The update was not installed because the app stayed open.')
+			return
+		start_helper(source, self.studio_release['tag'])
+		QApplication.quit()
 
 	# appearance
 

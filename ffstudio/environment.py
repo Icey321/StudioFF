@@ -82,14 +82,14 @@ def fetch_github_build(repository : str, branch : str, commit : str) -> Dict[str
 
 
 def fetch_latest_release(repository : str) -> Dict[str, str]:
-	"""tag, web page and date of the newest github release, empty when there is none. blocks, so run it off the ui thread"""
+	"""tag, web page, date and source zip of the newest github release, empty when there is none. blocks, so run it off the ui thread"""
 	try:
 		release = fetch_github_json('repos/%s/releases/latest' % repository)
 	except urllib.error.HTTPError as exception:
 		if exception.code != 404:
 			raise
-		return { 'tag': '', 'url': '', 'date': '' }
-	return { 'tag': release.get('tag_name', ''), 'url': release.get('html_url', ''), 'date': release.get('published_at', '') or '' }
+		return { 'tag': '', 'url': '', 'date': '', 'zip': '' }
+	return { 'tag': release.get('tag_name', ''), 'url': release.get('html_url', ''), 'date': release.get('published_at', '') or '', 'zip': release.get('zipball_url', '') or '' }
 
 
 def is_newer_version(tag : str, current : str) -> bool:
