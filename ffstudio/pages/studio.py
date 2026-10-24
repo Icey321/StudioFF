@@ -626,7 +626,7 @@ class NameTagsView(FlyoutViewBase):
 class SettingsColumn(QWidget):
 	"""search, processors and option groups for one set of option values, the session's or a page's OptionStore"""
 
-	def __init__(self, store, parent : Optional[QWidget] = None, header_widgets : Tuple[QWidget, ...] = ()) -> None:
+	def __init__(self, store, parent : Optional[QWidget] = None, header_widgets : Tuple[QWidget, ...] = (), expansion_key : str = '') -> None:
 		super().__init__(parent)
 		self.store = store
 		column = QVBoxLayout(self)
@@ -656,9 +656,9 @@ class SettingsColumn(QWidget):
 		layout.addWidget(self.processor_card)
 		self.favorites_panel = FavoritesPanel(store, content)
 		layout.addWidget(self.favorites_panel)
-		self.processor_panel = OptionPanel(store, [], expanded = [], parent = content, favorites = True, info_icons = True, short_labels = True)
+		self.processor_panel = OptionPanel(store, [], expanded = [], parent = content, favorites = True, info_icons = True, short_labels = True, expansion_key = expansion_key)
 		layout.addWidget(self.processor_panel)
-		self.option_panel = OptionPanel(store, STUDIO_GROUPS, expanded = [ 'face_selector' ], parent = content, favorites = True, info_icons = True, short_labels = True)
+		self.option_panel = OptionPanel(store, STUDIO_GROUPS, expanded = [ 'face_selector' ], parent = content, favorites = True, info_icons = True, short_labels = True, expansion_key = expansion_key)
 		layout.addWidget(self.option_panel)
 		self.no_match_label = CaptionLabel('No settings match your search. Options of processors that are switched off are hidden.', content)
 		self.no_match_label.setWordWrap(True)
@@ -854,7 +854,7 @@ class StudioPage(SourceSelection, QWidget):
 		self.splitter.addWidget(left_widget)
 
 		# right column: search, processors + options
-		self.settings_column = SettingsColumn(session, self.splitter)
+		self.settings_column = SettingsColumn(session, self.splitter, expansion_key = 'studio_groups_expanded')
 		self.settings_column.setMinimumWidth(340)
 		self.splitter.addWidget(self.settings_column)
 		self.splitter.setStretchFactor(0, 11)

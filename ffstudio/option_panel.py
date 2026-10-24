@@ -33,7 +33,7 @@ PROCESSOR_ICON = FluentIcon.ROBOT
 class OptionPanel(QWidget):
 	"""a column of collapsible option groups generated from the facefusion schema"""
 
-	def __init__(self, session : Session, groups : List[str], expanded : Optional[List[str]] = None, parent : Optional[QWidget] = None, favorites : bool = False, info_icons : bool = False, short_labels : bool = False, group_captions : bool = False) -> None:
+	def __init__(self, session : Session, groups : List[str], expanded : Optional[List[str]] = None, parent : Optional[QWidget] = None, favorites : bool = False, info_icons : bool = False, short_labels : bool = False, group_captions : bool = False, expansion_key : str = '') -> None:
 		super().__init__(parent)
 		self.session = session
 		self.groups = groups
@@ -46,6 +46,8 @@ class OptionPanel(QWidget):
 		# rows show their group words in small capitals under a short label, for boxes that mix groups
 		self.group_captions = group_captions
 		self.expanded = expanded or []
+		# config key that remembers which groups were opened or closed by hand, they come back that way
+		self.expansion_key = expansion_key
 		self.cards : Dict[str, CollapsibleCard] = {}
 		self.rows : Dict[str, OptionRow] = {}
 		self.group_rows : Dict[str, List[OptionRow]] = {}
@@ -73,7 +75,8 @@ class OptionPanel(QWidget):
 			if not options:
 				continue
 			is_processor = group in schema.processors
-			card = CollapsibleCard(schema.group_title(group), '%d options' % len(options), PROCESSOR_ICON if is_processor else GROUP_ICONS.get(group, FluentIcon.SETTING), expanded = group in self.expanded, parent = self)
+			card = CollapsibleCard(schema.group_title(group), '%d options' % len(options), PROCESSOR_ICON if is_processor else GROUP_ICONS.get(group, FluentIcon.SETTING), expanded = self.is_expanded(group), parent = self)
+			card.toggled.connect(lambda expanded, group = group: self.remember_expanded(group, expanded))
 			self.group_rows[group] = []
 			for option in options:
 				if option.get('dest') in PAIRED_PARTNERS:
@@ -88,6 +91,19 @@ class OptionPanel(QWidget):
 		self.refresh_visibility()
 		self.refresh_subtitles()
 		self.refresh_favorites()
+
+	def is_expanded(self, group : str) -> bool:
+		saved = self.session.config.get(self.expansion_key) or {} if self.expansion_key else {}
+		return saved.get(group, group in self.expanded)
+
+	def remember_expanded(self, group : str, expanded : bool) -> None:
+		# searching opens every matching group, that is not the user's choice
+		if not self.expansion_key or self.filter_text:
+			return
+		saved = dict(self.session.config.get(self.expansion_key) or {})
+		if saved.get(group) != expanded:
+			saved[group] = expanded
+			self.session.config.set(self.expansion_key, saved)
 
 	def create_row(self, option : Dict[str, Any], card : CollapsibleCard, context : str = '') -> OptionRow:
 		splash.step()
@@ -138,12 +154,13 @@ class OptionPanel(QWidget):
 		# open every matching group while searching and put the groups back the way they were afterwards
 		if text and not self.filter_text:
 			self.saved_expansion = { group: card.body.isVisible() for group, card in self.cards.items() }
-		self.filter_text = text
+		# put them back while still searching, so the restore is not remembered as a choice
 		if not text:
 			for group, expanded in self.saved_expansion.items():
 				if group in self.cards:
 					self.cards[group].set_expanded(expanded)
 			self.saved_expansion = {}
+		self.filter_text = text
 		self.refresh_visibility()
 
 	def has_visible_cards(self) -> bool:

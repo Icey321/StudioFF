@@ -159,7 +159,7 @@ class SetupPage(QWidget):
 		self.system_title = StrongBodyLabel('Performance & system', content)
 		layout.addSpacing(6)
 		layout.addWidget(self.system_title)
-		self.system_panel = OptionPanel(session, SYSTEM_GROUPS, expanded = [ 'execution' ], parent = content, info_icons = True)
+		self.system_panel = OptionPanel(session, SYSTEM_GROUPS, expanded = [ 'execution' ], parent = content, info_icons = True, expansion_key = 'setup_groups_expanded')
 		layout.addWidget(self.system_panel)
 		self.no_match_label = CaptionLabel('No settings match your search.', content)
 		self.no_match_label.setTextColor('#707070', '#9a9a9a')

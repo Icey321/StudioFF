@@ -361,7 +361,7 @@ class BatchPage(SourceSelection, QWidget):
 		copy_button.setToolTip('Make the processors and options here the same as on the Studio page. Later changes on either page stay on that page.')
 		copy_button.installEventFilter(ToolTipFilter(copy_button))
 		copy_button.clicked.connect(self.copy_studio_settings)
-		self.settings_column = SettingsColumn(self.store, self.splitter, (copy_button,))
+		self.settings_column = SettingsColumn(self.store, self.splitter, (copy_button,), expansion_key = 'batch_groups_expanded')
 		return self.settings_column
 
 	def toggle_settings(self, shown : bool) -> None:
