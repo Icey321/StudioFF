@@ -103,7 +103,9 @@ def is_newer_version(tag : str, current : str) -> bool:
 			parts.append(int(digits))
 		return tuple(parts)
 	newer, older = numbers(tag), numbers(current)
-	return bool(newer) and newer > older
+	# pad so v0.3.0 and 0.3 count as the same version
+	size = max(len(newer), len(older))
+	return bool(newer) and newer + (0,) * (size - len(newer)) > older + (0,) * (size - len(older))
 
 
 def read_windows_version() -> str:

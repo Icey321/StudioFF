@@ -49,6 +49,8 @@ try {
 		Remove-Item (Join-Path $Target 'ffstudio') -Recurse -Force -ErrorAction SilentlyContinue
 		Move-Item $backup (Join-Path $Target 'ffstudio')
 	}
+	# put the old requirements back too, else the next update sees them as equal and skips the install
+	if ($null -ne $oldRequirements) { Set-Content (Join-Path $Target 'requirements.txt') $oldRequirements -NoNewline -Encoding utf8 }
 	Set-Content $Result ("failed " + $_.Exception.Message) -Encoding utf8
 }
 Remove-Item (Split-Path $Source) -Recurse -Force -ErrorAction SilentlyContinue

@@ -105,6 +105,10 @@ def main() -> None:
 		def save() -> None:
 			os.makedirs(os.path.dirname(os.path.abspath(args.screenshot)), exist_ok = True)
 			window.grab().save(args.screenshot)
+			# the start-up nsfw check may still run, quitting must not stop at the window's question about it
+			if session.runner.is_running():
+				session.runner.stop()
+				session.clear_facefusion_temp()
 			app.quit()
 
 		QTimer.singleShot(1500, capture)

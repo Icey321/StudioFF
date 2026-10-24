@@ -10,9 +10,9 @@ from PySide6.QtGui import QColor, QFont, QFontMetrics, QKeySequence, QPainter, Q
 from PySide6.QtWidgets import QAbstractItemView, QFileDialog, QHBoxLayout, QListWidgetItem, QVBoxLayout, QWidget
 from qfluentwidgets import BodyLabel, CaptionLabel, ComboBox, FluentIcon, Flyout, FlyoutAnimationType, LineEdit, ListItemDelegate, ListWidget, PrimaryPushButton, ProgressBar, PushButton, SimpleCardWidget, StrongBodyLabel, SubtitleLabel, TogglePushButton, ToggleToolButton, ToolTipFilter, TransparentPushButton, getFont, isDarkTheme, themeColor
 
-from ffstudio.config import PREVIEW_DIR
+from ffstudio.config import APP_DIR, PREVIEW_DIR
 from ffstudio.faces import FACE_GROUPS, MASK_GROUPS, FaceProbe, describe_faces, describe_mask, face_tag, read_mask
-from ffstudio.media import media_kind, read_frame, thumbnail, to_pixmap, write_image
+from ffstudio.media import GIF_EXTENSIONS, extension, media_kind, read_frame, thumbnail, to_pixmap, write_image
 from ffstudio.nsfw import BLOCKED_TITLE, NsfwDialog, show_blocked_bar
 from ffstudio.output_name import AUTOMATIC_TEMPLATE, build_output, unknown_tags
 from ffstudio.pages.setup import SYSTEM_GROUPS, form_row, section_card
@@ -564,15 +564,17 @@ class BatchPage(SourceSelection, QWidget):
 		write_image(frame_path, frame)
 		values = self.run_values()
 		values.update({ 'reference_frame_index': 0, 'trim_frame_start': None, 'trim_frame_end': None, 'workflow_mode': 'auto' })
+		# a single frame has no sound to sync lips to
+		processors = list(values.get('processors') or [])
+		values['processors'] = [ processor for processor in processors if processor != 'lip_syncer' ]
+		if processors and not values.get('processors'):
+			self.preview_label.setText('Lip sync needs the whole video, a single frame has nothing to preview.')
+			return
 		args = [ 'run' ]
 		image_sources = [ path for path in item.get('sources') if media_kind(path) == 'image' ]
 		if image_sources:
 			args += [ '-s' ] + image_sources
 		args += [ '-t', frame_path, '-o', output_path ] + self.session.option_args(values)
-		# a single frame has no sound to sync lips to
-		if '--processors' in args:
-			start = args.index('--processors') + 1
-			args[start:] = [ arg for arg in args[start:] if arg != 'lip_syncer' ]
 		# another target shows its frame right away, so the faces drawn over it line up while the preview runs
 		if not self.preview_run or self.preview_run.get('target') != item.get('target'):
 			self.preview_view.set_pixmap(to_pixmap(frame))
@@ -932,14 +934,19 @@ class BatchPage(SourceSelection, QWidget):
 		args = [ 'run' ]
 		if item.get('sources'):
 			args += [ '-s' ] + item.get('sources')
-		args += [ '-t', item.get('target'), '-o', item.get('output') ]
 		values = self.run_values()
 		values.update({ 'reference_frame_index': 0, 'trim_frame_start': None, 'trim_frame_end': None })
-		args += self.session.option_args(values)
+		script = 'facefusion.py'
+		if extension(item.get('target')) in GIF_EXTENSIONS:
+			# facefusion has no gif support, the helper converts to video and back around the run
+			args = [ item.get('target'), item.get('output'), os.path.join(PREVIEW_DIR, 'gif'), '--' ] + args + self.session.option_args(values)
+			script = os.path.join(APP_DIR, 'gif_run.py')
+		else:
+			args += [ '-t', item.get('target'), '-o', item.get('output') ] + self.session.option_args(values)
 		total = self.started_count + len(queued) - 1
 		task = 'Batch %d of %d: %s' % (self.started_count, total, item.get('name'))
 		self.status_label.setText(task)
-		if not self.session.run_facefusion(task, args):
+		if not self.session.run_facefusion(task, args, script = script):
 			item['status'] = ''
 			self.refresh_item(self.current)
 			self.current = -1

@@ -110,7 +110,10 @@ class FaceProbe(QObject):
 		self.process.readyReadStandardOutput.connect(self.on_output)
 		self.process.readyReadStandardError.connect(self.on_errors)
 		self.process.finished.connect(self.on_finished)
+		self.process.errorOccurred.connect(self.on_error)
 		self.process.start()
+		if self.process is None:
+			return False
 		self.loading.emit(True)
 		return True
 
@@ -129,6 +132,9 @@ class FaceProbe(QObject):
 		self.loading.emit(False)
 
 	def on_output(self) -> None:
+		# stop lets go of the process before waiting for it, its last output can still arrive
+		if not self.process:
+			return
 		self.buffer += bytes(self.process.readAllStandardOutput().data()).decode('utf-8', errors = 'replace')
 		while '\n' in self.buffer:
 			line, self.buffer = self.buffer.split('\n', 1)
@@ -142,6 +148,8 @@ class FaceProbe(QObject):
 				self.on_result(line[len(RESULT_PREFIX):])
 
 	def on_errors(self) -> None:
+		if not self.process:
+			return
 		text = bytes(self.process.readAllStandardError().data()).decode('utf-8', errors = 'replace')
 		self.errors = (self.errors + [ line for line in text.splitlines() if line.strip() ])[-6:]
 
@@ -155,6 +163,12 @@ class FaceProbe(QObject):
 		if request and request.get('id') == result.get('id'):
 			self.emit_result(request, result)
 		self.send_next()
+
+	def on_error(self, error : QProcess.ProcessError) -> None:
+		# a process that never started never finishes either
+		if error == QProcess.ProcessError.FailedToStart and self.process:
+			self.process.finished.disconnect(self.on_finished)
+			self.on_finished()
 
 	def on_finished(self, *_ : Any) -> None:
 		request, self.running = self.running, None

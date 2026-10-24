@@ -101,8 +101,11 @@ class ProcessRunner(QObject):
 			self.worker.stop()
 		elif self.is_running():
 			self.cancelled = True
-			kill_process_tree(int(self.process.processId()))
-			self.process.kill()
+			process = self.process
+			kill_process_tree(int(process.processId()))
+			process.kill()
+			# finished comes now rather than on a later event, so is_running is false once stop returns
+			process.waitForFinished(2000)
 
 	def on_ready_read(self) -> None:
 		chunk = bytes(self.process.readAllStandardOutput().data()).decode('utf-8', errors = 'replace')
@@ -214,6 +217,11 @@ class PreviewWorker(QObject):
 			self.stop()
 		if not self.is_running():
 			self.start(python_path, facefusion_root, environment)
+		if self.process is None:
+			# it failed to start, the runner makes the preview with facefusion.py instead
+			self.failures += 1
+			self.done.emit(None)
+			return
 		self.request_id += 1
 		self.running_id = self.request_id
 		line = json.dumps({ 'id': self.request_id, 'args': args })
@@ -251,6 +259,9 @@ class PreviewWorker(QObject):
 			self.done.emit(None)
 
 	def on_output(self) -> None:
+		# stop lets go of the process before waiting for it, its last output can still arrive
+		if not self.process:
+			return
 		self.buffer += bytes(self.process.readAllStandardOutput().data()).decode('utf-8', errors = 'replace')
 		while '\n' in self.buffer:
 			line, self.buffer = self.buffer.split('\n', 1)

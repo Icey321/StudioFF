@@ -581,7 +581,7 @@ class BenchmarkPage(QWidget):
 		if not path.lower().endswith(('.jpg', '.jpeg')):
 			path += '.jpg'
 		hardware = self.hardware or { name: label.text() for name, label in self.hardware_labels.items() }
-		version = read_facefusion_version(self.session.facefusion_root) or (self.session.schema.version() if self.session.schema else '')
+		version = read_facefusion_version(self.session.facefusion_root) or (self.session.schema.version if self.session.schema else '')
 		image = render_report(hardware, version, entries)
 		if not image.save(path, 'JPG', 95):
 			self.session.notify.emit('error', 'Export failed', 'Could not write ' + path)

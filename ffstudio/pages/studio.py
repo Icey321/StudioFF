@@ -1234,10 +1234,13 @@ class StudioPage(SourceSelection, QWidget):
 			# facefusion has no gif support, the helper converts to video and back around the run
 			work_dir = os.path.join(PREVIEW_DIR, 'gif')
 			args = [ self.target_path, output_path, work_dir, '--' ] + args + self.session.option_args()
-			self.session.run_facefusion(task, args, script = os.path.join(APP_DIR, 'gif_run.py'))
-			return
-		args += [ '-t', self.target_path, '-o', output_path ] + self.session.option_args()
-		self.session.run_facefusion(task, args)
+			script = os.path.join(APP_DIR, 'gif_run.py')
+		else:
+			args += [ '-t', self.target_path, '-o', output_path ] + self.session.option_args()
+			script = 'facefusion.py'
+		# a run that never started has no finish, the next one must not be taken for it
+		if not self.session.run_facefusion(task, args, script = script):
+			self.pending_output = ''
 
 	def preview_frame(self) -> None:
 		if not self.validate():
@@ -1264,17 +1267,22 @@ class StudioPage(SourceSelection, QWidget):
 			return
 		values = dict(self.session.values)
 		values.update({ 'reference_frame_index': 0, 'trim_frame_start': None, 'trim_frame_end': None, 'workflow_mode': 'auto' })
+		# a single frame has no sound to sync lips to
+		processors = self.session.processors()
+		values['processors'] = [ processor for processor in processors if processor != 'lip_syncer' ]
+		if processors and not values.get('processors'):
+			self.session.notify.emit('warning', 'Preview', 'Lip sync needs the whole video, a single frame has nothing to preview. Click Start instead.')
+			return
 		args = [ 'run' ]
 		image_sources = [ path for path in self.active_sources() if media_kind(path) == 'image' ]
 		if image_sources:
 			args += [ '-s' ] + image_sources
 		args += [ '-t', frame_path, '-o', output_path ] + self.session.option_args(values)
-		if 'lip_syncer' in self.session.processors():
-			args[args.index('--processors') + 1:] = [ arg for arg in args[args.index('--processors') + 1:] if arg != 'lip_syncer' ]
 		self.pending_output = output_path
 		self.pending_info = info
 		self.preview_mode = True
-		self.session.run_facefusion('Previewing frame #%d' % self.target_card.current_frame_index(), args, preview = True)
+		if not self.session.run_facefusion('Previewing frame #%d' % self.target_card.current_frame_index(), args, preview = True):
+			self.pending_output = ''
 
 	def on_busy_changed(self, busy : bool, task : str) -> None:
 		self.start_button.setEnabled(not busy and not self.chain)
@@ -1744,11 +1752,15 @@ class StudioPage(SourceSelection, QWidget):
 			if step.get('lossless'):
 				settings.update({ 'image_quality': 100, 'video_encoder': 'libx264', 'video_quality': 100 })
 			args = [ os.path.join(APP_DIR, 'compose_passes.py'), base, step.get('output'), json.dumps(settings), '--' ] + outputs
-			self.session.run_python(self.chain_task(step), args, self.session.facefusion_root, preview = chain.get('preview'))
-			return
-		self.launch_step(step)
+			started = self.session.run_python(self.chain_task(step), args, self.session.facefusion_root, preview = chain.get('preview'))
+		else:
+			started = self.launch_step(step)
+		# nothing will finish this step, so the chain must not wait for it
+		if not started:
+			self.pending_output = ''
+			self.end_chain()
 
-	def launch_step(self, step : dict) -> None:
+	def launch_step(self, step : dict) -> bool:
 		chain = self.chain
 		kind = step.get('kind')
 		item = step.get('item') or {}
@@ -1784,7 +1796,7 @@ class StudioPage(SourceSelection, QWidget):
 				values['reference_face_distance'] = 0.0
 		values['processors'] = processors
 		args = [ 'run' ] + ([ '-s' ] + sources + audio if sources or audio else []) + [ '-t', target, '-o', step.get('output') ] + self.session.option_args(values)
-		self.session.run_facefusion(self.chain_task(step), args, preview = preview)
+		return self.session.run_facefusion(self.chain_task(step), args, preview = preview)
 
 	# nsfw check
 
