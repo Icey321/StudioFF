@@ -818,7 +818,7 @@ class StudioPage(SourceSelection, QWidget):
 		self.face_probe.people_progress.connect(lambda done, total: self.mapping_card.set_finding(done, total))
 		# the faces of the last frame scan, a right click on a box names the face it belongs to
 		self.shown_faces : List[dict] = []
-		# a face mapping run: one facefusion run per mapped person, each on the output of the one before
+		# a face mapping run: one facefusion run per mapped person, each on the original target, composed into one at the end
 		self.chain : Optional[dict] = None
 		self.chain_id = 0
 

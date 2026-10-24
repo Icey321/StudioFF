@@ -79,9 +79,18 @@ def download_release(zip_url : str, progress : Callable[[int, int], None]) -> st
 			zip_file.write(chunk)
 			done += len(chunk)
 			progress(done, total)
+	# github has no checksum for its source zips, so this checks that the whole file came and every file in it is intact
+	if total and done != total:
+		raise RuntimeError('the download stopped early (%d of %d bytes)' % (done, total))
 	extract_dir = os.path.join(UPDATE_DIR, 'files')
-	with zipfile.ZipFile(zip_path) as archive:
-		archive.extractall(extract_dir)
+	try:
+		with zipfile.ZipFile(zip_path) as archive:
+			broken = archive.testzip()
+			if broken:
+				raise RuntimeError('the download is damaged (%s)' % broken)
+			archive.extractall(extract_dir)
+	except zipfile.BadZipFile:
+		raise RuntimeError('the download is not a valid zip file')
 	os.remove(zip_path)
 	# github wraps the source in one folder named after the repository and commit
 	folders = os.listdir(extract_dir)

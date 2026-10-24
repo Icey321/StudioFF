@@ -112,14 +112,6 @@ class Schema:
 		return list(dict.fromkeys(dependency.get('driver') for dependency in self.dependencies.values()))
 
 
-def normalize(value : Any) -> Any:
-	if isinstance(value, list):
-		return [ normalize(item) for item in value ]
-	if isinstance(value, float) and value.is_integer():
-		return value
-	return value
-
-
 def format_value(value : Any) -> List[str]:
 	if isinstance(value, list):
 		return [ format_scalar(item) for item in value ]
