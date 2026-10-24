@@ -5,8 +5,12 @@ import tempfile
 import unittest
 import zipfile
 
+import cv2
+import numpy
+
 from ffstudio.environment import is_newer_version
 from ffstudio.face_mapping import SELECTED, pass_distance, plan_passes
+from ffstudio.media import VideoReader
 from ffstudio.output_name import build_output, build_output_path, clean_name, expand, unknown_tags
 from ffstudio.runner import ProcessRunner
 from ffstudio.schema import Schema, build_option_args
@@ -175,6 +179,25 @@ class ProgressParsingTest(unittest.TestCase):
 		self.assertEqual(progress, [])
 		runner.flush_buffer(final = True)
 		self.assertEqual(progress, [ 0.25 ])
+
+
+class VideoReaderTest(unittest.TestCase):
+	def test_reads_in_any_order(self) -> None:
+		with tempfile.TemporaryDirectory() as folder:
+			path = os.path.join(folder, 'frames.avi')
+			# each frame is one flat gray level, lossless so the levels read back exactly
+			writer = cv2.VideoWriter(path, cv2.VideoWriter_fourcc(*'FFV1'), 10, (32, 32))
+			for level in range(0, 100, 10):
+				writer.write(numpy.full((32, 32, 3), level, numpy.uint8))
+			writer.release()
+			reader = VideoReader(path)
+			try:
+				for index in [ 0, 1, 2, 2, 7, 8, 3, 0, 9 ]:
+					self.assertEqual(int(reader.read(index)[0, 0, 0]), index * 10)
+				self.assertIsNone(reader.read(10))
+				self.assertEqual(int(reader.read(4)[0, 0, 0]), 40)
+			finally:
+				reader.release()
 
 
 class DownloadReleaseTest(unittest.TestCase):

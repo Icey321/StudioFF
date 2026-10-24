@@ -97,7 +97,10 @@ def compose_video(base_path : str, output_path : str, settings : dict, pass_path
 	# the same color conversion facefusion uses, without it the colors drift a little from the passes
 	commands += ffmpeg_builder.convert_color_space('bt709')
 	commands += ffmpeg_builder.set_pixel_format(encoder)
-	commands += [ '-c:a', audio_encoder, '-shortest', output_path ]
+	commands += ffmpeg_builder.set_audio_encoder(audio_encoder)
+	commands += ffmpeg_builder.set_audio_quality(audio_encoder, int(settings.get('audio_quality') if settings.get('audio_quality') is not None else 80))
+	commands += ffmpeg_builder.set_audio_volume(int(settings.get('audio_volume') if settings.get('audio_volume') is not None else 100))
+	commands += [ '-shortest', output_path ]
 	process = subprocess.Popen(commands, stdin = subprocess.PIPE)
 	done = 0
 	for frame in base:

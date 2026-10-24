@@ -2,6 +2,7 @@ import glob
 import os
 import re
 import time
+from collections import OrderedDict
 from typing import Any, Dict, List, Optional, Tuple
 
 import cv2
@@ -54,29 +55,39 @@ class OutputDelegate(ListItemDelegate):
 	ROW_HEIGHT = 52
 	THUMB_HEIGHT = 40
 	THUMB_MAX_WIDTH = 72
+	# enough for every row of a long list, the oldest go first
+	CACHE_LIMIT = 500
 
 	def __init__(self, page : 'BatchPage') -> None:
 		super().__init__(page.match_list)
 		self.page = page
-		self.pixmaps : Dict[Tuple[str, float], QPixmap] = {}
+		self.pixmaps : 'OrderedDict[Tuple[str, float, int, int], QPixmap]' = OrderedDict()
 
 	def sizeHint(self, option, index) -> QSize:
 		return QSize(option.rect.width(), self.ROW_HEIGHT)
 
-	def pixmap(self, path : str) -> QPixmap:
+	def pixmap(self, path : str, size : QSize) -> QPixmap:
+		"""the thumbnail already scaled to fill the box, so painting a row only draws it"""
 		# keyed by the change time too, so a result made again shows its new look
 		try:
-			key = (path, os.path.getmtime(path))
+			key = (path, os.path.getmtime(path), size.width(), size.height())
 		except OSError:
 			return QPixmap()
-		if key not in self.pixmaps:
-			self.pixmaps[key] = thumbnail(path, 2 * self.THUMB_MAX_WIDTH) if media_kind(path) in [ 'image', 'video' ] else QPixmap()
-		return self.pixmaps.get(key)
+		if key in self.pixmaps:
+			self.pixmaps.move_to_end(key)
+			return self.pixmaps.get(key)
+		pixmap = thumbnail(path, 2 * self.THUMB_MAX_WIDTH) if media_kind(path) in [ 'image', 'video' ] else QPixmap()
+		if not pixmap.isNull():
+			pixmap = pixmap.scaled(size, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation)
+		self.pixmaps[key] = pixmap
+		while len(self.pixmaps) > self.CACHE_LIMIT:
+			self.pixmaps.popitem(last = False)
+		return pixmap
 
 	def draw_thumbnail(self, painter : QPainter, path : str, x : float, y : float, width : float) -> float:
-		pixmap = self.pixmap(path)
 		height = self.THUMB_HEIGHT
 		box = QRectF(x, y, width, height)
+		pixmap = self.pixmap(path, box.size().toSize())
 		clip = QPainterPath()
 		clip.addRoundedRect(box, 4, 4)
 		painter.save()
@@ -88,8 +99,7 @@ class OutputDelegate(ListItemDelegate):
 			painter.drawText(box, Qt.AlignmentFlag.AlignCenter, '♪' if media_kind(path) == 'audio' else '')
 		else:
 			# fills the box and crops what is left over
-			scaled = pixmap.scaled(box.size().toSize(), Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation)
-			painter.drawPixmap(int(x + (width - scaled.width()) / 2), int(y + (height - scaled.height()) / 2), scaled)
+			painter.drawPixmap(int(x + (width - pixmap.width()) / 2), int(y + (height - pixmap.height()) / 2), pixmap)
 		painter.restore()
 		return width
 
@@ -470,7 +480,7 @@ class BatchPage(SourceSelection, QWidget):
 			self.schedule_face_scan()
 
 	def open_output_folder(self) -> None:
-		StudioPage.open_path(self.output_dir())
+		StudioPage.open_folder(self.output_dir())
 
 	# the outputs in the list
 
@@ -947,10 +957,12 @@ class BatchPage(SourceSelection, QWidget):
 		task = 'Batch %d of %d: %s' % (self.started_count, total, item.get('name'))
 		self.status_label.setText(task)
 		if not self.session.run_facefusion(task, args, script = script):
+			# the message says why, the batch ends here as if stopped so the buttons and status come back
 			item['status'] = ''
 			self.refresh_item(self.current)
 			self.current = -1
-			self.running = False
+			self.stopped = True
+			self.finish()
 
 	def on_busy_changed(self, busy : bool, task : str) -> None:
 		self.start_button.setEnabled(not busy and not self.running)

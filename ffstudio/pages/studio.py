@@ -1118,7 +1118,7 @@ class StudioPage(SourceSelection, QWidget):
 	def open_output_folder(self) -> None:
 		# with Sub-Folders on, the folder the next result goes to once a run has made it
 		folder = os.path.dirname(self.suggest_output_path()) if self.target_path else ''
-		self.open_path(folder if os.path.isdir(folder) else self.output_dir())
+		self.open_folder(folder if os.path.isdir(folder) else self.output_dir())
 
 	def refresh_name_preview(self) -> None:
 		if not hasattr(self, 'name_preview_label'):
@@ -1748,9 +1748,9 @@ class StudioPage(SourceSelection, QWidget):
 			outputs = [ other.get('output') for other in chain.get('steps') if other.get('kind') == 'pass' ]
 			base = chain.get('steps')[0].get('output')
 			values = self.session.values
-			settings = { 'image_quality': values.get('output_image_quality'), 'video_encoder': values.get('output_video_encoder'), 'video_quality': values.get('output_video_quality'), 'video_preset': values.get('output_video_preset'), 'audio_encoder': values.get('output_audio_encoder') }
+			settings = { 'image_quality': values.get('output_image_quality'), 'video_encoder': values.get('output_video_encoder'), 'video_quality': values.get('output_video_quality'), 'video_preset': values.get('output_video_preset'), 'audio_encoder': values.get('output_audio_encoder'), 'audio_quality': values.get('output_audio_quality'), 'audio_volume': values.get('output_audio_volume') }
 			if step.get('lossless'):
-				settings.update({ 'image_quality': 100, 'video_encoder': 'libx264', 'video_quality': 100 })
+				settings.update({ 'image_quality': 100, 'video_encoder': 'libx264', 'video_quality': 100, 'audio_encoder': 'flac', 'audio_volume': 100 })
 			args = [ os.path.join(APP_DIR, 'compose_passes.py'), base, step.get('output'), json.dumps(settings), '--' ] + outputs
 			started = self.session.run_python(self.chain_task(step), args, self.session.facefusion_root, preview = chain.get('preview'))
 		else:
@@ -1786,7 +1786,8 @@ class StudioPage(SourceSelection, QWidget):
 			if not step.get('all'):
 				# whole frame processors run once at the end, and nothing is lost in between
 				processors = [ processor for processor in processors if processor not in FRAME_PROCESSORS ]
-				values.update({ 'output_video_encoder': 'libx264', 'output_video_quality': 100, 'output_image_quality': 100 })
+				# the audio too, it is encoded and its volume set once, in the last step
+				values.update({ 'output_video_encoder': 'libx264', 'output_video_quality': 100, 'output_image_quality': 100, 'output_audio_encoder': 'flac', 'output_audio_volume': 100 })
 			if item.get('many'):
 				values['face_selector_mode'] = 'many'
 			else:
@@ -1908,5 +1909,11 @@ class StudioPage(SourceSelection, QWidget):
 	@staticmethod
 	def open_path(path : str) -> None:
 		if path:
-			os.makedirs(path, exist_ok = True) if not os.path.splitext(path)[1] else None
+			QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+
+	@staticmethod
+	def open_folder(path : str) -> None:
+		# made first, a folder the first run has not made yet still opens
+		if path:
+			os.makedirs(path, exist_ok = True)
 			QDesktopServices.openUrl(QUrl.fromLocalFile(path))

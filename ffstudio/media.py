@@ -58,13 +58,25 @@ class VideoReader:
 		self.capture = cv2.VideoCapture(path)
 		self.frame_count = int(self.capture.get(cv2.CAP_PROP_FRAME_COUNT)) if self.capture.isOpened() else 0
 		self.fps = self.capture.get(cv2.CAP_PROP_FPS) if self.capture.isOpened() else 0.0
+		# the frame the capture reads next, -1 when unknown
+		self.position = 0
+		self.last_index = -1
+		self.last_frame = None
 
 	def read(self, frame_index : int) -> Optional[numpy.ndarray]:
 		if not self.capture.isOpened():
 			return None
-		self.capture.set(cv2.CAP_PROP_POS_FRAMES, max(0, frame_index))
+		frame_index = max(0, frame_index)
+		# the same frame again is kept, the next one needs no seek
+		if frame_index == self.last_index:
+			return self.last_frame
+		if frame_index != self.position:
+			self.capture.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
 		success, frame = self.capture.read()
-		return frame if success else None
+		self.position = frame_index + 1 if success else -1
+		self.last_index = frame_index if success else -1
+		self.last_frame = frame if success else None
+		return self.last_frame
 
 	def release(self) -> None:
 		self.capture.release()
