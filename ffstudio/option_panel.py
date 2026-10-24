@@ -195,7 +195,7 @@ class FavoritesPanel(OptionPanel):
 		schema = self.session.schema
 		if not schema:
 			return
-		card = CollapsibleCard('Favorites', '', star_icon(), expanded = self.session.config.get('favorites_expanded', True), parent = self)
+		card = CollapsibleCard('Favorite Settings', '', star_icon(), expanded = self.session.config.get('favorites_expanded', True), parent = self)
 		card.toggled.connect(lambda expanded: self.session.config.set('favorites_expanded', expanded))
 		rows = []
 		for dest in self.session.favorites():

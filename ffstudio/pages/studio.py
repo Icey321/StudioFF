@@ -425,6 +425,9 @@ class TargetCard(SimpleCardWidget):
 		self.progress_label.setTextColor('#707070', '#9a9a9a')
 		self.progress_label.installEventFilter(ToolTipFilter(self.progress_label))
 		result_row.addWidget(self.progress_label)
+		self.preview_stop_button = tool_button(FluentIcon.CLOSE, 'Stop making this preview', self)
+		self.preview_stop_button.clicked.connect(self.page.stop)
+		result_row.addWidget(self.preview_stop_button)
 		# Auto previews the frame by itself whenever something changes, the refresh button previews it now
 		self.live_button = TogglePushButton(FluentIcon.SYNC, 'Auto', self)
 		self.live_button.setToolTip('Make the preview again by itself whenever a setting, source, processor or the frame changes')
@@ -460,6 +463,8 @@ class TargetCard(SimpleCardWidget):
 		self.progress_label.setVisible(ratio is not None)
 		self.progress_label.setText(text or ('Previewing…' if busy else '%d%%' % round(ratio * 100) if ratio is not None else ''))
 		self.progress_label.setToolTip(tip)
+		# not on the full bar a finished preview shows for a moment
+		self.preview_stop_button.setVisible(ratio is not None and ratio < 1)
 		self.result_label.setVisible(ratio is None)
 
 	def set_result(self, path : str, detail : str = '') -> None:

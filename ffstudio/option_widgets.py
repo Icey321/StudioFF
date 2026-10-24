@@ -572,7 +572,7 @@ class OptionRow(QFrame):
 		self.favorite = favorite
 		if self.star_button:
 			self.star_button.set_on(favorite)
-			self.star_button.setToolTip('Remove from Favorites' if favorite else 'Add to Favorites')
+			self.star_button.setToolTip('Remove from Favorite Settings' if favorite else 'Add to Favorite Settings')
 			self.star_button.setVisible(favorite or self.hovered)
 
 	def enterEvent(self, event) -> None:

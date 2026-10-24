@@ -40,6 +40,7 @@ CLOCK_TAGS = re.compile(r'\{(date|time)\}')
 # the preview runs on the target scaled down to this many pixels on its long side, so it comes back quickly
 PREVIEW_SIZE = 640
 PREVIEW_WIDTH = 340
+PREVIEW_MIN_WIDTH = 280
 
 
 def upgrade_template(template : str) -> str:
@@ -282,7 +283,8 @@ class BatchPage(SourceSelection, QWidget):
 		matches_layout.setContentsMargins(20, 14, 20, 16)
 		header = QHBoxLayout()
 		header.addWidget(StrongBodyLabel('Planned outputs', matches_card))
-		self.summary = CaptionLabel('', matches_card)
+		# shortens rather than keep the list from narrowing for a wider preview
+		self.summary = elastic(CaptionLabel('', matches_card))
 		self.summary.setTextColor('#707070', '#9a9a9a')
 		header.addWidget(self.summary)
 		header.addStretch(1)
@@ -307,11 +309,16 @@ class BatchPage(SourceSelection, QWidget):
 		delete_shortcut.setContext(Qt.ShortcutContext.WidgetShortcut)
 		delete_shortcut.activated.connect(self.remove_selected)
 		matches_layout.addWidget(self.match_list, 1)
-		outputs_row = QHBoxLayout()
-		outputs_row.setSpacing(12)
-		outputs_row.addWidget(matches_card, 1)
-		outputs_row.addWidget(self.create_preview_card(batch_tab))
-		batch_layout.addLayout(outputs_row, 1)
+		# dragging the grip between the list and the preview widens the preview
+		self.outputs_splitter = Splitter(Qt.Orientation.Horizontal, batch_tab)
+		self.outputs_splitter.setHandleWidth(12)
+		self.outputs_splitter.addWidget(matches_card)
+		self.outputs_splitter.addWidget(self.create_preview_card(self.outputs_splitter))
+		self.outputs_splitter.setStretchFactor(0, 1)
+		self.outputs_splitter.setStretchFactor(1, 0)
+		self.outputs_splitter.setSizes(session.config.get('batch_preview_split') or [ 700, PREVIEW_WIDTH ])
+		self.outputs_splitter.splitterMoved.connect(lambda *_: self.session.config.set('batch_preview_split', self.outputs_splitter.sizes()))
+		batch_layout.addWidget(self.outputs_splitter, 1)
 
 		run_card = SimpleCardWidget(self)
 		run_layout = QHBoxLayout(run_card)
@@ -363,7 +370,7 @@ class BatchPage(SourceSelection, QWidget):
 
 	def create_preview_card(self, parent : QWidget) -> QWidget:
 		card = SimpleCardWidget(parent)
-		card.setFixedWidth(PREVIEW_WIDTH)
+		card.setMinimumWidth(PREVIEW_MIN_WIDTH)
 		column = QVBoxLayout(card)
 		column.setContentsMargins(16, 14, 16, 16)
 		header = QHBoxLayout()

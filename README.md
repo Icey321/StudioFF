@@ -19,7 +19,7 @@ FaceFusion itself is not included: install FaceFusion v4 separately, then point 
 - **Studio**: drop in source faces and a target image, video or GIF, turn on processors and drag them into order. The preview (by itself with **Auto**, or with the refresh button) tries your settings on one frame, and **Start** runs the full job. Previews keep FaceFusion's models loaded, so after the first one each takes about 2 seconds. The models are let go after 5 idle minutes and whenever a full job runs.
 - **Before/after slider**: *Result* shows a draggable slider over the target, and clicking *Target* or *Result* again flips between them.
 - **Output names**: build file names from tags like `{source}`, `{target}`, `{date}` and `{n}`, with an optional sub-folder per source.
-- **Favorites and search**: star any setting to pin it to Favorites, or filter all settings with *Search settings*.
+- **Favorite Settings and search**: star any setting to pin it to Favorite Settings, or filter all settings with *Search settings*.
 - **Options always match v4**: every option comes from FaceFusion's own argument parser, and only changed values are passed on.
 - **Faces**: shows the faces FaceFusion detects in the current frame and which ones will be processed. If none will be, it says why.
 - **Mask**: shades the face mask FaceFusion will blend through, and redraws as you change mask settings.
