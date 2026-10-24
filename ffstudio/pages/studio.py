@@ -878,7 +878,6 @@ class StudioPage(SourceSelection, QWidget):
 		self.on_schema_changed()
 		self.refresh_name_preview()
 		self.schedule_face_scan()
-		QTimer.singleShot(0, self.auto_check_content)
 
 	# layout pieces
 

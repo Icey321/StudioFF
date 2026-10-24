@@ -110,6 +110,8 @@ class MainWindow(FluentWindow):
 		self.session.check_python()
 		self.setup_page.refresh_status()
 		self.session.refresh_schema()
+		# the restored target's check waits for the window, every page should see it run
+		self.studio_page.auto_check_content()
 
 	def on_schema_loading(self, loading : bool) -> None:
 		if loading:
