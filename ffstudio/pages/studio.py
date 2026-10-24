@@ -1270,8 +1270,10 @@ class StudioPage(SourceSelection, QWidget):
 		self.start_button.setEnabled(not busy and not self.chain)
 		self.check_button.setEnabled(not busy)
 		self.target_card.preview_button.setEnabled(not busy)
-		self.stop_button.setEnabled(busy)
-		if busy:
+		# a preview, Studio's or Batch's, shows its progress on its own preview card and leaves the run bar as it was
+		run_bar = not self.session.task_is_preview
+		self.stop_button.setEnabled(busy and (run_bar or bool(self.pending_output)))
+		if busy and run_bar:
 			self.status_label.setText(task)
 			self.detail_label.setText('Starting…')
 			self.progress_bar.setValue(0)
@@ -1300,10 +1302,9 @@ class StudioPage(SourceSelection, QWidget):
 		left = expected - elapsed
 		text = '%d%%' % (ratio * 100) + ('  ·  about %d s left' % round(left) if left >= 1 and self.preview_floor < 0.9 else '')
 		self.target_card.set_preview_progress(ratio, text, 'Estimated from how long your previews took before (about %.1f s), FaceFusion does not report progress for a single frame' % expected)
-		self.progress_bar.setValue(int(ratio * 1000))
 
 	def on_progress(self, title : str, ratio : float, status : str) -> None:
-		if not self.session.task:
+		if not self.session.task or self.session.task_is_preview:
 			return
 		self.status_label.setText('%s · %s' % (self.session.task, title) if title else self.session.task)
 		self.detail_label.setText('%d%%  %s' % (round(ratio * 100), status))
@@ -1311,7 +1312,7 @@ class StudioPage(SourceSelection, QWidget):
 			self.progress_bar.setValue(int(ratio * 1000))
 
 	def on_log(self, line : str) -> None:
-		if self.session.task and not line.startswith('Traceback'):
+		if self.session.task and not self.session.task_is_preview and not line.startswith('Traceback'):
 			self.detail_label.setText(line[-110:])
 		# the last steps of a preview move its bar forward
 		if self.preview_clock.isActive():
@@ -1336,7 +1337,8 @@ class StudioPage(SourceSelection, QWidget):
 			elapsed = time.monotonic() - chain.get('started')
 			self.end_chain()
 			if kind == 'compose' and exit_code not in [ 0, -1 ]:
-				self.progress_bar.error()
+				if not self.preview_mode:
+					self.progress_bar.error()
 				status, message = self.session.describe_run_error()
 				self.status_label.setText(status if self.session.run_error() else 'Could not combine the passes (exit code %d)' % exit_code)
 				self.session.notify.emit('error', 'Could not combine the passes', message)
@@ -1347,9 +1349,10 @@ class StudioPage(SourceSelection, QWidget):
 			self.release_result_reader()
 			self.last_output = output_path
 			self.result_info = self.pending_info
-			self.progress_bar.setValue(1000)
-			self.status_label.setText('Preview ready' if self.preview_mode else 'Done — ' + os.path.basename(output_path))
-			self.detail_label.setText('%.1f s' % elapsed)
+			if not self.preview_mode:
+				self.progress_bar.setValue(1000)
+				self.status_label.setText('Done — ' + os.path.basename(output_path))
+				self.detail_label.setText('%.1f s' % elapsed)
 			self.target_card.set_result(output_path, ('preview of frame #%d' % self.pending_info.get('frame_index', 0) if self.preview_mode else 'done') + ' in %.1f s' % elapsed)
 			self.show_view('result')
 			if not self.preview_mode:
@@ -1357,11 +1360,15 @@ class StudioPage(SourceSelection, QWidget):
 				if self.session.config.get('open_output_when_done'):
 					self.open_path(output_path)
 		elif exit_code == -1:
-			self.status_label.setText('Stopped')
-			self.detail_label.setText('')
-			self.progress_bar.pause()
+			if not self.preview_mode:
+				self.status_label.setText('Stopped')
+				self.detail_label.setText('')
+				self.progress_bar.pause()
+			else:
+				self.target_card.result_label.setText('Preview stopped')
 		else:
-			self.progress_bar.error()
+			if not self.preview_mode:
+				self.progress_bar.error()
 			image_target = self.preview_mode or media_kind(self.pending_info.get('target') or '') == 'image'
 			blocked = self.session.nsfw_block_message(image_target)
 			if blocked:
@@ -1727,7 +1734,7 @@ class StudioPage(SourceSelection, QWidget):
 			if step.get('lossless'):
 				settings.update({ 'image_quality': 100, 'video_encoder': 'libx264', 'video_quality': 100 })
 			args = [ os.path.join(APP_DIR, 'compose_passes.py'), base, step.get('output'), json.dumps(settings), '--' ] + outputs
-			self.session.run_python(self.chain_task(step), args, self.session.facefusion_root)
+			self.session.run_python(self.chain_task(step), args, self.session.facefusion_root, preview = chain.get('preview'))
 			return
 		self.launch_step(step)
 

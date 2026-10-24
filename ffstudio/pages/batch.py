@@ -393,10 +393,19 @@ class BatchPage(SourceSelection, QWidget):
 		self.preview_view.setAcceptDrops(False)
 		self.preview_view.setMinimumHeight(180)
 		column.addWidget(self.preview_view, 1)
-		self.preview_bar = ProgressBar(card)
+		# the bar and its Stop button only show while a preview runs
+		self.preview_row = QWidget(card)
+		bar_row = QHBoxLayout(self.preview_row)
+		bar_row.setContentsMargins(0, 0, 0, 0)
+		bar_row.setSpacing(8)
+		self.preview_bar = ProgressBar(self.preview_row)
 		self.preview_bar.setRange(0, 1000)
-		self.preview_bar.hide()
-		column.addWidget(self.preview_bar)
+		bar_row.addWidget(self.preview_bar, 1, Qt.AlignmentFlag.AlignVCenter)
+		self.preview_stop_button = tool_button(FluentIcon.CLOSE, 'Stop making this preview', self.preview_row)
+		self.preview_stop_button.clicked.connect(self.stop_preview)
+		bar_row.addWidget(self.preview_stop_button)
+		self.preview_row.hide()
+		column.addWidget(self.preview_row)
 		self.preview_label = elastic(CaptionLabel('', card))
 		self.preview_label.setTextColor('#707070', '#9a9a9a')
 		self.preview_label.setWordWrap(True)
@@ -566,7 +575,7 @@ class BatchPage(SourceSelection, QWidget):
 		self.preview_floor = 0.0
 		self.preview_estimate = self.session.preview_key('batch_preview_seconds')
 		self.preview_bar.setValue(0)
-		self.preview_bar.show()
+		self.preview_row.show()
 		self.preview_clock.start()
 		self.tick_preview_progress()
 
@@ -580,10 +589,18 @@ class BatchPage(SourceSelection, QWidget):
 		self.preview_bar.setValue(int(ratio * 1000))
 		self.preview_label.setText('Making the preview of %s…  %d%%' % (name, ratio * 100) + ('  ·  about %d s left' % round(left) if left >= 1 and self.preview_floor < 0.9 else ''))
 
+	def stop_preview(self) -> None:
+		if not self.preview_running:
+			return
+		# no new preview right after, the next change or the refresh button makes one
+		self.preview_timer.stop()
+		self.preview_waiting = False
+		self.session.runner.stop()
+
 	def on_preview_finished(self, exit_code : int, elapsed : float) -> None:
 		self.preview_running = False
 		self.preview_clock.stop()
-		self.preview_bar.hide()
+		self.preview_row.hide()
 		output_path = os.path.join(PREVIEW_DIR, 'batch_result.png')
 		name = os.path.basename(self.preview_run.get('target')) if self.preview_run else ''
 		if exit_code == 0 and os.path.exists(output_path):

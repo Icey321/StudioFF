@@ -98,6 +98,8 @@ class Session(QObject):
 		self.preview_worker.set_idle_minutes(int(self.config.get('preview_keep_loaded_minutes')))
 		self.preview_warm = False
 		self.task = ''
+		# a preview shows its progress on its own page's preview card, not in Studio's run bar
+		self.task_is_preview = False
 		self.python_version : Optional[str] = None
 		self.schema_runner = ProcessRunner(self)
 		self.schema_runner.finished.connect(self.on_schema_finished)
@@ -195,8 +197,9 @@ class Session(QObject):
 
 	# running facefusion
 
-	def set_task(self, task : str) -> None:
+	def set_task(self, task : str, preview : bool = False) -> None:
 		self.task = task
+		self.task_is_preview = preview and bool(task)
 		self.busy_changed.emit(bool(task), task)
 
 	def run_facefusion(self, task : str, command_args : List[str], script : str = 'facefusion.py', preview : bool = False) -> bool:
@@ -210,7 +213,7 @@ class Session(QObject):
 		self.save()
 		# before set_task, the pages start their preview estimate when they hear that facefusion is busy
 		self.preview_warm = preview and self.preview_worker.is_running()
-		self.set_task(task)
+		self.set_task(task, preview)
 		self.facefusion_running = True
 		environment = create_process_environment(self.python_path)
 		if preview and script == 'facefusion.py' and self.preview_worker.is_usable():
@@ -321,12 +324,12 @@ class Session(QObject):
 	def clear_preview_files(self) -> None:
 		shutil.rmtree(PREVIEW_DIR, ignore_errors = True)
 
-	def run_python(self, task : str, args : List[str], working_dir : str, python_path : Optional[str] = None) -> bool:
+	def run_python(self, task : str, args : List[str], working_dir : str, python_path : Optional[str] = None, preview : bool = False) -> bool:
 		if self.runner.is_running():
 			self.notify.emit('warning', 'Busy', 'Already running: ' + self.task)
 			return False
 		python_path = python_path or self.python_path
-		self.set_task(task)
+		self.set_task(task, preview)
 		return self.runner.start(python_path, args, working_dir, create_process_environment(python_path))
 
 	def run_program(self, task : str, program : str, args : List[str], working_dir : str, environment = None) -> bool:
