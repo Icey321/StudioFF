@@ -16,23 +16,19 @@ FaceFusion itself is not included: install FaceFusion v4 separately, then point 
 
 ## Features
 
-- **Studio**: drop in source faces and a target image, video or GIF, turn on processors and drag them into order. The preview (by itself with **Auto**, or with the refresh button) tries your settings on one frame, and **Start** runs the full job. A Stop button beside the preview bar cancels a preview. Previews keep FaceFusion's models loaded, so after the first one each takes about 2 seconds. The models are let go after an idle time you choose in Setup (5 minutes by default) and whenever a full job runs.
-- **Before/after slider**: *Result* shows a draggable slider over the target, and clicking *Target* or *Result* again flips between them.
+- **Studio**: drop in source faces and a target image, video or GIF, turn on processors and drag them into order. The preview tries your settings on one frame (automatically with **Auto**), and **Start** runs the full job. Models stay loaded between previews, so after the first one each takes about 2 seconds.
+- **Batch**: every source face × every target in a folder, with its own settings (or copied from Studio in one click). Each planned output shows thumbnails and can be removed, a live preview tries the selected one, and one failed target doesn't stop the rest.
+- **Face mapping**: give each person in the target their own source face. Two people can even swap faces with each other.
+- **GIF support**: GIF targets are converted for FaceFusion and saved back as looping GIFs (needs `ffmpeg`).
 - **Output names**: build file names from tags like `{source}`, `{target}`, `{date}` and `{n}`, with an optional sub-folder per source.
-- **Favorite Settings and search**: star any setting to pin it to Favorite Settings, or filter all settings with *Search settings*. Setting groups you open or close stay that way the next time.
-- **Options always match v4**: every option comes from FaceFusion's own argument parser, and only changed values are passed on.
+- **Favorite Settings and search**: star any setting to pin it to Favorite Settings, or filter all settings with *Search settings*. Open or closed setting groups stay that way.
 - **Faces**: shows the faces FaceFusion detects in the current frame and which ones will be processed. If none will be, it says why.
 - **Mask**: shades the face mask FaceFusion will blend through, and redraws as you change mask settings.
-- **Face mapping**: give each person in the target their own source face. Two people can even swap faces with each other.
-- **Batch**: every source face × every target in a folder, with Studio's source faces, file name tags and sub-folders. Batch keeps its own settings beside the list (or copies them from Studio with one click). Each planned output shows target, result and source thumbnails, and you can remove outputs you don't want. A live preview with Faces and Mask tries the selected output first, and its width can be dragged wider. One failed target doesn't stop the rest.
-- **NSFW Check**: runs FaceFusion's own filter before a long job and says clearly when a target is refused. The filter itself is left unchanged.
-- **GIF support**: GIF targets are converted for FaceFusion and saved back as looping GIFs (needs `ffmpeg`).
 - **Models**: download the lite or full model set, see what's installed, and delete models to free space.
 - **Benchmark**: runs FaceFusion's benchmark on your hardware and exports the results as a shareable image.
-- **Console**: the full FaceFusion log and the exact command line.
-- **Setup**: point the app at an existing FaceFusion v4 or install it from scratch, then check GitHub for FaceFusion updates. FaceFusion Studio checks for its own new releases at startup, and an orange dot on the Setup gear means one is out. **Update to vX** downloads it, closes the app, swaps in the new files and opens it again; settings, presets and FaceFusion are kept. A copy that is a git checkout updates through git instead.
-- **Custom look**: Auto, Light or Dark theme, and your own accent color for each theme, picked with a color picker (one click puts back the standard purple).
-- **Fluent design**: Windows 11 style throughout, a splash screen with a real loading bar at startup, and settings remembered between runs.
+- **Setup**: point the app at an existing FaceFusion v4 or install it from scratch, and check GitHub for FaceFusion updates. An orange dot on the Setup gear means a new FaceFusion Studio release is out, and **Update to vX** installs it and reopens the app, keeping your settings, presets and FaceFusion.
+- **Custom look**: Auto, Light or Dark theme, with your own accent color for each (one click puts back the standard purple).
+- **Fluent design**: Windows 11 style throughout, a splash screen with a loading bar, and settings remembered between runs.
 
 ## Install
 
