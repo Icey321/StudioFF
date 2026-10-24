@@ -13,6 +13,8 @@ FaceFusion itself is not included: install FaceFusion v4 separately, then point 
 | Before | After |
 | --- | --- |
 | ![Before: target with mapped faces](docs/images/before.webp) | ![After: result with the faces swapped](docs/images/after.webp) |
+| **Batch** | **Setup** |
+| ![Batch: every source face against every target, with a live preview](docs/images/batch.webp) | ![Setup: FaceFusion location, install, updates and appearance](docs/images/setup.webp) |
 
 ## Features
 
