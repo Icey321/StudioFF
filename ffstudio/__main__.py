@@ -79,10 +79,15 @@ def main() -> None:
 
 	from ffstudio.main_window import MainWindow, apply_theme
 	from ffstudio.session import Session
+	from qfluentwidgets import setFontFamilies
 
 	splash.step('Reading your settings…')
 	session = Session()
+	splash.step()
 	apply_theme(args.theme or session.config.get('theme') or 'auto', session.config.get('accent_colors'))
+	# one family only: with fallback families the first text box takes a second to appear, windows fills in other scripts anyway
+	setFontFamilies([ 'Segoe UI' ])
+	splash.step()
 	window = MainWindow(session)
 
 	if args.screenshot:
@@ -105,6 +110,7 @@ def main() -> None:
 		QTimer.singleShot(1500, capture)
 	else:
 		opened['window'] = window
+		splash.step()
 		window.show()
 		QTimer.singleShot(0, splash.finish)
 

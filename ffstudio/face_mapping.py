@@ -10,10 +10,10 @@ import math
 import os
 from typing import Any, Callable, Dict, List, Optional
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QColor, QPixmap
+from PySide6.QtCore import QRectF, Qt, Signal
+from PySide6.QtGui import QColor, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QSizePolicy, QVBoxLayout, QWidget
-from qfluentwidgets import CaptionLabel, ComboBox, FluentIcon, LineEdit, PushButton, ToolTipFilter, TransparentToolButton
+from qfluentwidgets import CaptionLabel, ComboBox, FluentIcon, LineEdit, TogglePushButton, ToolTipFilter, TransparentToolButton, qconfig, themeColor
 
 from ffstudio.config import DATA_DIR
 from ffstudio.media import media_kind
@@ -218,15 +218,18 @@ class FaceMappingCard(CollapsibleCard):
 		self.people : List[Dict[str, Any]] = []
 		self.samples = 0
 		self.rows : List[PersonRow] = []
+		self.finding = False
+		self.find = find
 		self.status_label = self.subtitle_label
 		self.status_label.setMinimumWidth(0)
 		self.status_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
 		# a long summary is clipped rather than pushing the buttons away, so it takes the free room itself
 		self.header.layout().setStretchFactor(self.status_label, 1)
-		self.find_button = PushButton(FluentIcon.PEOPLE, 'Find people', self)
+		# shows in the accent color while people are found or being looked for, the card gets an accent border too
+		self.find_button = TogglePushButton(FluentIcon.PEOPLE, 'Find people', self)
 		self.find_button.setToolTip('Look through the target for the different people in it, so each one can get a source of their own')
 		self.find_button.installEventFilter(ToolTipFilter(self.find_button))
-		self.find_button.clicked.connect(find)
+		self.find_button.clicked.connect(self.on_find_clicked)
 		self.add_tool(self.find_button)
 		self.clear_button = TransparentToolButton(FluentIcon.DELETE, self)
 		self.clear_button.setToolTip('Forget the people of this target, Start runs as usual again')
@@ -243,7 +246,25 @@ class FaceMappingCard(CollapsibleCard):
 		self.footer_label.setTextColor('#707070', '#9a9a9a')
 		self.add_widget(self.footer_label)
 		self.toggled.connect(self.on_toggled)
+		qconfig.themeColorChanged.connect(self.update)
 		self.set_people([], 0)
+
+	def active(self) -> bool:
+		return self.finding or bool(self.people)
+
+	def on_find_clicked(self) -> None:
+		self.find()
+		# a click toggles the button, put it back to what the card really shows when nothing started
+		self.find_button.setChecked(self.active())
+
+	def paintEvent(self, event) -> None:
+		super().paintEvent(event)
+		if self.active():
+			painter = QPainter(self)
+			painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+			painter.setPen(QPen(themeColor(), 1.5))
+			painter.setBrush(Qt.BrushStyle.NoBrush)
+			painter.drawRoundedRect(QRectF(self.rect()).adjusted(1, 1, -1, -1), 7, 7)
 
 	def on_toggled(self, expanded : bool) -> None:
 		if hasattr(self, 'page'):
@@ -265,7 +286,10 @@ class FaceMappingCard(CollapsibleCard):
 		self.refresh_text()
 
 	def set_finding(self, done : int, total : int) -> None:
+		self.finding = True
 		self.find_button.setEnabled(False)
+		self.find_button.setChecked(True)
+		self.update()
 		if total:
 			self.status_label.setText('Looking at frame %d of %d…' % (done + 1, total))
 		elif done == 0:
@@ -277,7 +301,10 @@ class FaceMappingCard(CollapsibleCard):
 		self.refresh_text()
 
 	def refresh_text(self) -> None:
+		self.finding = False
 		self.find_button.setEnabled(True)
+		self.find_button.setChecked(self.active())
+		self.update()
 		if not self.people:
 			self.status_label.setText('')
 			self.footer_label.setText('Find people to give each person in the target a source of their own.' if self.page.target_path else 'Choose a target first.')

@@ -26,11 +26,18 @@ class MainWindow(FluentWindow):
 	def __init__(self, session : Session) -> None:
 		super().__init__()
 		self.session = session
+		# small steps through the slow imports, so the bar keeps moving instead of stopping at 10%
+		splash.step()
 		from ffstudio.pages.batch import BatchPage
+		splash.step()
 		from ffstudio.pages.benchmark import BenchmarkPage
+		splash.step()
 		from ffstudio.pages.console import ConsolePage
+		splash.step()
 		from ffstudio.pages.models import ModelsPage
+		splash.step()
 		from ffstudio.pages.setup import SetupPage
+		splash.step()
 		from ffstudio.pages.studio import StudioPage
 
 		splash.step('Building the Studio page…')
@@ -53,6 +60,7 @@ class MainWindow(FluentWindow):
 		self.addSubInterface(self.benchmark_page, FluentIcon.SPEED_HIGH, 'Benchmark')
 		self.addSubInterface(self.console_page, FluentIcon.COMMAND_PROMPT, 'Console')
 		self.addSubInterface(self.setup_page, FluentIcon.SETTING, 'Setup', NavigationItemPosition.BOTTOM)
+		splash.step()
 
 		# just wide enough for the longest page name
 		self.navigationInterface.setExpandWidth(150)

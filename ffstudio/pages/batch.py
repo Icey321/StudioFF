@@ -164,7 +164,6 @@ class BatchPage(SourceSelection, QWidget):
 		self.clock = QTimer(self)
 		self.clock.setInterval(1000)
 		self.clock.timeout.connect(self.on_clock)
-		self.clock.start()
 		self.watch_timer = QTimer(self)
 		self.watch_timer.setSingleShot(True)
 		self.watch_timer.setInterval(300)
@@ -361,6 +360,8 @@ class BatchPage(SourceSelection, QWidget):
 		self.store.schema_changed.connect(self.schedule_preview)
 		self.source_card.refresh(self.source_paths)
 		self.refresh_matches()
+		# only once the page is built, the splash lets timers fire while it builds
+		self.clock.start()
 
 	def create_settings_column(self) -> QWidget:
 		copy_button = PushButton(FluentIcon.COPY, 'Copy Settings from Studio', self)
