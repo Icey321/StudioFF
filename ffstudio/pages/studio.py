@@ -18,7 +18,7 @@ from ffstudio.media import GIF_EXTENSIONS, VideoReader, extension, format_timeco
 from ffstudio.nsfw import BLOCKED_STATUS, NsfwDialog, describe_result, show_blocked_bar
 from ffstudio.option_panel import FavoritesPanel, OptionPanel
 from ffstudio.output_name import AUTOMATIC_TEMPLATE, NAME_EXAMPLES, NAME_TAGS, build_output_path, clean_name, unknown_tags
-from ffstudio.session import Session
+from ffstudio.session import Session, folder_is_writable
 from ffstudio.widgets import LockButton, PreviewView, ProcessorArea, ProcessorButton, Splitter, StateButton, Thumbnail, add_edit_button, collect_drop_paths, guard_wheel, join_split_buttons
 
 STUDIO_GROUPS = [ 'face_selector', 'face_masker', 'face_detector', 'face_aligner', 'face_tracker', 'output_creation', 'frame_extraction', 'frame_distribution', 'voice_extractor', 'workflow' ]
@@ -1136,7 +1136,10 @@ class StudioPage(QWidget):
 		self.live_timer.stop()
 		self.live_pending = False
 		output_path = self.suggest_output_path()
-		os.makedirs(os.path.dirname(output_path), exist_ok = True)
+		# facefusion only finds out at the very end, after processing the whole target
+		if not folder_is_writable(os.path.dirname(output_path)):
+			self.session.notify.emit('error', 'Cannot save to this folder', 'Windows does not allow saving to %s. Choose another output folder, such as Videos or Documents.' % os.path.dirname(output_path))
+			return
 		passes = self.mapping_passes()
 		if passes:
 			if extension(self.target_path) in GIF_EXTENSIONS:
@@ -1272,8 +1275,9 @@ class StudioPage(QWidget):
 			self.end_chain()
 			if kind == 'compose' and exit_code not in [ 0, -1 ]:
 				self.progress_bar.error()
-				self.status_label.setText('Could not combine the passes (exit code %d)' % exit_code)
-				self.session.notify.emit('error', 'Face mapping', 'Could not combine the passes. See Console for the full log.')
+				status, message = self.session.describe_run_error()
+				self.status_label.setText(status if self.session.run_error() else 'Could not combine the passes (exit code %d)' % exit_code)
+				self.session.notify.emit('error', 'Could not combine the passes', message)
 				return
 		if exit_code == 0 and os.path.exists(output_path):
 			if self.preview_mode:
@@ -1315,8 +1319,10 @@ class StudioPage(QWidget):
 					self.detail_label.setText('Confirming with the NSFW check…')
 					self.check_content(True, os.path.join(PREVIEW_DIR, 'frame.png') if self.preview_mode else '')
 			else:
-				self.status_label.setText('Failed (exit code %d)' % exit_code)
-				self.session.notify.emit('error', 'FaceFusion failed', 'See Console for the full log.')
+				status, message = self.session.describe_run_error()
+				self.status_label.setText(status if self.session.run_error() else 'Failed (exit code %d)' % exit_code)
+				self.detail_label.setText('')
+				self.session.notify.emit('error', 'FaceFusion failed', message)
 
 	# face detection
 

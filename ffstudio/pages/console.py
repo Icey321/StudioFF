@@ -1,10 +1,10 @@
 from typing import Optional
 
-from PySide6.QtGui import QFont, QGuiApplication, QTextCursor
+from PySide6.QtGui import QColor, QFont, QGuiApplication, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
-from qfluentwidgets import CaptionLabel, FluentIcon, PlainTextEdit, PushButton, SubtitleLabel
+from qfluentwidgets import CaptionLabel, FluentIcon, PlainTextEdit, PushButton, SubtitleLabel, isDarkTheme
 
-from ffstudio.session import Session
+from ffstudio.session import Session, is_error_line
 
 MAX_BLOCKS = 20000
 
@@ -51,7 +51,19 @@ class ConsolePage(QWidget):
 
 	def append(self, line : str) -> None:
 		self.output.appendPlainText(line)
+		if is_error_line(line):
+			# only the error line stands out, the traceback above it stays plain
+			cursor = QTextCursor(self.output.document().lastBlock())
+			cursor.select(QTextCursor.SelectionType.BlockUnderCursor)
+			error_format = QTextCharFormat()
+			error_format.setForeground(QColor('#ff8a8a' if isDarkTheme() else '#c42b1c'))
+			error_format.setFontWeight(600)
+			cursor.mergeCharFormat(error_format)
 		self.output.moveCursor(QTextCursor.MoveOperation.End)
+		# back to the left edge, a long line before would keep the start of this one out of view
+		self.output.moveCursor(QTextCursor.MoveOperation.StartOfBlock)
+		# the next line would carry on in red otherwise
+		self.output.setCurrentCharFormat(QTextCharFormat())
 
 	def on_started(self, command : str) -> None:
 		self.last_command = command

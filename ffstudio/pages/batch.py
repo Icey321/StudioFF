@@ -9,7 +9,7 @@ from qfluentwidgets import BodyLabel, CaptionLabel, ComboBox, FluentIcon, LineEd
 from ffstudio.media import media_kind
 from ffstudio.nsfw import BLOCKED_TITLE, NsfwDialog, show_blocked_bar
 from ffstudio.pages.setup import form_row, section_card
-from ffstudio.session import Session
+from ffstudio.session import Session, explain_error, folder_is_writable
 
 SOURCE_FILTERS = [ ('*.jpg', 'JPG images'), ('*.png', 'PNG images'), ('*.webp', 'WebP images'), ('*.*', 'All files') ]
 TARGET_FILTERS = [ ('*.mp4', 'MP4 videos'), ('*.jpg', 'JPG images'), ('*.png', 'PNG images'), ('*.mov', 'MOV videos'), ('*.webm', 'WebM videos'), ('*.*', 'All files') ]
@@ -181,7 +181,8 @@ class BatchPage(QWidget):
 	def item_text(self, item : Dict[str, Any]) -> str:
 		name = item.get('name') or '⚠ invalid file name template'
 		source = item.get('source')
-		return STATUS_PREFIX.get(self.item_status(item), '') + '%s  ←  %s%s' % (name, os.path.basename(item.get('target')), ('  +  ' + os.path.basename(source)) if source else '')
+		reason = item.get('reason') if self.item_status(item) == 'failed' else ''
+		return STATUS_PREFIX.get(self.item_status(item), '') + '%s  ←  %s%s' % (name, os.path.basename(item.get('target')), ('  +  ' + os.path.basename(source)) if source else '') + ('  ·  ' + reason if reason else '')
 
 	def refresh_list(self) -> None:
 		self.match_list.clear()
@@ -225,7 +226,9 @@ class BatchPage(QWidget):
 		if not all(item.get('name') for item in self.items):
 			self.session.notify.emit('warning', 'Invalid file name', 'The file name template has an unknown placeholder.')
 			return
-		os.makedirs(output_dir, exist_ok = True)
+		if not folder_is_writable(output_dir):
+			self.session.notify.emit('error', 'Cannot save to this folder', 'Windows does not allow saving to %s. Choose another output folder, such as Videos or Documents.' % output_dir)
+			return
 		for item in self.items:
 			# targets the nsfw check flagged would only be refused, so they are not run
 			item['status'] = 'blocked' if self.item_status(item) == 'skip' else ''
@@ -299,6 +302,8 @@ class BatchPage(QWidget):
 			self.check_results[item.get('target')] = { 'path': item.get('target'), 'kind': 'video', 'blocked': True, 'rate': self.session.content_rate, 'checked': 0, 'flagged': [], 'previews': [] }
 		else:
 			item['status'] = 'failed'
+			error = self.session.run_error() or ''
+			item['reason'] = (explain_error(error) or error).split('. ')[0][:120]
 			# an image gives no reason when it is refused, the nsfw check confirms it once the batch is done
 			item['confirm'] = bool(self.session.nsfw_block_message(media_kind(item.get('target')) == 'image'))
 		self.refresh_item(index)

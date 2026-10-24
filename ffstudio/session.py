@@ -6,7 +6,7 @@ import shutil
 import sys
 import tempfile
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from PySide6.QtCore import QObject, Signal
 
@@ -22,6 +22,39 @@ CONTENT_RATE_LIMIT = 10.0
 # content_check.py prints one of these per target
 CONTENT_RESULT_PREFIX = 'CONTENT_RESULT '
 CONTENT_CHECK_DIR = os.path.join(PREVIEW_DIR, 'nsfw_check')
+# the last line of a python traceback, an error facefusion logs itself, or a command line mistake
+EXCEPTION_PATTERN = re.compile(r'^[\w.]*(Error|Exception)\b(:|$)')
+FACEFUSION_ERROR_PATTERN = re.compile(r'^\[FACEFUSION\.[\w.]+\] .*\b(failed|not found|not installed|not supported|could not be loaded|not implemented)\b')
+USAGE_ERROR_PATTERN = re.compile(r'^\S+\.py: error: ')
+
+
+def is_error_line(line : str) -> bool:
+	return bool(EXCEPTION_PATTERN.match(line) or FACEFUSION_ERROR_PATTERN.match(line) or USAGE_ERROR_PATTERN.match(line))
+
+
+def explain_error(line : str) -> Optional[str]:
+	"""a plain hint for the errors people can fix themselves"""
+	lowered = line.lower()
+	if line.startswith('PermissionError') or '[errno 13]' in lowered:
+		return 'Windows did not allow saving there. Choose another output folder, such as Videos or Documents, or close the file if it is open in another app.'
+	if '[errno 28]' in lowered or 'no space left' in lowered:
+		return 'The drive is full. Free some space or choose an output folder on another drive.'
+	if 'out of memory' in lowered or 'failed to allocate' in lowered or 'bad allocation' in lowered or line.startswith('MemoryError'):
+		return 'Ran out of memory. Try fewer execution threads, a smaller video or closing other apps.'
+	return None
+
+
+def folder_is_writable(folder : str) -> bool:
+	try:
+		os.makedirs(folder, exist_ok = True)
+		# one try, tempfile.mkstemp retries thousands of times on windows when access is denied
+		path = os.path.join(folder, '.ffstudio-%s.tmp' % uuid.uuid4().hex)
+		with open(path, 'xb'):
+			pass
+		os.remove(path)
+		return True
+	except OSError:
+		return False
 
 
 class Session(QObject):
@@ -183,6 +216,21 @@ class Session(QObject):
 				pass
 		elif not re.match(r'\[FACEFUSION\.\w+\] processing step \d+ of \d+$', line):
 			self.run_messages.append(line)
+
+	def run_error(self) -> Optional[str]:
+		"""the line that best explains why the last run failed, a python exception wins over facefusion's own summary"""
+		errors = [ line for line in self.run_messages if is_error_line(line) ]
+		exceptions = [ line for line in errors if EXCEPTION_PATTERN.match(line) ]
+		return (exceptions or errors or [ None ])[-1]
+
+	def describe_run_error(self) -> Tuple[str, str]:
+		"""a short status and a notification text for a failed run"""
+		line = self.run_error()
+		if not line:
+			return 'Failed', 'See Console for the full log.'
+		hint = explain_error(line)
+		short = line if len(line) <= 160 else line[:157] + '…'
+		return 'Failed: ' + (hint.split('.')[0] if hint else short), (hint + '\n' if hint else '') + short + '\nSee Console for the full log.'
 
 	def nsfw_block_message(self, image_target : bool) -> Optional[str]:
 		"""explains a failed run that was stopped by facefusion's nsfw content check
