@@ -1,6 +1,6 @@
 # FaceFusion Studio
 
-[FaceFusion v4](https://github.com/facefusion/facefusion/tree/v4) face swapper.
+Custom UI for [FaceFusion v4](https://github.com/facefusion/facefusion/tree/v4) face swapper.
 
 FaceFusion Studio swaps faces in images, videos and GIFs. Pick the faces to use, pick a target, preview
 the swap on one frame and run it, one target at a time or a whole folder in a batch. Several people in one
@@ -32,7 +32,7 @@ FaceFusion itself is not included: install FaceFusion v4 separately, then point 
 - **Mask**: shades the face mask FaceFusion will blend through, and redraws as you change mask settings.
 - **Models**: download the lite or full model set, see what's installed, and delete models to free space.
 - **Benchmark**: runs FaceFusion's benchmark on your hardware and exports the results as a shareable image.
-- **Setup**: point the app at an existing FaceFusion v4 or install it from scratch, and check GitHub for FaceFusion updates. An orange dot on the Setup gear means a new FaceFusion Studio release is out, and **Update to vX** installs it and reopens the app, keeping your settings, presets and FaceFusion.
+- **Setup**: point the app at an existing FaceFusion v4 or install it from scratch, and check GitHub for FaceFusion updates.
 - **Custom look**: Auto, Light or Dark theme, with your own accent color for each (one click puts back the standard purple).
 - **Fluent design**: Windows 11 style throughout, a splash screen with a loading bar, and settings remembered between runs.
 
@@ -43,11 +43,10 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 ```
 
 This creates `.venv` for the UI (PySide6 + PySide6-Fluent-Widgets + OpenCV) and adds desktop and Start menu
-shortcuts. Then start **FaceFusion Studio** and open **Setup**. A splash screen with a loading bar shows while
-the window builds, and starting it again while it is open brings the open window to the front:
+shortcuts. Then start **FaceFusion Studio** and open **Setup**:
 
 - **Already have FaceFusion v4?** Pick its folder and the `python.exe` of its environment, or press **Detect**, then press **Save and load options**.
-- **No FaceFusion v4 yet?** Use **Install FaceFusion v4**. Note that FaceFusion v4 requires **Python 3.13+**, so a
+- **No FaceFusion v4 yet?** Use the **Install FaceFusion v4** button in the app's **Setup** page. Note that FaceFusion v4 requires **Python 3.13+**, so a
   FaceFusion 3.x environment (Python 3.12) can't run it.
 
 FaceFusion also needs `ffmpeg`, `ffprobe` and `curl` on `PATH`. Setup checks for them.
