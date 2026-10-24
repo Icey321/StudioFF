@@ -73,6 +73,12 @@ folder only ever holds the latest frame and result (overwritten each time) and i
 closes. After **Stop** or a failed run, FaceFusion's temp folder for this machine is cleared too.
 Set `FFSTUDIO_DATA_DIR` to use a different folder.
 
+## AI tools used
+
+Most of the code was written with [Claude Code](https://claude.com/claude-code) (Anthropic's Claude
+models), working from my requests and feedback. Changes were tested in the app before each release.
+No other AI tools were used.
+
 ## License
 
 Released into the public domain under [The Unlicense](UNLICENSE). FaceFusion has its own license.
