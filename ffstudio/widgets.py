@@ -9,7 +9,7 @@ import numpy
 from PySide6.QtCore import QEvent, QMimeData, QObject, QPoint, QPointF, QRect, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QDrag, QDragEnterEvent, QDropEvent, QFont, QFontMetrics, QIcon, QImage, QPainter, QPainterPath, QPen, QPixmap, QPolygonF
 from PySide6.QtWidgets import QAbstractSpinBox, QApplication, QFrame, QHBoxLayout, QLineEdit, QPushButton, QSizePolicy, QSplitter, QSplitterHandle, QVBoxLayout, QWidget
-from qfluentwidgets import CaptionLabel, CompactDoubleSpinBox, CompactSpinBox, FlowLayout, FluentIcon, FluentIconBase, Flyout, FlyoutAnimationType, IconWidget, SimpleCardWidget, StrongBodyLabel, Theme, TogglePushButton, ToolTipFilter, TransparentToolButton, isDarkTheme, setCustomStyleSheet, themeColor
+from qfluentwidgets import CaptionLabel, CompactDoubleSpinBox, CompactSpinBox, FlowLayout, FluentIcon, FluentIconBase, Flyout, FlyoutAnimationType, IconWidget, SimpleCardWidget, StrongBodyLabel, Theme, TogglePushButton, ToolTipFilter, TransparentToolButton, isDarkTheme, themeColor
 from qfluentwidgets.components.widgets.line_edit import LineEditButton
 from qfluentwidgets.components.widgets.spin_box import CompactSpinBoxBase, SpinIcon
 
@@ -384,45 +384,6 @@ class InfoButton(TransparentToolButton):
 		super()._drawIcon(icon, painter, rect)
 
 
-def padlock_path(rect : QRectF, locked : bool) -> Tuple[QPainterPath, QPainterPath]:
-	"""outline of the shackle and the filled body, the open shackle is lifted out of the body on its right leg"""
-	width, height = rect.width(), rect.height()
-	body = QPainterPath()
-	body.addRoundedRect(QRectF(rect.left() + width * 0.14, rect.top() + height * 0.46, width * 0.72, height * 0.54), width * 0.1, width * 0.1)
-	left, right = rect.left() + width * 0.3, rect.left() + width * 0.7
-	lift = 0 if locked else height * 0.16
-	top = rect.top() + height * 0.06 - lift
-	radius = (right - left) / 2
-	shackle = QPainterPath()
-	shackle.moveTo(left, rect.top() + height * 0.48)
-	shackle.lineTo(left, top + radius)
-	shackle.arcTo(QRectF(left, top, right - left, radius * 2), 180, -180)
-	shackle.lineTo(right, rect.top() + (height * 0.48 if locked else height * 0.3) - lift)
-	return shackle, body
-
-
-class LockButton(TogglePushButton):
-	"""toggle push button with a padlock that is open when off and closed when on"""
-
-	def __init__(self, text : str, parent : Optional[QWidget] = None) -> None:
-		super().__init__(parent)
-		self.setText(text)
-		# any icon makes the button reserve room for one, the padlock itself is painted below
-		self.setIcon(FluentIcon.PIN)
-
-	def _drawIcon(self, icon, painter : QPainter, rect : QRectF, state = None) -> None:
-		if self.isChecked():
-			color = QColor(0, 0, 0) if isDarkTheme() else QColor(255, 255, 255)
-		else:
-			color = QColor(255, 255, 255) if isDarkTheme() else QColor(0, 0, 0)
-		shackle, body = padlock_path(rect.adjusted(1, 0, -1, 0), self.isChecked())
-		painter.setPen(QPen(color, 1.5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
-		painter.setBrush(Qt.BrushStyle.NoBrush)
-		painter.drawPath(shackle)
-		painter.setPen(Qt.PenStyle.NoPen)
-		painter.fillPath(body, color)
-
-
 def gender_path(rect : QRectF, gender : str) -> QPainterPath:
 	"""outline of the male (circle with an arrow) or female (circle with a cross) sign"""
 	width, height = rect.width(), rect.height()
@@ -471,25 +432,6 @@ class ChoiceButton(TogglePushButton):
 		painter.drawPath(gender_path(rect.adjusted(1, 1, -1, -1), self.symbol))
 
 
-class StateButton(TogglePushButton):
-	"""push button that shows a checked look set from elsewhere, a click only clicks it and does not flip it"""
-
-	def __init__(self, icon : FluentIcon, text : str, parent : Optional[QWidget] = None) -> None:
-		super().__init__(parent)
-		self.setText(text)
-		self.setIcon(icon)
-		self.toggled.connect(self.restyle)
-
-	def nextCheckState(self) -> None:
-		pass
-
-	def restyle(self, checked : bool) -> None:
-		# as the left half of a split button, the primary split style keeps a divider against a checked right half
-		if self.objectName() in [ 'splitPushButton', 'primarySplitPushButton' ]:
-			self.setObjectName('primarySplitPushButton' if checked else 'splitPushButton')
-			self.setStyle(QApplication.style())
-
-
 def add_edit_button(edit : QLineEdit, icon : FluentIcon, tip : str) -> LineEditButton:
 	"""puts an icon button inside a fluent line edit at the far right, after its clear button"""
 	button = LineEditButton(icon, edit)
@@ -501,18 +443,6 @@ def add_edit_button(edit : QLineEdit, icon : FluentIcon, tip : str) -> LineEditB
 	edit.hBoxLayout.addWidget(button, 0, Qt.AlignmentFlag.AlignRight)
 	edit._adjustTextMargins()
 	return button
-
-
-def join_split_buttons(left : QPushButton, right : QPushButton) -> QHBoxLayout:
-	"""lays two fluent buttons edge to edge with square inner corners so they read as one split button"""
-	left.setObjectName('splitPushButton')
-	setCustomStyleSheet(right, 'ToggleButton, PushButton { border-top-left-radius: 0; border-bottom-left-radius: 0; border-left: none; }', 'ToggleButton, PushButton { border-top-left-radius: 0; border-bottom-left-radius: 0; border-left: none; }')
-	layout = QHBoxLayout()
-	layout.setContentsMargins(0, 0, 0, 0)
-	layout.setSpacing(0)
-	layout.addWidget(left)
-	layout.addWidget(right)
-	return layout
 
 
 class SplitterHandle(QSplitterHandle):
@@ -827,14 +757,12 @@ class PreviewView(QWidget):
 				painter.setClipRect(QRectF(split_x, image_rect.y(), image_rect.right() - split_x, image_rect.height()), Qt.ClipOperation.IntersectClip)
 				painter.drawPixmap(image_rect.topLeft(), self.scaled('after', self.pixmap, size))
 				painter.restore()
+				self.paint_overlays(painter, image_rect)
 				self.paint_divider(painter, image_rect, split_x)
 			else:
 				painter.drawPixmap(image_rect.topLeft(), self.scaled('after', self.pixmap, size))
 				painter.restore()
-				if not self.mask_image.isNull():
-					self.paint_mask(painter, image_rect)
-				if self.faces and self.faces_size[0]:
-					self.paint_faces(painter, image_rect)
+				self.paint_overlays(painter, image_rect)
 		else:
 			pen = QPen(QColor(255, 255, 255, 60) if dark else QColor(0, 0, 0, 50), 1.5, Qt.PenStyle.DashLine)
 			painter.setPen(pen)
@@ -873,6 +801,12 @@ class PreviewView(QWidget):
 		painter.fillPath(badge_path, QColor(0, 0, 0, 150))
 		painter.setPen(QColor(255, 255, 255))
 		painter.drawText(badge_rect, Qt.AlignmentFlag.AlignCenter, text)
+
+	def paint_overlays(self, painter : QPainter, image_rect : QRectF) -> None:
+		if not self.mask_image.isNull():
+			self.paint_mask(painter, image_rect)
+		if self.faces and self.faces_size[0]:
+			self.paint_faces(painter, image_rect)
 
 	def paint_mask(self, painter : QPainter, image_rect : QRectF) -> None:
 		# the tint fades with the mask blur, the line marks where the mask is half strength

@@ -6,6 +6,7 @@ import time
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
+import cv2
 from PySide6.QtCore import QPoint, QSize, Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QFileDialog, QGridLayout, QHBoxLayout, QSizePolicy, QVBoxLayout, QWidget
@@ -19,13 +20,15 @@ from ffstudio.nsfw import BLOCKED_STATUS, NsfwDialog, describe_result, show_bloc
 from ffstudio.option_panel import FavoritesPanel, OptionPanel
 from ffstudio.output_name import AUTOMATIC_TEMPLATE, NAME_EXAMPLES, NAME_TAGS, build_output, build_output_path, unknown_tags
 from ffstudio.session import Session, folder_is_writable
-from ffstudio.widgets import LockButton, PreviewView, ProcessorArea, ProcessorButton, Splitter, StateButton, Thumbnail, add_edit_button, collect_drop_paths, guard_wheel, join_split_buttons
+from ffstudio.widgets import PreviewView, ProcessorArea, ProcessorButton, Splitter, Thumbnail, add_edit_button, collect_drop_paths, guard_wheel
 
 STUDIO_GROUPS = [ 'face_selector', 'face_masker', 'face_detector', 'face_aligner', 'face_tracker', 'output_creation', 'frame_extraction', 'frame_distribution', 'voice_extractor', 'workflow' ]
 # settings that cannot change how a single preview frame looks
 LIVE_IGNORED_GROUPS = [ 'paths', 'output_creation', 'frame_extraction', 'frame_distribution', 'voice_extractor', 'workflow', 'execution', 'download', 'memory', 'misc' ]
 # a preview that has not run before is expected to take this long
 PREVIEW_SECONDS = 6.0
+# bigger frames are previewed on a copy this many pixels high (or wide, when upright), which is a little quicker
+PREVIEW_MAX_SIDE = 1080
 # the outputs of the passes of a face mapping run before the last one
 PASSES_DIR = os.path.join(PREVIEW_DIR, 'passes')
 SOURCE_FILTERS = [ 'Images and audio (*.jpg *.jpeg *.png *.webp *.bmp *.tif *.tiff *.mp3 *.wav *.flac *.m4a *.aac *.ogg *.opus)', 'All files (*)' ]
@@ -409,18 +412,16 @@ class TargetCard(SimpleCardWidget):
 		self.progress_label.setTextColor('#707070', '#9a9a9a')
 		self.progress_label.installEventFilter(ToolTipFilter(self.progress_label))
 		result_row.addWidget(self.progress_label)
-		# Preview Frame takes the accent color with Live, so the whole split button reads as switched on
-		self.preview_button = StateButton(FluentIcon.PHOTO, 'Preview Frame', self)
-		self.preview_button.setToolTip('Process only the current frame to check your settings')
-		self.preview_button.installEventFilter(ToolTipFilter(self.preview_button))
-		self.preview_button.clicked.connect(self.page.preview_frame)
-		self.live_button = LockButton('Live', self)
-		self.live_button.setToolTip('Lock live preview: re-run Preview Frame by itself whenever a setting, source, processor or the frame changes')
+		# Auto previews the frame by itself whenever something changes, the refresh button previews it now
+		self.live_button = TogglePushButton(FluentIcon.SYNC, 'Auto', self)
+		self.live_button.setToolTip('Make the preview again by itself whenever a setting, source, processor or the frame changes')
 		self.live_button.installEventFilter(ToolTipFilter(self.live_button))
-		result_row.addLayout(join_split_buttons(self.preview_button, self.live_button))
-		self.live_button.toggled.connect(self.preview_button.setChecked)
 		self.live_button.setChecked(bool(self.page.session.config.get('live_preview')))
 		self.live_button.toggled.connect(self.page.on_live_toggled)
+		result_row.addWidget(self.live_button)
+		self.preview_button = tool_button(FluentIcon.UPDATE, 'Preview this frame now', self)
+		self.preview_button.clicked.connect(self.page.preview_frame)
+		result_row.addWidget(self.preview_button)
 		self.open_result_button = tool_button(FluentIcon.VIEW, 'Open Preview', self)
 		self.open_result_button.clicked.connect(lambda: self.page.open_path(self.page.last_output))
 		self.open_result_button.setEnabled(False)
@@ -1000,7 +1001,7 @@ class StudioPage(SourceSelection, QWidget):
 		preview = self.target_card.preview
 		info = self.result_info
 		before = after = None
-		hint = 'No result yet — press Start or Preview Frame'
+		hint = 'No result yet — press Start, or the refresh button for a preview'
 		if self.last_output and os.path.exists(self.last_output):
 			same_target = info.get('target') == self.target_path
 			if info.get('preview'):
@@ -1221,6 +1222,10 @@ class StudioPage(SourceSelection, QWidget):
 		if frame is None:
 			self.session.notify.emit('error', 'Preview', 'Could not read the current frame.')
 			return
+		height, width = frame.shape[:2]
+		scale = PREVIEW_MAX_SIDE / min(height, width)
+		if scale < 1:
+			frame = cv2.resize(frame, (max(1, round(width * scale)), max(1, round(height * scale))), interpolation = cv2.INTER_AREA)
 		os.makedirs(PREVIEW_DIR, exist_ok = True)
 		frame_path = os.path.join(PREVIEW_DIR, 'frame.png')
 		output_path = os.path.join(PREVIEW_DIR, 'result.png')

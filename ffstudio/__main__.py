@@ -22,13 +22,11 @@ def main() -> None:
 	app = QApplication(sys.argv)
 	app.setApplicationName('FaceFusion Studio')
 
-	from qfluentwidgets import setThemeColor
 	from ffstudio.main_window import MainWindow, apply_theme
 	from ffstudio.session import Session
 
 	session = Session()
-	apply_theme(args.theme or session.config.get('theme') or 'auto')
-	setThemeColor('#7c5cff')
+	apply_theme(args.theme or session.config.get('theme') or 'auto', session.config.get('accent_colors'))
 	window = MainWindow(session)
 
 	if args.screenshot:

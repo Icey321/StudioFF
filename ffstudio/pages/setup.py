@@ -4,14 +4,22 @@ import threading
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QAbstractButton, QFileDialog, QHBoxLayout, QLabel, QSizePolicy, QVBoxLayout, QWidget
-from qfluentwidgets import BodyLabel, CaptionLabel, CheckBox, ComboBox, EditableComboBox, FluentIcon, HyperlinkButton, IconWidget, InfoBarIcon, LineEdit, PrimaryPushButton, PushButton, SearchLineEdit, SimpleCardWidget, SingleDirectionScrollArea, StrongBodyLabel, SubtitleLabel, SwitchButton
+from PySide6.QtGui import QColor
+from PySide6.QtWidgets import QAbstractButton, QButtonGroup, QFileDialog, QHBoxLayout, QLabel, QSizePolicy, QVBoxLayout, QWidget
+from qfluentwidgets import BodyLabel, CaptionLabel, CheckBox, ColorPickerButton, ComboBox, EditableComboBox, FluentIcon, HyperlinkButton, IconWidget, InfoBarIcon, LineEdit, PrimaryPushButton, PushButton, SearchLineEdit, SimpleCardWidget, SingleDirectionScrollArea, StrongBodyLabel, SubtitleLabel, SwitchButton, ToolTipFilter, TransparentToolButton
 
 from ffstudio.environment import check_dependencies, create_process_environment, fetch_github_build, find_conda, find_conda_base, find_python_candidates, has_nvidia_gpu, is_facefusion_root, probe_python_version, read_facefusion_build, read_facefusion_version, read_windows_version, version_tuple
-from ffstudio.main_window import apply_theme
+from ffstudio.main_window import DEFAULT_ACCENT, apply_theme
 from ffstudio.option_panel import OptionPanel
 from ffstudio.session import MINIMUM_PYTHON, Session
+from ffstudio.widgets import ChoiceButton
 
+# the theme buttons: key, text, icon and tooltip
+THEME_CHOICES =[
+	('auto', 'Auto', FluentIcon.CONSTRACT, 'Follow the Windows light or dark setting'),
+	('light', 'Light', FluentIcon.BRIGHTNESS, 'Always light'),
+	('dark', 'Dark', FluentIcon.QUIET_HOURS, 'Always dark')
+]
 SYSTEM_GROUPS = [ 'execution', 'memory', 'download', 'misc', 'paths' ]
 REPOSITORY_URL = 'https://github.com/facefusion/facefusion.git'
 DEFAULT_REPOSITORY = 'facefusion/facefusion'
@@ -525,20 +533,72 @@ class SetupPage(QWidget):
 
 	def create_appearance_card(self, parent : QWidget) -> QWidget:
 		card, layout = section_card('Appearance and behaviour', '', parent)
-		self.theme_combo = ComboBox(card)
-		for key, label in [ ('auto', 'Use Windows setting'), ('light', 'Light'), ('dark', 'Dark') ]:
-			self.theme_combo.addItem(label, userData = key)
-		self.theme_combo.setCurrentIndex([ 'auto', 'light', 'dark' ].index(self.session.config.get('theme') or 'auto'))
-		self.theme_combo.currentIndexChanged.connect(self.on_theme_changed)
-		layout.addLayout(form_row('Theme', [ self.theme_combo ], card))
+		themes = QWidget(card)
+		themes_layout = QHBoxLayout(themes)
+		themes_layout.setContentsMargins(0, 0, 0, 0)
+		themes_layout.setSpacing(6)
+		self.theme_group = QButtonGroup(themes)
+		current = self.session.config.get('theme') or 'auto'
+		for key, text, icon, tip in THEME_CHOICES:
+			button = ChoiceButton(text, None, icon, themes)
+			button.setCheckable(True)
+			button.setChecked(key == current)
+			button.setToolTip(tip)
+			button.installEventFilter(ToolTipFilter(button))
+			button.setProperty('theme', key)
+			self.theme_group.addButton(button)
+			themes_layout.addWidget(button)
+		themes_layout.addStretch(1)
+		self.theme_group.buttonClicked.connect(lambda button: self.on_theme_changed(button.property('theme')))
+		layout.addLayout(form_row('Theme', [ themes ], card))
+		# one accent for each look, the one in use follows the theme
+		accents = self.session.config.get('accent_colors') or {}
+		self.accent_buttons : Dict[str, ColorPickerButton] = {}
+		row = []
+		for key, text in [ ('light', 'Light theme'), ('dark', 'Dark theme') ]:
+			button = ColorPickerButton(QColor(accents.get(key) or DEFAULT_ACCENT), '%s accent color' % text.lower(), card)
+			button.setFixedSize(56, 28)
+			button.setToolTip('Click to choose the accent color of the %s' % text.lower())
+			button.installEventFilter(ToolTipFilter(button))
+			button.colorChanged.connect(lambda color, key = key: self.set_accent(key, color.name()))
+			self.accent_buttons[key] = button
+			row += [ BodyLabel(text.split()[0], card), button ]
+		reset = TransparentToolButton(FluentIcon.HISTORY, card)
+		reset.setToolTip('Back to the standard purple for both themes')
+		reset.installEventFilter(ToolTipFilter(reset))
+		reset.clicked.connect(self.reset_accents)
+		accent_row = QWidget(card)
+		accent_layout = QHBoxLayout(accent_row)
+		accent_layout.setContentsMargins(0, 0, 0, 0)
+		accent_layout.setSpacing(8)
+		for index, widget in enumerate(row):
+			accent_layout.addWidget(widget)
+			if index == 1:
+				accent_layout.addSpacing(10)
+		accent_layout.addWidget(reset)
+		accent_layout.addStretch(1)
+		layout.addLayout(form_row('Accent color', [ accent_row ], card))
 		self.open_switch = SwitchButton(card)
 		self.open_switch.setChecked(bool(self.session.config.get('open_output_when_done')))
 		self.open_switch.checkedChanged.connect(lambda checked: self.session.config.set('open_output_when_done', checked))
 		layout.addLayout(form_row('Open result', [ BodyLabel('Open the output file when processing finishes', card), self.open_switch ], card))
 		return card
 
-	def on_theme_changed(self) -> None:
-		theme = self.theme_combo.currentData()
+	def on_theme_changed(self, theme : str) -> None:
 		self.session.config.set('theme', theme)
 		self.session.config.save()
-		apply_theme(theme)
+		apply_theme(theme, self.session.config.get('accent_colors'))
+
+	def set_accent(self, key : str, color : str) -> None:
+		accents = dict(self.session.config.get('accent_colors') or {})
+		accents[key] = color
+		self.session.config.set('accent_colors', accents)
+		self.session.config.save()
+		apply_theme(self.session.config.get('theme') or 'auto', accents)
+
+	def reset_accents(self) -> None:
+		for button in self.accent_buttons.values():
+			button.setColor(QColor(DEFAULT_ACCENT))
+		self.session.config.set('accent_colors', {})
+		self.session.config.save()
+		apply_theme(self.session.config.get('theme') or 'auto')

@@ -16,7 +16,7 @@ FaceFusion itself is not included: install FaceFusion v4 separately, then point 
 
 ## Features
 
-- **Studio**: drop in source faces and a target image, video or GIF, turn on processors and drag them into order. **Preview Frame** (or **Live**) tries your settings on one frame, and **Start** runs the full job.
+- **Studio**: drop in source faces and a target image, video or GIF, turn on processors and drag them into order. The preview (by itself with **Auto**, or with the refresh button) tries your settings on one frame, and **Start** runs the full job.
 - **Before/after slider**: *Result* shows a draggable slider over the target, and clicking *Target* or *Result* again flips between them.
 - **Output names**: build file names from tags like `{source}`, `{target}`, `{date}` and `{n}`, with an optional sub-folder per source.
 - **Favorites and search**: star any setting to pin it to Favorites, or filter all settings with *Search settings*.

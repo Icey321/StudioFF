@@ -1,19 +1,24 @@
 import os
+from typing import Dict, Optional
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication
-from qfluentwidgets import FluentIcon, FluentWindow, InfoBar, InfoBarPosition, NavigationItemPosition, Theme, setTheme
+from qfluentwidgets import FluentIcon, FluentWindow, InfoBar, InfoBarPosition, NavigationItemPosition, Theme, isDarkTheme, setTheme, setThemeColor
 
 from ffstudio import APP_NAME
 from ffstudio.config import APP_DIR
 from ffstudio.session import Session
 
 THEMES = { 'auto': Theme.AUTO, 'light': Theme.LIGHT, 'dark': Theme.DARK }
+DEFAULT_ACCENT = '#7c5cff'
 
 
-def apply_theme(name : str) -> None:
+def apply_theme(name : str, accents : Optional[Dict[str, str]] = None) -> None:
+	"""switches the theme, and the accent color to the one picked for the light or dark look it ends up in"""
 	setTheme(THEMES.get(name, Theme.AUTO))
+	accents = accents or {}
+	setThemeColor(accents.get('dark' if isDarkTheme() else 'light') or DEFAULT_ACCENT)
 
 
 class MainWindow(FluentWindow):

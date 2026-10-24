@@ -7,9 +7,10 @@ import cv2
 from PySide6.QtCore import QFileSystemWatcher, QItemSelectionModel, QRectF, QSize, Qt, QTimer
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QKeySequence, QPainter, QPainterPath, QPixmap, QShortcut
 from PySide6.QtWidgets import QAbstractItemView, QFileDialog, QHBoxLayout, QListWidgetItem, QVBoxLayout, QWidget
-from qfluentwidgets import BodyLabel, CaptionLabel, ComboBox, FluentIcon, Flyout, FlyoutAnimationType, IndeterminateProgressBar, LineEdit, ListItemDelegate, ListWidget, PrimaryPushButton, ProgressBar, PushButton, SimpleCardWidget, StrongBodyLabel, SubtitleLabel, TogglePushButton, ToolTipFilter, TransparentPushButton, getFont, isDarkTheme, themeColor
+from qfluentwidgets import BodyLabel, CaptionLabel, ComboBox, FluentIcon, Flyout, FlyoutAnimationType, IndeterminateProgressBar, LineEdit, ListItemDelegate, ListWidget, PrimaryPushButton, ProgressBar, PushButton, SimpleCardWidget, StrongBodyLabel, SubtitleLabel, TogglePushButton, ToggleToolButton, ToolTipFilter, TransparentPushButton, getFont, isDarkTheme, themeColor
 
 from ffstudio.config import PREVIEW_DIR
+from ffstudio.faces import FACE_GROUPS, MASK_GROUPS, FaceProbe, describe_faces, describe_mask, face_tag, read_mask
 from ffstudio.media import media_kind, read_frame, thumbnail, to_pixmap, write_image
 from ffstudio.nsfw import BLOCKED_TITLE, NsfwDialog, show_blocked_bar
 from ffstudio.output_name import AUTOMATIC_TEMPLATE, build_output, unknown_tags
@@ -172,6 +173,14 @@ class BatchPage(SourceSelection, QWidget):
 		self.preview_timer.setSingleShot(True)
 		self.preview_timer.setInterval(700)
 		self.preview_timer.timeout.connect(self.run_preview)
+		# the faces and the mask facefusion sees in the previewed frame, drawn over the preview
+		self.face_probe = FaceProbe(session, self)
+		self.face_probe.scanned.connect(self.on_faces_scanned)
+		self.face_probe.loading.connect(self.on_faces_loading)
+		self.faces_timer = QTimer(self)
+		self.faces_timer.setSingleShot(True)
+		self.faces_timer.setInterval(250)
+		self.faces_timer.timeout.connect(self.scan_faces)
 
 		layout = QVBoxLayout(self)
 		layout.setContentsMargins(24, 16, 24, 16)
@@ -352,6 +361,16 @@ class BatchPage(SourceSelection, QWidget):
 		header = QHBoxLayout()
 		header.addWidget(StrongBodyLabel('Preview', card))
 		header.addStretch(1)
+		self.faces_button = ToggleToolButton(FluentIcon.PEOPLE, card)
+		self.faces_button.setToolTip('Faces: show the faces FaceFusion detects in this frame with the current face settings.\nOutlined faces will be processed, dashed ones are skipped by the face selector.')
+		self.mask_button = ToggleToolButton(FluentIcon.PALETTE, card)
+		self.mask_button.setToolTip('Mask: shade the face mask FaceFusion would blend the new face through, with the current Face masker settings.')
+		for button, key in [ (self.faces_button, 'batch_show_faces'), (self.mask_button, 'batch_show_mask') ]:
+			button.installEventFilter(ToolTipFilter(button))
+			button.setChecked(bool(self.session.config.get(key)))
+			button.toggled.connect(lambda checked, key = key: self.on_overlay_toggled(key, checked))
+			header.addWidget(button)
+		header.addSpacing(4)
 		self.live_button = TogglePushButton(FluentIcon.SYNC, 'Auto', card)
 		self.live_button.setToolTip('Make the preview again by itself when a setting, a source or the selected output changes')
 		self.live_button.installEventFilter(ToolTipFilter(self.live_button))
@@ -373,6 +392,11 @@ class BatchPage(SourceSelection, QWidget):
 		self.preview_label.setTextColor('#707070', '#9a9a9a')
 		self.preview_label.setWordWrap(True)
 		column.addWidget(self.preview_label)
+		# what face detection found, and which setting to change when it found nothing usable
+		self.faces_label = CaptionLabel('', card)
+		self.faces_label.setWordWrap(True)
+		self.faces_label.setVisible(self.overlays_on())
+		column.addWidget(self.faces_label)
 		return card
 
 	def copy_studio_settings(self) -> None:
@@ -407,8 +431,11 @@ class BatchPage(SourceSelection, QWidget):
 	def on_value_changed(self, dest : str, _ : object) -> None:
 		self.refresh_timer.start()
 		schema = self.store.schema
-		if not schema or schema.options.get(dest, {}).get('group') not in LIVE_IGNORED_GROUPS:
+		group = schema.options.get(dest, {}).get('group') if schema else None
+		if not schema or group not in LIVE_IGNORED_GROUPS:
 			self.schedule_preview()
+		if not schema or group in FACE_GROUPS + MASK_GROUPS or dest == 'processors':
+			self.schedule_face_scan()
 
 	def open_output_folder(self) -> None:
 		StudioPage.open_path(self.output_dir())
@@ -459,6 +486,24 @@ class BatchPage(SourceSelection, QWidget):
 		# a preview asked for while the page was hidden is made once it shows
 		if self.preview_waiting or (self.preview_run is None and self.live_button.isChecked()):
 			self.schedule_preview()
+		self.schedule_face_scan()
+
+	def hideEvent(self, event) -> None:
+		super().hideEvent(event)
+		# the probe holds its models in memory, let them go while nobody looks
+		self.faces_timer.stop()
+		self.face_probe.stop()
+
+	def scaled_frame(self, item : Dict[str, Any]) -> Optional[Any]:
+		"""the first frame of the item's target, scaled down to the preview size"""
+		frame = read_frame(item.get('target'), 0)
+		if frame is None:
+			return None
+		height, width = frame.shape[:2]
+		scale = PREVIEW_SIZE / max(height, width)
+		if scale < 1:
+			frame = cv2.resize(frame, (max(1, int(width * scale)), max(1, int(height * scale))), interpolation = cv2.INTER_AREA)
+		return frame
 
 	def run_preview(self) -> None:
 		item = self.preview_item()
@@ -474,14 +519,10 @@ class BatchPage(SourceSelection, QWidget):
 				self.preview_label.setText('Waiting for FaceFusion to finish…')
 			return
 		self.preview_waiting = False
-		frame = read_frame(item.get('target'), 0)
+		frame = self.scaled_frame(item)
 		if frame is None:
 			self.preview_label.setText('Could not read %s' % os.path.basename(item.get('target')))
 			return
-		height, width = frame.shape[:2]
-		scale = PREVIEW_SIZE / max(height, width)
-		if scale < 1:
-			frame = cv2.resize(frame, (max(1, int(width * scale)), max(1, int(height * scale))), interpolation = cv2.INTER_AREA)
 		os.makedirs(PREVIEW_DIR, exist_ok = True)
 		frame_path = os.path.join(PREVIEW_DIR, 'batch_frame.png')
 		output_path = os.path.join(PREVIEW_DIR, 'batch_result.png')
@@ -500,9 +541,14 @@ class BatchPage(SourceSelection, QWidget):
 		if '--processors' in args:
 			start = args.index('--processors') + 1
 			args[start:] = [ arg for arg in args[start:] if arg != 'lip_syncer' ]
+		# another target shows its frame right away, so the faces drawn over it line up while the preview runs
+		if not self.preview_run or self.preview_run.get('target') != item.get('target'):
+			self.preview_view.set_pixmap(to_pixmap(frame))
+			self.preview_view.set_faces([])
 		self.preview_run = item
 		self.preview_frame = frame
 		self.preview_running = True
+		self.schedule_face_scan()
 		self.preview_bar.show()
 		self.preview_bar.start()
 		self.preview_label.setText('Making the preview of %s…' % os.path.basename(item.get('target')))
@@ -531,6 +577,67 @@ class BatchPage(SourceSelection, QWidget):
 			self.preview_label.setText(status if self.session.run_error() else 'Preview failed (exit code %d), see Console' % exit_code)
 		if self.preview_waiting:
 			QTimer.singleShot(0, self.run_preview)
+
+	# faces and mask over the preview, scanned on the same smaller frame the preview runs on
+
+	def overlays_on(self) -> bool:
+		return self.faces_button.isChecked() or self.mask_button.isChecked()
+
+	def on_overlay_toggled(self, key : str, checked : bool) -> None:
+		self.session.config.set(key, checked)
+		self.faces_label.setVisible(self.overlays_on())
+		self.preview_view.set_faces([])
+		if self.overlays_on():
+			self.schedule_face_scan()
+		else:
+			self.faces_timer.stop()
+			self.face_probe.stop()
+
+	def schedule_face_scan(self) -> None:
+		if self.overlays_on() and self.isVisible():
+			self.faces_timer.start()
+
+	def scan_faces(self) -> None:
+		if not self.overlays_on() or not self.isVisible():
+			return
+		item = self.preview_run
+		if not item:
+			self.faces_label.setText('Make a preview first, the faces and the mask are drawn over it.')
+			return
+		if not self.session.is_configured() or not self.session.schema:
+			self.faces_label.setText('Set up FaceFusion first, face detection runs in its environment.')
+			return
+		frame = self.preview_frame if self.preview_frame is not None else self.scaled_frame(item)
+		if frame is None:
+			return
+		mask = self.mask_button.isChecked()
+		sources = [ path for path in item.get('sources') if media_kind(path) == 'image' ]
+		args = self.session.option_args(self.run_values(), FACE_GROUPS + (MASK_GROUPS if mask else []))
+		self.face_probe.scan(frame, None, sources, args, tag = ('batch', self.run_key(item)), mask = mask)
+
+	def on_faces_loading(self, loading : bool) -> None:
+		if loading and self.overlays_on():
+			self.faces_label.setText('Loading the face models…')
+
+	def on_faces_scanned(self, result : dict) -> None:
+		if not self.overlays_on() or not self.preview_run or result.get('tag') != ('batch', self.run_key(self.preview_run)):
+			return
+		faces = (result.get('faces') or []) if self.faces_button.isChecked() else []
+		mask = read_mask(result.get('mask')) if self.mask_button.isChecked() else None
+		boxes = [ (face.get('box'), face_tag(index, face), bool(face.get('selected'))) for index, face in enumerate(faces) ]
+		self.preview_view.set_faces(boxes, (result.get('width') or 0, result.get('height') or 0), mask)
+		lines = []
+		problem = bool(result.get('error'))
+		if self.faces_button.isChecked() or problem:
+			lines.append(describe_faces(result, 0))
+			problem = problem or not any(face.get('selected') for face in result.get('faces') or [])
+		if self.mask_button.isChecked() and not result.get('error'):
+			values = self.run_values()
+			schema = self.session.schema
+			lines.append(describe_mask(result, { dest: values.get(dest, schema.options.get(dest, {}).get('default')) for dest in [ 'face_mask_padding', 'face_mask_blur', 'face_mask_areas', 'face_mask_regions' ] } if schema else {}))
+			problem = problem or not result.get('masked')
+		self.faces_label.setText('\n'.join(line for line in lines if line))
+		self.faces_label.setTextColor('#b45309' if problem else '#707070', '#f0b35a' if problem else '#9a9a9a')
 
 	def on_clock(self) -> None:
 		template = self.output_name_edit.text() or AUTOMATIC_TEMPLATE
