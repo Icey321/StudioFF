@@ -26,6 +26,8 @@ CONTENT_CHECK_DIR = os.path.join(PREVIEW_DIR, 'nsfw_check')
 EXCEPTION_PATTERN = re.compile(r'^[\w.]*(Error|Exception)\b(:|$)')
 FACEFUSION_ERROR_PATTERN = re.compile(r'^\[FACEFUSION\.[\w.]+\] .*\b(failed|not found|not installed|not supported|could not be loaded|not implemented)\b')
 USAGE_ERROR_PATTERN = re.compile(r'^\S+\.py: error: ')
+# what a preview takes before there is a time of its own to go by, a warm one runs on models the worker already loaded
+PREVIEW_SECONDS = { 'preview_seconds': 6.0, 'preview_seconds_warm': 2.0, 'batch_preview_seconds': 5.0, 'batch_preview_seconds_warm': 1.5 }
 
 
 def is_error_line(line : str) -> bool:
@@ -93,6 +95,8 @@ class Session(QObject):
 		self.runner = ProcessRunner(self)
 		# keeps the models of the last preview loaded for the next one
 		self.preview_worker = PreviewWorker(self)
+		self.preview_worker.set_idle_minutes(int(self.config.get('preview_keep_loaded_minutes')))
+		self.preview_warm = False
 		self.task = ''
 		self.python_version : Optional[str] = None
 		self.schema_runner = ProcessRunner(self)
@@ -204,6 +208,8 @@ class Session(QObject):
 			self.notify.emit('error', 'FaceFusion not set up', 'Choose the FaceFusion folder and Python environment in Setup.')
 			return False
 		self.save()
+		# before set_task, the pages start their preview estimate when they hear that facefusion is busy
+		self.preview_warm = preview and self.preview_worker.is_running()
 		self.set_task(task)
 		self.facefusion_running = True
 		environment = create_process_environment(self.python_path)
@@ -213,6 +219,18 @@ class Session(QObject):
 			# a whole run needs the memory the preview models take
 			self.preview_worker.stop()
 		return self.runner.start(self.python_path, [ script ] + command_args, self.facefusion_root, environment)
+
+	def preview_key(self, name : str) -> str:
+		"""the name the time of the preview that just started is kept under, previews on loaded models take far less"""
+		return name + '_warm' if self.preview_warm else name
+
+	def expected_preview_seconds(self, key : str) -> float:
+		return float(self.config.get(key) or PREVIEW_SECONDS.get(key) or PREVIEW_SECONDS.get('preview_seconds'))
+
+	def remember_preview_seconds(self, key : str, elapsed : float) -> None:
+		# a running average, so one slow preview (a model download) does not throw the estimate off for good
+		stored = self.config.get(key)
+		self.config.set(key, round(elapsed if not stored else 0.6 * stored + 0.4 * elapsed, 2))
 
 	def on_runner_started(self, _ : str) -> None:
 		self.content_rate = 0.0

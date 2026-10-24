@@ -15,6 +15,8 @@ DEFAULT_CONFIG : Dict[str, Any] =\
 	'theme': 'auto',
 	'output_dir': os.path.join(os.path.expanduser('~'), 'Videos', 'FaceFusion'),
 	'open_output_when_done': False,
+	# 0 keeps the preview models loaded until the app closes
+	'preview_keep_loaded_minutes': 5,
 	'output_subfolders': False,
 	'source_paths': [],
 	'target_path': '',

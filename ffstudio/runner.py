@@ -15,8 +15,8 @@ ANSI_PATTERN = re.compile(r'\x1b\[[0-9;?]*[A-Za-z]')
 PROGRESS_PATTERN = re.compile(r'\x1b\[G(?P<title>.*?)\s*\x1b\[94m(?P<done>=*)\x1b\[90m(?P<todo>=*)\x1b\[0m\s*(?P<status>[^|\x1b]*)(?:\|\s*(?P<description>[^\x1b]*))?')
 # preview_worker.py ends each preview with this line
 WORKER_RESULT_PREFIX = 'PREVIEW_DONE '
-# the worker lets go of its models after this long without a preview
-WORKER_IDLE_SECONDS = 5 * 60
+# the worker lets go of its models after this long without a preview, unless Settings say otherwise
+WORKER_IDLE_MINUTES = 5
 # after this many failures in a row previews go back to starting facefusion.py each time
 WORKER_FAILURE_LIMIT = 2
 
@@ -187,10 +187,20 @@ class PreviewWorker(QObject):
 		self.request_id = 0
 		self.running_id : Optional[int] = None
 		self.failures = 0
+		self.idle_minutes = WORKER_IDLE_MINUTES
 		self.idle_timer = QTimer(self)
 		self.idle_timer.setSingleShot(True)
-		self.idle_timer.setInterval(WORKER_IDLE_SECONDS * 1000)
+		self.idle_timer.setInterval(WORKER_IDLE_MINUTES * 60 * 1000)
 		self.idle_timer.timeout.connect(self.stop)
+
+	def set_idle_minutes(self, minutes : int) -> None:
+		"""how long the models stay loaded after the last preview, 0 keeps them until the app closes or a whole run starts"""
+		self.idle_minutes = minutes
+		self.idle_timer.stop()
+		if minutes > 0:
+			self.idle_timer.setInterval(minutes * 60 * 1000)
+			if self.is_running() and self.running_id is None:
+				self.idle_timer.start()
 
 	def is_running(self) -> bool:
 		return self.process is not None and self.process.state() != QProcess.ProcessState.NotRunning
@@ -260,7 +270,8 @@ class PreviewWorker(QObject):
 		self.running_id = None
 		exit_code = result.get('code')
 		self.failures = 0 if exit_code is not None else self.failures + 1
-		self.idle_timer.start()
+		if self.idle_minutes > 0:
+			self.idle_timer.start()
 		self.done.emit(exit_code)
 
 	def on_error(self, error : QProcess.ProcessError) -> None:

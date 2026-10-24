@@ -25,8 +25,6 @@ from ffstudio.widgets import PreviewView, ProcessorArea, ProcessorButton, Splitt
 STUDIO_GROUPS = [ 'face_selector', 'face_masker', 'face_detector', 'face_aligner', 'face_tracker', 'output_creation', 'frame_extraction', 'frame_distribution', 'voice_extractor', 'workflow' ]
 # settings that cannot change how a single preview frame looks
 LIVE_IGNORED_GROUPS = [ 'paths', 'output_creation', 'frame_extraction', 'frame_distribution', 'voice_extractor', 'workflow', 'execution', 'download', 'memory', 'misc' ]
-# a preview that has not run before is expected to take this long
-PREVIEW_SECONDS = 6.0
 # bigger frames are previewed on a copy this many pixels high (or wide, when upright), which is a little quicker
 PREVIEW_MAX_SIDE = 1080
 # the outputs of the passes of a face mapping run before the last one
@@ -46,6 +44,21 @@ def tool_button(icon : FluentIcon, tip : str, parent : QWidget) -> TransparentTo
 	button.setToolTip(tip)
 	button.installEventFilter(ToolTipFilter(button))
 	return button
+
+
+def estimated_progress(elapsed : float, expected : float, floor : float) -> float:
+	"""how far a preview probably is, facefusion reports no progress for a single frame. reaches 95% at the expected time, then creeps towards 99%"""
+	return max(floor, min(0.99, 1 - math.exp(-3 * elapsed / expected)))
+
+
+def preview_step_floor(line : str, floor : float) -> float:
+	"""the last log lines of a preview move its bar forward"""
+	lowered = line.lower()
+	if 'processing to image succeeded' in lowered:
+		return 1.0
+	if 'finalizing image' in lowered:
+		return max(floor, 0.95)
+	return floor
 
 
 def card_header(title : str, parent : QWidget) -> QHBoxLayout:
@@ -787,6 +800,7 @@ class StudioPage(SourceSelection, QWidget):
 		self.preview_clock.timeout.connect(self.tick_preview_progress)
 		self.preview_started = 0.0
 		self.preview_floor = 0.0
+		self.preview_estimate = 'preview_seconds'
 		# face detection on the shown frame, rerun shortly after the frame or a face setting changes
 		self.face_probe = FaceProbe(session, self)
 		self.face_probe.scanned.connect(self.on_faces_scanned)
@@ -1265,6 +1279,7 @@ class StudioPage(SourceSelection, QWidget):
 		if busy and self.preview_mode and self.pending_output:
 			self.preview_started = time.monotonic()
 			self.preview_floor = 0.0
+			self.preview_estimate = self.session.preview_key('preview_seconds')
 			self.preview_clock.start()
 			self.tick_preview_progress()
 		elif self.preview_clock.isActive():
@@ -1277,15 +1292,11 @@ class StudioPage(SourceSelection, QWidget):
 		if not busy and self.auto_check_pending:
 			QTimer.singleShot(0, self.auto_check_content)
 
-	def expected_preview_seconds(self) -> float:
-		return float(self.session.config.get('preview_seconds') or PREVIEW_SECONDS)
-
 	def tick_preview_progress(self) -> None:
 		"""moves the preview bar along the time previews usually take, slowing down near the end instead of stopping"""
 		elapsed = time.monotonic() - self.preview_started
-		expected = self.expected_preview_seconds()
-		# reaches 95% at the expected time, then creeps towards 99%
-		ratio = max(self.preview_floor, min(0.99, 1 - math.exp(-3 * elapsed / expected)))
+		expected = self.session.expected_preview_seconds(self.preview_estimate)
+		ratio = estimated_progress(elapsed, expected, self.preview_floor)
 		left = expected - elapsed
 		text = '%d%%' % (ratio * 100) + ('  ·  about %d s left' % round(left) if left >= 1 and self.preview_floor < 0.9 else '')
 		self.target_card.set_preview_progress(ratio, text, 'Estimated from how long your previews took before (about %.1f s), FaceFusion does not report progress for a single frame' % expected)
@@ -1304,11 +1315,7 @@ class StudioPage(SourceSelection, QWidget):
 			self.detail_label.setText(line[-110:])
 		# the last steps of a preview move its bar forward
 		if self.preview_clock.isActive():
-			lowered = line.lower()
-			if 'finalizing image' in lowered:
-				self.preview_floor = max(self.preview_floor, 0.95)
-			elif 'processing to image succeeded' in lowered:
-				self.preview_floor = 1.0
+			self.preview_floor = preview_step_floor(line, self.preview_floor)
 			self.tick_preview_progress()
 
 	def on_finished(self, exit_code : int, elapsed : float) -> None:
@@ -1336,9 +1343,7 @@ class StudioPage(SourceSelection, QWidget):
 				return
 		if exit_code == 0 and os.path.exists(output_path):
 			if self.preview_mode:
-				# a running average, so one slow preview (a model download) does not throw the estimate off for good
-				stored = self.session.config.get('preview_seconds')
-				self.session.config.set('preview_seconds', round(elapsed if not stored else 0.6 * stored + 0.4 * elapsed, 2))
+				self.session.remember_preview_seconds(self.preview_estimate, elapsed)
 			self.release_result_reader()
 			self.last_output = output_path
 			self.result_info = self.pending_info

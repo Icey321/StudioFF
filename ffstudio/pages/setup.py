@@ -15,6 +15,8 @@ from ffstudio.session import MINIMUM_PYTHON, Session
 from ffstudio.widgets import ChoiceButton
 
 # the theme buttons: key, text, icon and tooltip
+# minutes, 0 keeps them until the app closes
+KEEP_LOADED_CHOICES = [ (5, '5 minutes'), (10, '10 minutes'), (30, '30 minutes'), (60, '1 hour'), (0, 'Until the app closes') ]
 THEME_CHOICES =[
 	('auto', 'Auto', FluentIcon.CONSTRACT, 'Follow the Windows light or dark setting'),
 	('light', 'Light', FluentIcon.BRIGHTNESS, 'Always light'),
@@ -582,7 +584,23 @@ class SetupPage(QWidget):
 		self.open_switch.setChecked(bool(self.session.config.get('open_output_when_done')))
 		self.open_switch.checkedChanged.connect(lambda checked: self.session.config.set('open_output_when_done', checked))
 		layout.addLayout(form_row('Open result', [ BodyLabel('Open the output file when processing finishes', card), self.open_switch ], card))
+		self.keep_loaded_combo = ComboBox(card)
+		current = int(self.session.config.get('preview_keep_loaded_minutes'))
+		for minutes, text in KEEP_LOADED_CHOICES:
+			self.keep_loaded_combo.addItem(text, userData = minutes)
+			if minutes == current:
+				self.keep_loaded_combo.setCurrentIndex(self.keep_loaded_combo.count() - 1)
+		self.keep_loaded_combo.setToolTip('After the first preview FaceFusion keeps its models loaded, so the next previews take about 2 s instead of 6 or more. They use graphics card memory while loaded. Start, Batch and Benchmark always free them first')
+		self.keep_loaded_combo.installEventFilter(ToolTipFilter(self.keep_loaded_combo))
+		self.keep_loaded_combo.currentIndexChanged.connect(self.on_keep_loaded_changed)
+		layout.addLayout(form_row('Preview models', [ BodyLabel('Keep loaded after the last preview for', card), self.keep_loaded_combo ], card))
 		return card
+
+	def on_keep_loaded_changed(self, _ : int) -> None:
+		minutes = int(self.keep_loaded_combo.currentData())
+		self.session.config.set('preview_keep_loaded_minutes', minutes)
+		self.session.config.save()
+		self.session.preview_worker.set_idle_minutes(minutes)
 
 	def on_theme_changed(self, theme : str) -> None:
 		self.session.config.set('theme', theme)

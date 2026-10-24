@@ -1,13 +1,14 @@
 import glob
 import os
 import re
+import time
 from typing import Any, Dict, List, Optional, Tuple
 
 import cv2
 from PySide6.QtCore import QFileSystemWatcher, QItemSelectionModel, QRectF, QSize, Qt, QTimer
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QKeySequence, QPainter, QPainterPath, QPixmap, QShortcut
 from PySide6.QtWidgets import QAbstractItemView, QFileDialog, QHBoxLayout, QListWidgetItem, QVBoxLayout, QWidget
-from qfluentwidgets import BodyLabel, CaptionLabel, ComboBox, FluentIcon, Flyout, FlyoutAnimationType, IndeterminateProgressBar, LineEdit, ListItemDelegate, ListWidget, PrimaryPushButton, ProgressBar, PushButton, SimpleCardWidget, StrongBodyLabel, SubtitleLabel, TogglePushButton, ToggleToolButton, ToolTipFilter, TransparentPushButton, getFont, isDarkTheme, themeColor
+from qfluentwidgets import BodyLabel, CaptionLabel, ComboBox, FluentIcon, Flyout, FlyoutAnimationType, LineEdit, ListItemDelegate, ListWidget, PrimaryPushButton, ProgressBar, PushButton, SimpleCardWidget, StrongBodyLabel, SubtitleLabel, TogglePushButton, ToggleToolButton, ToolTipFilter, TransparentPushButton, getFont, isDarkTheme, themeColor
 
 from ffstudio.config import PREVIEW_DIR
 from ffstudio.faces import FACE_GROUPS, MASK_GROUPS, FaceProbe, describe_faces, describe_mask, face_tag, read_mask
@@ -15,7 +16,7 @@ from ffstudio.media import media_kind, read_frame, thumbnail, to_pixmap, write_i
 from ffstudio.nsfw import BLOCKED_TITLE, NsfwDialog, show_blocked_bar
 from ffstudio.output_name import AUTOMATIC_TEMPLATE, build_output, unknown_tags
 from ffstudio.pages.setup import SYSTEM_GROUPS, form_row, section_card
-from ffstudio.pages.studio import LIVE_IGNORED_GROUPS, NameTagsView, SettingsColumn, SourceCard, SourceSelection, StudioPage, elastic, run_tag_values, tool_button
+from ffstudio.pages.studio import LIVE_IGNORED_GROUPS, NameTagsView, SettingsColumn, SourceCard, SourceSelection, StudioPage, elastic, estimated_progress, preview_step_floor, run_tag_values, tool_button
 from ffstudio.session import OptionStore, Session, explain_error, folder_is_writable
 from ffstudio.widgets import PreviewView, Splitter, add_edit_button
 
@@ -173,6 +174,13 @@ class BatchPage(SourceSelection, QWidget):
 		self.preview_timer.setSingleShot(True)
 		self.preview_timer.setInterval(700)
 		self.preview_timer.timeout.connect(self.run_preview)
+		# facefusion reports no progress for a single frame, so the preview bar follows how long Batch previews took before
+		self.preview_clock = QTimer(self)
+		self.preview_clock.setInterval(100)
+		self.preview_clock.timeout.connect(self.tick_preview_progress)
+		self.preview_started = 0.0
+		self.preview_floor = 0.0
+		self.preview_estimate = 'batch_preview_seconds'
 		# the faces and the mask facefusion sees in the previewed frame, drawn over the preview
 		self.face_probe = FaceProbe(session, self)
 		self.face_probe.scanned.connect(self.on_faces_scanned)
@@ -385,7 +393,8 @@ class BatchPage(SourceSelection, QWidget):
 		self.preview_view.setAcceptDrops(False)
 		self.preview_view.setMinimumHeight(180)
 		column.addWidget(self.preview_view, 1)
-		self.preview_bar = IndeterminateProgressBar(card)
+		self.preview_bar = ProgressBar(card)
+		self.preview_bar.setRange(0, 1000)
 		self.preview_bar.hide()
 		column.addWidget(self.preview_bar)
 		self.preview_label = elastic(CaptionLabel('', card))
@@ -549,22 +558,36 @@ class BatchPage(SourceSelection, QWidget):
 		self.preview_frame = frame
 		self.preview_running = True
 		self.schedule_face_scan()
-		self.preview_bar.show()
-		self.preview_bar.start()
-		self.preview_label.setText('Making the preview of %s…' % os.path.basename(item.get('target')))
 		if not self.session.run_facefusion('Batch preview of ' + os.path.basename(item.get('target')), args, preview = True):
 			self.preview_running = False
-			self.preview_bar.stop()
-			self.preview_bar.hide()
 			self.preview_label.setText('')
+			return
+		self.preview_started = time.monotonic()
+		self.preview_floor = 0.0
+		self.preview_estimate = self.session.preview_key('batch_preview_seconds')
+		self.preview_bar.setValue(0)
+		self.preview_bar.show()
+		self.preview_clock.start()
+		self.tick_preview_progress()
+
+	def tick_preview_progress(self) -> None:
+		"""moves the preview bar along the time Batch previews usually take, like Studio's"""
+		elapsed = time.monotonic() - self.preview_started
+		expected = self.session.expected_preview_seconds(self.preview_estimate)
+		ratio = estimated_progress(elapsed, expected, self.preview_floor)
+		left = expected - elapsed
+		name = os.path.basename(self.preview_run.get('target')) if self.preview_run else ''
+		self.preview_bar.setValue(int(ratio * 1000))
+		self.preview_label.setText('Making the preview of %s…  %d%%' % (name, ratio * 100) + ('  ·  about %d s left' % round(left) if left >= 1 and self.preview_floor < 0.9 else ''))
 
 	def on_preview_finished(self, exit_code : int, elapsed : float) -> None:
 		self.preview_running = False
-		self.preview_bar.stop()
+		self.preview_clock.stop()
 		self.preview_bar.hide()
 		output_path = os.path.join(PREVIEW_DIR, 'batch_result.png')
 		name = os.path.basename(self.preview_run.get('target')) if self.preview_run else ''
 		if exit_code == 0 and os.path.exists(output_path):
+			self.session.remember_preview_seconds(self.preview_estimate, elapsed)
 			self.preview_view.set_compare(to_pixmap(self.preview_frame), to_pixmap(read_frame(output_path)))
 			self.preview_label.setText('%s  ·  %.1f s  ·  drag the divider to compare' % (name, elapsed))
 		elif exit_code == -1:
@@ -902,7 +925,9 @@ class BatchPage(SourceSelection, QWidget):
 			self.progress.setValue(int((self.started_count - 1 + ratio) / max(total, 1) * 1000))
 
 	def on_log(self, line : str) -> None:
-		pass
+		if self.preview_running and self.preview_clock.isActive():
+			self.preview_floor = preview_step_floor(line, self.preview_floor)
+			self.tick_preview_progress()
 
 	def on_finished(self, exit_code : int, elapsed : float) -> None:
 		if self.preview_running:
