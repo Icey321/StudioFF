@@ -6,7 +6,7 @@ from PySide6.QtGui import QColor, QIcon
 from PySide6.QtWidgets import QApplication
 from qfluentwidgets import CaptionLabel, DotInfoBadge, FluentIcon, FluentWindow, InfoBar, InfoBarPosition, NavigationItemPosition, Theme, isDarkTheme, setTheme, setThemeColor
 
-from ffstudio import APP_NAME, APP_VERSION
+from ffstudio import APP_NAME, APP_VERSION, splash
 from ffstudio.config import APP_DIR
 from ffstudio.session import Session
 
@@ -33,12 +33,19 @@ class MainWindow(FluentWindow):
 		from ffstudio.pages.setup import SetupPage
 		from ffstudio.pages.studio import StudioPage
 
+		splash.step('Building the Studio page…')
 		self.studio_page = StudioPage(session, self)
+		splash.step('Building the Batch page…')
 		self.batch_page = BatchPage(session, self)
+		splash.step('Building the Models page…')
 		self.models_page = ModelsPage(session, self)
+		splash.step('Building the Benchmark page…')
 		self.benchmark_page = BenchmarkPage(session, self)
+		splash.step('Building the Console page…')
 		self.console_page = ConsolePage(session, self)
+		splash.step('Building the Setup page…')
 		self.setup_page = SetupPage(session, self)
+		splash.step('Opening the window…')
 
 		self.addSubInterface(self.studio_page, FluentIcon.PHOTO, 'Studio')
 		self.addSubInterface(self.batch_page, FluentIcon.LIBRARY, 'Batch')

@@ -40,7 +40,8 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 ```
 
 This creates `.venv` for the UI (PySide6 + PySide6-Fluent-Widgets + OpenCV) and adds desktop and Start menu
-shortcuts. Then start **FaceFusion Studio** and open **Setup**:
+shortcuts. Then start **FaceFusion Studio** and open **Setup**. A splash screen with a loading bar shows while
+the window builds, and starting it again while it is open brings the open window to the front:
 
 - **Already have v4?** Pick its folder and the `python.exe` of its environment, or press **Detect**, then press **Save and load options**.
 - **No v4 yet?** Use **Install FaceFusion v4**. Note that v4 requires **Python 3.13+**, so a

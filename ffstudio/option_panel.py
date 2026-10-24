@@ -3,6 +3,7 @@ from typing import Any, Dict, List, Optional
 from PySide6.QtWidgets import QVBoxLayout, QWidget
 from qfluentwidgets import CaptionLabel, FluentIcon
 
+from ffstudio import splash
 from ffstudio.option_widgets import PAIRED_PARTNERS, REQUIRED_CHOICES, OptionRow
 from ffstudio.schema import same_value
 from ffstudio.session import Session
@@ -89,6 +90,7 @@ class OptionPanel(QWidget):
 		self.refresh_favorites()
 
 	def create_row(self, option : Dict[str, Any], card : CollapsibleCard, context : str = '') -> OptionRow:
+		splash.step()
 		return OptionRow(self.session.schema, option, self.session.values, self.session.set_value, card.body, on_favorite = self.toggle_favorite if self.favorites else None, context = context, info_icon = self.info_icons, short_label = self.short_labels, group_caption = self.group_captions)
 
 	def toggle_favorite(self, dest : str) -> None:
