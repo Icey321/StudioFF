@@ -1,10 +1,14 @@
 # FaceFusion Studio
 
-A native Windows 11 desktop UI for [FaceFusion v4](https://github.com/facefusion/facefusion/tree/v4).
+[FaceFusion v4](https://github.com/facefusion/facefusion/tree/v4) face swapper.
 
-FaceFusion v4 has no built-in UI, only a command line and an API server. FaceFusion Studio drives the
-`facefusion.py` command line for you: you pick sources, a target and processors, it builds the command,
-runs it in FaceFusion's own Python environment and shows progress and the result.
+FaceFusion Studio swaps faces in images, videos and GIFs. Pick the faces to use, pick a target, preview
+the swap on one frame and run it, one target at a time or a whole folder in a batch. Several people in one
+target can each get a different face.
+
+It is a Windows 11 desktop app for FaceFusion v4, which has no built-in UI of its own, only a command line.
+FaceFusion Studio builds the command for you, runs it in FaceFusion's own Python environment and shows
+progress and the result.
 
 FaceFusion itself is not included: install FaceFusion v4 separately, then point FaceFusion Studio at it.
 
@@ -18,7 +22,7 @@ FaceFusion itself is not included: install FaceFusion v4 separately, then point 
 
 ## Features
 
-- **Studio**: drop in source faces and a target image, video or GIF, turn on processors and drag them into order. The preview tries your settings on one frame (automatically with **Auto**), and **Start** runs the full job. Models stay loaded between previews, so after the first one each takes about 2 seconds.
+- **Studio**: swap faces in one target. Drop in source faces and a target image, video or GIF, turn on processors and drag them into order. The preview tries your settings on one frame (automatically with **Auto**), and **Start** runs the full job. Models stay loaded between previews, so after the first one each takes about 2 seconds.
 - **Batch**: every source face × every target in a folder, with its own settings (or copied from Studio in one click). Each planned output shows thumbnails and can be removed, a live preview tries the selected one, and one failed target doesn't stop the rest.
 - **Face mapping**: give each person in the target their own source face. Two people can even swap faces with each other.
 - **GIF support**: GIF targets are converted for FaceFusion and saved back as looping GIFs (needs `ffmpeg`).
@@ -42,8 +46,8 @@ This creates `.venv` for the UI (PySide6 + PySide6-Fluent-Widgets + OpenCV) and 
 shortcuts. Then start **FaceFusion Studio** and open **Setup**. A splash screen with a loading bar shows while
 the window builds, and starting it again while it is open brings the open window to the front:
 
-- **Already have v4?** Pick its folder and the `python.exe` of its environment, or press **Detect**, then press **Save and load options**.
-- **No v4 yet?** Use **Install FaceFusion v4**. Note that v4 requires **Python 3.13+**, so a
+- **Already have FaceFusion v4?** Pick its folder and the `python.exe` of its environment, or press **Detect**, then press **Save and load options**.
+- **No FaceFusion v4 yet?** Use **Install FaceFusion v4**. Note that FaceFusion v4 requires **Python 3.13+**, so a
   FaceFusion 3.x environment (Python 3.12) can't run it.
 
 FaceFusion also needs `ffmpeg`, `ffprobe` and `curl` on `PATH`. Setup checks for them.
