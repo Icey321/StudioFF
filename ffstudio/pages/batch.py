@@ -552,7 +552,7 @@ class BatchPage(SourceSelection, QWidget):
 		self.preview_bar.show()
 		self.preview_bar.start()
 		self.preview_label.setText('Making the preview of %s…' % os.path.basename(item.get('target')))
-		if not self.session.run_facefusion('Batch preview of ' + os.path.basename(item.get('target')), args):
+		if not self.session.run_facefusion('Batch preview of ' + os.path.basename(item.get('target')), args, preview = True):
 			self.preview_running = False
 			self.preview_bar.stop()
 			self.preview_bar.hide()

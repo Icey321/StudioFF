@@ -12,7 +12,7 @@ from PySide6.QtCore import QObject, Signal
 
 from ffstudio.config import APP_DIR, DATA_DIR, PREVIEW_DIR, SCHEMA_FILE, AppConfig
 from ffstudio.environment import create_process_environment, is_facefusion_root, probe_python_version, version_tuple
-from ffstudio.runner import ProcessRunner
+from ffstudio.runner import PreviewWorker, ProcessRunner
 from ffstudio.schema import Schema, build_option_args, schema_is_stale
 
 MINIMUM_PYTHON = (3, 13)
@@ -91,6 +91,8 @@ class Session(QObject):
 		self.schema : Optional[Schema] = Schema.load()
 		self.values : Dict[str, Any] = {}
 		self.runner = ProcessRunner(self)
+		# keeps the models of the last preview loaded for the next one
+		self.preview_worker = PreviewWorker(self)
 		self.task = ''
 		self.python_version : Optional[str] = None
 		self.schema_runner = ProcessRunner(self)
@@ -193,7 +195,8 @@ class Session(QObject):
 		self.task = task
 		self.busy_changed.emit(bool(task), task)
 
-	def run_facefusion(self, task : str, command_args : List[str], script : str = 'facefusion.py') -> bool:
+	def run_facefusion(self, task : str, command_args : List[str], script : str = 'facefusion.py', preview : bool = False) -> bool:
+		"""a preview of one image runs on the preview worker, which keeps its models loaded, everything else as a process of its own"""
 		if self.runner.is_running():
 			self.notify.emit('warning', 'Busy', 'FaceFusion is already running: ' + self.task)
 			return False
@@ -203,7 +206,13 @@ class Session(QObject):
 		self.save()
 		self.set_task(task)
 		self.facefusion_running = True
-		return self.runner.start(self.python_path, [ script ] + command_args, self.facefusion_root, create_process_environment(self.python_path))
+		environment = create_process_environment(self.python_path)
+		if preview and script == 'facefusion.py' and self.preview_worker.is_usable():
+			return self.runner.start_on_worker(self.preview_worker, self.python_path, [ script ] + command_args, self.facefusion_root, environment)
+		if not preview:
+			# a whole run needs the memory the preview models take
+			self.preview_worker.stop()
+		return self.runner.start(self.python_path, [ script ] + command_args, self.facefusion_root, environment)
 
 	def on_runner_started(self, _ : str) -> None:
 		self.content_rate = 0.0

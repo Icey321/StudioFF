@@ -1250,7 +1250,7 @@ class StudioPage(SourceSelection, QWidget):
 		self.pending_output = output_path
 		self.pending_info = info
 		self.preview_mode = True
-		self.session.run_facefusion('Previewing frame #%d' % self.target_card.current_frame_index(), args)
+		self.session.run_facefusion('Previewing frame #%d' % self.target_card.current_frame_index(), args, preview = True)
 
 	def on_busy_changed(self, busy : bool, task : str) -> None:
 		self.start_button.setEnabled(not busy and not self.chain)
@@ -1762,7 +1762,7 @@ class StudioPage(SourceSelection, QWidget):
 				values['reference_face_distance'] = 0.0
 		values['processors'] = processors
 		args = [ 'run' ] + ([ '-s' ] + sources + audio if sources or audio else []) + [ '-t', target, '-o', step.get('output') ] + self.session.option_args(values)
-		self.session.run_facefusion(self.chain_task(step), args)
+		self.session.run_facefusion(self.chain_task(step), args, preview = preview)
 
 	# nsfw check
 

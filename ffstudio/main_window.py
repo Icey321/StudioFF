@@ -94,6 +94,7 @@ class MainWindow(FluentWindow):
 			self.session.clear_facefusion_temp()
 		self.studio_page.release_result_reader()
 		self.studio_page.face_probe.stop()
+		self.session.preview_worker.stop()
 		self.session.clear_preview_files()
 		self.session.save()
 		super().closeEvent(event)
