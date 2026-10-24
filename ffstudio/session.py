@@ -110,6 +110,8 @@ class Session(QObject):
 		self.runner.progress.connect(self.on_runner_progress)
 		self.runner.log.connect(self.on_runner_log)
 		self.facefusion_running = False
+		# the output file of the running facefusion, its temp folder is named after it
+		self.facefusion_output = ''
 		# what the current run said, used to explain a failure that facefusion does not explain itself
 		self.content_rate = 0.0
 		self.run_messages : List[str] = []
@@ -215,6 +217,8 @@ class Session(QObject):
 		self.preview_warm = preview and self.preview_worker.is_running()
 		self.set_task(task, preview)
 		self.facefusion_running = True
+		# gif_run.py hands facefusion an output.mp4 of its own
+		self.facefusion_output = 'output.mp4' if os.path.basename(script) == 'gif_run.py' else next((command_args[index + 1] for index in reversed(range(len(command_args) - 1)) if command_args[index] in [ '-o', '--output-path' ]), '')
 		environment = create_process_environment(self.python_path)
 		if preview and script == 'facefusion.py' and self.preview_worker.is_usable():
 			return self.runner.start_on_worker(self.preview_worker, self.python_path, [ script ] + command_args, self.facefusion_root, environment)
@@ -319,7 +323,10 @@ class Session(QObject):
 
 	def clear_facefusion_temp(self) -> None:
 		# facefusion removes its extracted frames itself, except when Stop kills it or it crashes
-		shutil.rmtree(self.facefusion_temp_dir(), ignore_errors = True)
+		# only the folder of this run, other facefusion instances share the parent folder
+		name = os.path.splitext(os.path.basename(self.facefusion_output))[0]
+		if name:
+			shutil.rmtree(os.path.join(self.facefusion_temp_dir(), name), ignore_errors = True)
 
 	def clear_preview_files(self) -> None:
 		shutil.rmtree(PREVIEW_DIR, ignore_errors = True)

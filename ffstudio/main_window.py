@@ -107,7 +107,7 @@ class MainWindow(FluentWindow):
 			self.switchTo(self.setup_page)
 			self.show_notification('info', 'Welcome', 'Point the app at your FaceFusion v4 folder, or install v4 from here.')
 			return
-		self.session.check_python()
+		# the python check runs off the ui thread and fills in the session's python version
 		self.setup_page.refresh_status()
 		self.session.refresh_schema()
 		# the restored target's check waits for the window, every page should see it run

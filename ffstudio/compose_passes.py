@@ -70,6 +70,27 @@ def compose_image(base_path : str, output_path : str, settings : dict, pass_path
 	return 0
 
 
+def probe_video(path : str) -> tuple:
+	"""width, height, the frame rate as an exact fraction like 30000/1001 and the frame count, read by ffprobe the way facefusion reads them"""
+	from facefusion import ffprobe
+
+	try:
+		entries = ffprobe.probe_video_entries(path, [ 'width', 'height', 'avg_frame_rate', 'r_frame_rate' ])
+		duration = float(ffprobe.probe_format_entries(path, [ 'duration' ]).get('duration') or 0)
+	except (OSError, ValueError):
+		entries, duration = {}, 0.0
+	fps = next((rate for rate in [ entries.get('avg_frame_rate'), entries.get('r_frame_rate') ] if rate and '/' in rate and all(part.isdigit() and int(part) for part in rate.split('/'))), None)
+	if fps:
+		numerator, denominator = fps.split('/')
+		return int(entries.get('width') or 0), int(entries.get('height') or 0), fps, round(duration * int(numerator) / int(denominator))
+	# opencv as a fallback, its rate is rounded and its frame count can be 0 for mkv
+	capture = cv2.VideoCapture(path)
+	width, height = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH)), int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
+	fps, total = capture.get(cv2.CAP_PROP_FPS) or 25.0, int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
+	capture.release()
+	return width, height, repr(fps), total
+
+
 def compose_video(base_path : str, output_path : str, settings : dict, pass_paths : list) -> int:
 	# the encoder settings the way facefusion builds them
 	sys.path.insert(0, os.getcwd())
@@ -80,17 +101,16 @@ def compose_video(base_path : str, output_path : str, settings : dict, pass_path
 	if not ffmpeg:
 		print('ffmpeg was not found on PATH', flush = True)
 		return 1
-	capture = cv2.VideoCapture(base_path)
-	width, height = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH)), int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
-	fps = capture.get(cv2.CAP_PROP_FPS) or 25.0
-	total = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
-	capture.release()
+	width, height, fps, total = probe_video(base_path)
+	if not width or not height:
+		print('Could not read ' + base_path, flush = True)
+		return 1
 	base = read_frames(ffmpeg, base_path, width, height)
 	passes = [ read_frames(ffmpeg, path, width, height) for path in pass_paths ]
 	video_format = os.path.splitext(output_path)[1].lower().lstrip('.')
 	encoder = fix_video_encoder(video_format, settings.get('video_encoder') or 'libx264')
 	audio_encoder = fix_audio_encoder(video_format, settings.get('audio_encoder') or 'aac')
-	commands = [ ffmpeg, '-hide_banner', '-loglevel', 'error', '-y', '-f', 'rawvideo', '-pix_fmt', 'bgr24', '-s', '%dx%d' % (width, height), '-r', str(fps), '-i', '-', '-i', base_path, '-map', '0:v', '-map', '1:a?' ] + SCALE_FLAGS
+	commands = [ ffmpeg, '-hide_banner', '-loglevel', 'error', '-y', '-f', 'rawvideo', '-pix_fmt', 'bgr24', '-s', '%dx%d' % (width, height), '-r', fps, '-i', '-', '-i', base_path, '-map', '0:v', '-map', '1:a?' ] + SCALE_FLAGS
 	commands += ffmpeg_builder.set_video_encoder(encoder)
 	commands += ffmpeg_builder.set_video_quality(encoder, int(settings.get('video_quality') if settings.get('video_quality') is not None else 80))
 	commands += ffmpeg_builder.set_video_preset(encoder, settings.get('video_preset') or 'veryfast')

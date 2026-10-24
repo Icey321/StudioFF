@@ -88,8 +88,9 @@ def github_page(repository : str) -> str:
 	return 'https://github.com/' + (repository or DEFAULT_REPOSITORY)
 
 
-def section_card(title : str, description : str, parent : QWidget) -> Tuple[SimpleCardWidget, QVBoxLayout]:
-	card = SimpleCardWidget(parent)
+def section_card(title : str, description : str, parent : QWidget) -> Tuple[QWidget, QVBoxLayout]:
+	# a section inside a group card draws no card of its own, so the group reads as one
+	card = QWidget(parent) if isinstance(parent, SimpleCardWidget) else SimpleCardWidget(parent)
 	layout = QVBoxLayout(card)
 	layout.setContentsMargins(20, 16, 20, 18)
 	layout.setSpacing(10)
@@ -111,6 +112,10 @@ class SetupPage(QWidget):
 	studio_download_progress = Signal(int, int)
 	# the folder of the downloaded files, or an error
 	studio_download_finished = Signal(str, str)
+	# probes that start python or git, they run on worker threads so the window keeps responding
+	python_probed = Signal(str, object)
+	pythons_detected = Signal(object, str)
+	build_read = Signal(str, object)
 
 	def __init__(self, session : Session, parent : Optional[QWidget] = None) -> None:
 		super().__init__(parent)
@@ -153,8 +158,17 @@ class SetupPage(QWidget):
 		layout = QVBoxLayout(content)
 		layout.setContentsMargins(24, 8, 24, 24)
 		layout.setSpacing(12)
-		self.section_cards = [ self.create_location_card(content), self.create_install_card(content), self.create_update_card(content), self.create_studio_update_card(content), self.create_appearance_card(content) ]
-		for card in self.section_cards:
+		# the FaceFusion sections share one card, apart from the FaceFusion Studio updates below them
+		self.facefusion_group = SimpleCardWidget(content)
+		group_layout = QVBoxLayout(self.facefusion_group)
+		group_layout.setContentsMargins(0, 0, 0, 0)
+		group_layout.setSpacing(12)
+		self.facefusion_cards = [ self.create_location_card(self.facefusion_group), self.create_install_card(self.facefusion_group), self.create_update_card(self.facefusion_group) ]
+		for card in self.facefusion_cards:
+			group_layout.addWidget(card)
+		layout.addWidget(self.facefusion_group)
+		self.section_cards = self.facefusion_cards + [ self.create_studio_update_card(content), self.create_appearance_card(content) ]
+		for card in self.section_cards[len(self.facefusion_cards):]:
 			layout.addWidget(card)
 		self.system_title = StrongBodyLabel('Performance & system', content)
 		layout.addSpacing(6)
@@ -175,6 +189,9 @@ class SetupPage(QWidget):
 		self.studio_update_checked.connect(self.on_studio_update_checked)
 		self.studio_download_progress.connect(self.on_studio_download_progress)
 		self.studio_download_finished.connect(self.on_studio_download_finished)
+		self.python_probed.connect(self.on_python_probed)
+		self.pythons_detected.connect(self.on_pythons_detected)
+		self.build_read.connect(self.show_installed_build)
 		self.refresh_status()
 
 	# search
@@ -192,6 +209,7 @@ class SetupPage(QWidget):
 		for card in self.section_cards:
 			haystack = self.card_text(card)
 			card.setVisible(all(word in haystack for word in text.split()))
+		self.facefusion_group.setVisible(not all(card.isHidden() for card in self.facefusion_cards))
 		self.system_panel.set_filter(text)
 		has_system = self.system_panel.has_visible_cards()
 		self.system_title.setVisible(has_system)
@@ -255,18 +273,24 @@ class SetupPage(QWidget):
 			self.detect_pythons()
 
 	def detect_pythons(self) -> None:
-		candidates = find_python_candidates(self.root_edit.text().strip())
-		current = self.python_combo.text()
+		root, current = self.root_edit.text().strip(), self.python_combo.text()
+		self.python_status.set_status('info', 'Looking for Python environments…')
+
+		def probe() -> None:
+			candidates = find_python_candidates(root)
+			self.pythons_detected.emit([ (candidate, probe_python_version(candidate)) for candidate in candidates ], current)
+		threading.Thread(target = probe, daemon = True).start()
+
+	def on_pythons_detected(self, found : List[Tuple[str, Optional[str]]], current : str) -> None:
 		self.python_combo.clear()
 		best = ''
-		for candidate in candidates:
-			version = probe_python_version(candidate) or '?'
+		for candidate, version in found:
 			self.python_combo.addItem(candidate)
 			if not best and version_tuple(version) >= MINIMUM_PYTHON:
 				best = candidate
-		self.python_combo.setText(best or current or (candidates[0] if candidates else ''))
+		self.python_combo.setText(best or current or (found[0][0] if found else ''))
 		self.refresh_python_status()
-		if not candidates:
+		if not found:
 			self.session.notify.emit('warning', 'No environments found', 'No conda or venv Python was found. Use "Install FaceFusion v4" below.')
 
 	def refresh_root_status(self) -> None:
@@ -287,7 +311,18 @@ class SetupPage(QWidget):
 		if not path:
 			self.python_status.set_status('info', 'Not set')
 			return
-		version = probe_python_version(path) if os.path.isfile(path) else None
+		if not os.path.isfile(path):
+			self.python_status.set_status('error', 'Not a working Python executable')
+			return
+		self.python_status.set_status('info', 'Checking Python…')
+		threading.Thread(target = lambda: self.python_probed.emit(path, probe_python_version(path)), daemon = True).start()
+
+	def on_python_probed(self, path : str, version : Optional[str]) -> None:
+		if path == self.session.python_path:
+			self.session.python_version = version
+		# the box may have changed while python started
+		if path != self.python_combo.text().strip():
+			return
 		if not version:
 			self.python_status.set_status('error', 'Not a working Python executable')
 		elif version_tuple(version) < MINIMUM_PYTHON:
@@ -298,7 +333,7 @@ class SetupPage(QWidget):
 	def refresh_status(self) -> None:
 		self.refresh_root_status()
 		self.refresh_python_status()
-		self.refresh_installed_build()
+		self.refresh_installed_build(wait = False)
 		schema = self.session.schema
 		if schema:
 			self.schema_status.setText('Loaded %d options and %d processors from FaceFusion %s' % (len(schema.options), len(schema.processors), schema.version))
@@ -486,14 +521,22 @@ class SetupPage(QWidget):
 		self.installed_build : Dict[str, str] = {}
 		return card
 
-	def refresh_installed_build(self) -> None:
+	def refresh_installed_build(self, wait : bool = True) -> None:
 		root = self.session.facefusion_root
 		if not is_facefusion_root(root):
 			self.installed_build = {}
 			self.installed_label.setText('Not installed or not set')
 			return
-		self.installed_build = read_facefusion_build(root)
-		build = self.installed_build
+		if wait:
+			self.show_installed_build(root, read_facefusion_build(root))
+			return
+		# four git calls, off the ui thread
+		threading.Thread(target = lambda: self.build_read.emit(root, read_facefusion_build(root)), daemon = True).start()
+
+	def show_installed_build(self, root : str, build : Dict[str, str]) -> None:
+		if root != self.session.facefusion_root:
+			return
+		self.installed_build = build
 		self.github_link.setUrl(github_page(build['repository']))
 		self.installed_label.setText(format_build(build['version'], build['branch'], build['commit'], build['date']))
 		self.installed_label.setToolTip(build['commit'])
@@ -745,6 +788,10 @@ class SetupPage(QWidget):
 		self.keep_loaded_combo.installEventFilter(ToolTipFilter(self.keep_loaded_combo))
 		self.keep_loaded_combo.currentIndexChanged.connect(self.on_keep_loaded_changed)
 		layout.addLayout(form_row('Preview models', [ BodyLabel('Keep loaded after the last preview for', card), self.keep_loaded_combo ], card))
+		keep_loaded_tip = CaptionLabel('Tip: keeping the models loaded makes the preview window refresh much faster after each change.', card)
+		keep_loaded_tip.setWordWrap(True)
+		keep_loaded_tip.setTextColor('#606060', '#a0a0a0')
+		layout.addLayout(form_row('', [ keep_loaded_tip ], card))
 		return card
 
 	def on_keep_loaded_changed(self, _ : int) -> None:

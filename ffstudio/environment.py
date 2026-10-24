@@ -7,7 +7,7 @@ import subprocess
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from PySide6.QtCore import QProcessEnvironment
 
@@ -181,12 +181,22 @@ def find_python_candidates(facefusion_root : str = '') -> List[str]:
 	return list(dict.fromkeys(candidates))
 
 
+# python path and modified time to version, starting python takes up to seconds
+PYTHON_VERSIONS : Dict[Tuple[str, float], str] = {}
+
+
 def probe_python_version(python_path : str) -> Optional[str]:
 	try:
+		key = (os.path.normcase(os.path.abspath(python_path)), os.path.getmtime(python_path))
+		if key in PYTHON_VERSIONS:
+			return PYTHON_VERSIONS[key]
 		output = subprocess.run([ python_path, '-c', 'import sys; print(sys.version.split()[0])' ], capture_output = True, text = True, timeout = 20, creationflags = CREATE_NO_WINDOW)
-		return output.stdout.strip() or None
 	except (OSError, subprocess.SubprocessError):
 		return None
+	version = output.stdout.strip() or None
+	if version:
+		PYTHON_VERSIONS[key] = version
+	return version
 
 
 def version_tuple(version : Optional[str]) -> tuple:

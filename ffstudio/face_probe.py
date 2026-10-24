@@ -139,7 +139,7 @@ def scan(request : dict, model_keys : set) -> dict:
 	import numpy
 
 	from facefusion import face_selector, face_store, state_manager
-	from facefusion.face_creator import get_many_faces, get_one_face, get_static_faces
+	from facefusion.face_creator import get_one_face, get_static_faces
 	from facefusion.vision import read_image
 
 	result = { 'id': request.get('id'), 'faces': [], 'width': 0, 'height': 0 }
@@ -156,8 +156,8 @@ def scan(request : dict, model_keys : set) -> dict:
 
 	# results are cached per frame, a changed setting has to detect again
 	face_store.clear()
-	faces = get_many_faces([ frame ])
-	face_store.clear()
+	# get_static_faces keeps the faces in the store, so select_faces below reuses them instead of detecting again
+	faces = get_static_faces([ frame ])
 	selected = face_selector.select_faces(reference_frame, source_frames, [ frame ])
 	mode = state_manager.get_item('face_selector_mode')
 	result['mode'] = mode
