@@ -147,6 +147,12 @@ class VersionTest(unittest.TestCase):
 		self.assertFalse(is_newer_version('v0.3', '0.3.0'))
 		self.assertFalse(is_newer_version('v0.2.9', '0.3'))
 		self.assertFalse(is_newer_version('latest', '0.3'))
+		# the release names after v0.30
+		self.assertTrue(is_newer_version('v0.40', '0.30'))
+		self.assertTrue(is_newer_version('v1.00', '0.30'))
+		self.assertTrue(is_newer_version('v1.00', '0.40'))
+		self.assertFalse(is_newer_version('v0.30', '0.30'))
+		self.assertFalse(is_newer_version('v0.2', '0.30'))
 
 
 class ProgressParsingTest(unittest.TestCase):
