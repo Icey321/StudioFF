@@ -8,7 +8,8 @@ from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QAbstractButton, QButtonGroup, QFileDialog, QHBoxLayout, QLabel, QSizePolicy, QVBoxLayout, QWidget
 from qfluentwidgets import BodyLabel, CaptionLabel, CheckBox, ColorPickerButton, ComboBox, EditableComboBox, FluentIcon, HyperlinkButton, IconWidget, InfoBarIcon, LineEdit, PrimaryPushButton, PushButton, SearchLineEdit, SimpleCardWidget, SingleDirectionScrollArea, StrongBodyLabel, SubtitleLabel, SwitchButton, ToolTipFilter, TransparentToolButton
 
-from ffstudio.environment import check_dependencies, create_process_environment, fetch_github_build, find_conda, find_conda_base, find_python_candidates, has_nvidia_gpu, is_facefusion_root, probe_python_version, read_facefusion_build, read_facefusion_version, read_windows_version, version_tuple
+from ffstudio import APP_REPOSITORY, APP_VERSION
+from ffstudio.environment import check_dependencies, create_process_environment, fetch_github_build, fetch_latest_release, find_conda, find_conda_base, find_python_candidates, has_nvidia_gpu, is_facefusion_root, is_newer_version, probe_python_version, read_facefusion_build, read_facefusion_version, read_windows_version, version_tuple
 from ffstudio.main_window import DEFAULT_ACCENT, apply_theme
 from ffstudio.option_panel import OptionPanel
 from ffstudio.session import MINIMUM_PYTHON, Session
@@ -103,6 +104,9 @@ def section_card(title : str, description : str, parent : QWidget) -> Tuple[Simp
 class SetupPage(QWidget):
 	# the github answer arrives from a worker thread
 	update_checked = Signal(object)
+	studio_update_checked = Signal(object, bool)
+	# true while github has a newer FaceFusion Studio release than this one
+	studio_update_found = Signal(bool)
 
 	def __init__(self, session : Session, parent : Optional[QWidget] = None) -> None:
 		super().__init__(parent)
@@ -116,16 +120,20 @@ class SetupPage(QWidget):
 		root.setSpacing(0)
 		header = QHBoxLayout()
 		header.setContentsMargins(24, 16, 34, 8)
-		header.setSpacing(16)
 		header.addWidget(SubtitleLabel('Setup', self))
 		header.addStretch(1)
+		root.addLayout(header)
+		# the search box spans the settings below it, as wide as the cards
 		self.search_edit = SearchLineEdit(self)
 		self.search_edit.setPlaceholderText('Search settings')
-		self.search_edit.setMinimumWidth(220)
-		self.search_edit.setMaximumWidth(360)
+		self.search_edit.setMaximumWidth(1280 - 48)
 		self.search_edit.textChanged.connect(self.apply_filter)
-		header.addWidget(self.search_edit, 1)
-		root.addLayout(header)
+		search_row = QHBoxLayout()
+		search_row.setContentsMargins(24, 4, 34, 10)
+		search_row.addWidget(self.search_edit, 1)
+		# on a wide window the leftover space goes to the right of the box, so it stays lined up with the cards
+		search_row.addStretch(0)
+		root.addLayout(search_row)
 
 		self.scroll = SingleDirectionScrollArea(self, Qt.Orientation.Vertical)
 		self.scroll.setWidgetResizable(True)
@@ -141,7 +149,7 @@ class SetupPage(QWidget):
 		layout = QVBoxLayout(content)
 		layout.setContentsMargins(24, 8, 24, 24)
 		layout.setSpacing(12)
-		self.section_cards = [ self.create_location_card(content), self.create_install_card(content), self.create_update_card(content), self.create_appearance_card(content) ]
+		self.section_cards = [ self.create_location_card(content), self.create_install_card(content), self.create_update_card(content), self.create_studio_update_card(content), self.create_appearance_card(content) ]
 		for card in self.section_cards:
 			layout.addWidget(card)
 		self.system_title = StrongBodyLabel('Performance & system', content)
@@ -160,6 +168,7 @@ class SetupPage(QWidget):
 		session.schema_changed.connect(self.refresh_status)
 		session.runner.finished.connect(self.on_runner_finished)
 		self.update_checked.connect(self.on_update_checked)
+		self.studio_update_checked.connect(self.on_studio_update_checked)
 		self.refresh_status()
 
 	# search
@@ -441,7 +450,7 @@ class SetupPage(QWidget):
 	# updates
 
 	def create_update_card(self, parent : QWidget) -> QWidget:
-		card, layout = section_card('Updates', '', parent)
+		card, layout = section_card('FaceFusion updates', 'Checks the FaceFusion v4 folder this app drives against its GitHub repository.', parent)
 		self.windows_label = BodyLabel(read_windows_version(), card)
 		self.windows_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
 		layout.addLayout(form_row('Windows', [ self.windows_label ], card))
@@ -453,7 +462,7 @@ class SetupPage(QWidget):
 		layout.addLayout(form_row('On GitHub', [ self.github_label ], card))
 		buttons = QHBoxLayout()
 		buttons.addSpacing(138)
-		self.update_button = PushButton(FluentIcon.UPDATE, 'Check for Updates', card)
+		self.update_button = PushButton(FluentIcon.UPDATE, 'Check for FaceFusion Updates', card)
 		self.update_button.clicked.connect(self.check_for_updates)
 		self.github_link = HyperlinkButton(github_page(''), 'Open GitHub', card, FluentIcon.GITHUB)
 		self.update_status = StatusLine(card)
@@ -530,6 +539,73 @@ class SetupPage(QWidget):
 			self.update_status.set_status('info', 'This FaceFusion folder is not a git checkout, so it cannot be compared commit by commit.')
 		else:
 			self.update_status.set_status('success', 'You have the most current version installed.')
+
+	# facefusion studio updates
+
+	def create_studio_update_card(self, parent : QWidget) -> QWidget:
+		card, layout = section_card('FaceFusion Studio updates', 'Checks GitHub for a newer release of this app. It also checks quietly each time the app starts, and an orange dot on the Setup gear means one is out.', parent)
+		self.studio_version_label = BodyLabel('v' + APP_VERSION, card)
+		self.studio_version_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+		layout.addLayout(form_row('This app', [ self.studio_version_label ], card))
+		self.studio_release_label = BodyLabel('Not checked yet', card)
+		self.studio_release_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+		layout.addLayout(form_row('Latest release', [ self.studio_release_label ], card))
+		buttons = QHBoxLayout()
+		buttons.addSpacing(138)
+		self.studio_update_button = PushButton(FluentIcon.UPDATE, 'Check for Studio Updates', card)
+		self.studio_update_button.clicked.connect(lambda: self.check_studio_update())
+		self.studio_release_link = HyperlinkButton('https://github.com/%s/releases' % APP_REPOSITORY, 'Open Releases', card, FluentIcon.GITHUB)
+		self.studio_update_status = StatusLine(card)
+		self.studio_update_status.hide()
+		buttons.addWidget(self.studio_update_button)
+		buttons.addSpacing(4)
+		buttons.addWidget(self.studio_release_link)
+		for button in [ self.studio_update_button, self.studio_release_link ]:
+			button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+		buttons.addSpacing(8)
+		buttons.addWidget(self.studio_update_status, 1)
+		buttons.addStretch(0)
+		layout.addLayout(buttons)
+		return card
+
+	def check_studio_update(self, quiet : bool = False) -> None:
+		"""quiet is the check at startup, it only fills in the card and the dot and stays silent when github cannot be reached"""
+		if not self.studio_update_button.isEnabled():
+			return
+		self.studio_update_button.setEnabled(False)
+		if not quiet:
+			self.studio_update_status.set_status('info', 'Checking GitHub…')
+			self.studio_update_status.show()
+		threading.Thread(target = self.fetch_studio_update, args = (quiet,), daemon = True).start()
+
+	def fetch_studio_update(self, quiet : bool) -> None:
+		try:
+			release = fetch_latest_release(APP_REPOSITORY)
+		except Exception as exception:
+			release = { 'error': str(exception) }
+		self.studio_update_checked.emit(release, quiet)
+
+	def on_studio_update_checked(self, release : Dict[str, str], quiet : bool) -> None:
+		self.studio_update_button.setEnabled(True)
+		if release.get('error'):
+			if not quiet:
+				self.studio_update_status.set_status('error', 'Could not reach GitHub: %s' % release['error'])
+			return
+		tag = release['tag']
+		self.studio_release_label.setText('  ·  '.join(part for part in [ tag, release['date'][:10] ] if part) or 'No releases yet')
+		newer = is_newer_version(tag, APP_VERSION)
+		if newer:
+			self.studio_release_link.setUrl(release['url'])
+			self.studio_release_link.setText('Download %s' % tag)
+			self.studio_update_status.set_status('warning', 'Update available: FaceFusion Studio %s.' % tag)
+			self.studio_update_status.show()
+		else:
+			self.studio_release_link.setUrl('https://github.com/%s/releases' % APP_REPOSITORY)
+			self.studio_release_link.setText('Open Releases')
+			self.studio_update_status.set_status('success', 'You have the most current version of FaceFusion Studio.')
+			self.studio_update_status.setVisible(not quiet or self.studio_update_status.isVisible())
+		self.studio_release_link.adjustSize()
+		self.studio_update_found.emit(newer)
 
 	# appearance
 

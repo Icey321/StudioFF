@@ -81,6 +81,31 @@ def fetch_github_build(repository : str, branch : str, commit : str) -> Dict[str
 	return result
 
 
+def fetch_latest_release(repository : str) -> Dict[str, str]:
+	"""tag, web page and date of the newest github release, empty when there is none. blocks, so run it off the ui thread"""
+	try:
+		release = fetch_github_json('repos/%s/releases/latest' % repository)
+	except urllib.error.HTTPError as exception:
+		if exception.code != 404:
+			raise
+		return { 'tag': '', 'url': '', 'date': '' }
+	return { 'tag': release.get('tag_name', ''), 'url': release.get('html_url', ''), 'date': release.get('published_at', '') or '' }
+
+
+def is_newer_version(tag : str, current : str) -> bool:
+	"""compares every number of two versions like v0.10.1 and 0.2, a tag without numbers is never newer"""
+	def numbers(version : str) -> tuple:
+		parts = []
+		for part in version.strip().lstrip('vV').split('.'):
+			digits = ''.join(character for character in part if character.isdigit())
+			if not digits:
+				break
+			parts.append(int(digits))
+		return tuple(parts)
+	newer, older = numbers(tag), numbers(current)
+	return bool(newer) and newer > older
+
+
 def read_windows_version() -> str:
 	try:
 		import winreg

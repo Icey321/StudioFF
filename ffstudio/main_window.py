@@ -2,16 +2,17 @@ import os
 from typing import Dict, Optional
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QIcon
+from PySide6.QtGui import QColor, QIcon
 from PySide6.QtWidgets import QApplication
-from qfluentwidgets import FluentIcon, FluentWindow, InfoBar, InfoBarPosition, NavigationItemPosition, Theme, isDarkTheme, setTheme, setThemeColor
+from qfluentwidgets import CaptionLabel, DotInfoBadge, FluentIcon, FluentWindow, InfoBar, InfoBarPosition, NavigationItemPosition, Theme, isDarkTheme, setTheme, setThemeColor
 
-from ffstudio import APP_NAME
+from ffstudio import APP_NAME, APP_VERSION
 from ffstudio.config import APP_DIR
 from ffstudio.session import Session
 
 THEMES = { 'auto': Theme.AUTO, 'light': Theme.LIGHT, 'dark': Theme.DARK }
 DEFAULT_ACCENT = '#7c5cff'
+UPDATE_DOT_COLOR = QColor('#ff8c00')
 
 
 def apply_theme(name : str, accents : Optional[Dict[str, str]] = None) -> None:
@@ -49,6 +50,19 @@ class MainWindow(FluentWindow):
 		# just wide enough for the longest page name
 		self.navigationInterface.setExpandWidth(150)
 		self.setWindowTitle(APP_NAME)
+		# the version sits right after the name in the title bar, a little dimmer
+		self.version_label = CaptionLabel('v' + APP_VERSION, self.titleBar)
+		self.version_label.setTextColor('#808080', '#9a9a9a')
+		self.titleBar.hBoxLayout.insertSpacing(2, 8)
+		self.titleBar.hBoxLayout.insertWidget(3, self.version_label, 0, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+		# orange dot on the Setup gear while a newer FaceFusion Studio release is out
+		setup_item = self.navigationInterface.widget(self.setup_page.objectName())
+		self.update_dot = DotInfoBadge.custom(UPDATE_DOT_COLOR, UPDATE_DOT_COLOR, setup_item)
+		self.update_dot.setFixedSize(8, 8)
+		self.update_dot.move(24, 7)
+		self.update_dot.setToolTip('A FaceFusion Studio update is available')
+		self.update_dot.hide()
+		self.setup_page.studio_update_found.connect(self.update_dot.setVisible)
 		icon_path = os.path.join(APP_DIR, 'assets', 'icon.png')
 		if os.path.exists(icon_path):
 			self.setWindowIcon(QIcon(icon_path))
@@ -67,6 +81,7 @@ class MainWindow(FluentWindow):
 			self.move(geometry.x() + (geometry.width() - self.width()) // 2, geometry.y() + (geometry.height() - self.height()) // 2)
 
 	def startup(self) -> None:
+		self.setup_page.check_studio_update(quiet = True)
 		if not self.session.is_configured():
 			self.switchTo(self.setup_page)
 			self.show_notification('info', 'Welcome', 'Point the app at your FaceFusion v4 folder, or install v4 from here.')
