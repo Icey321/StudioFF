@@ -1,16 +1,16 @@
-# FaceFusion Studio
+# StudioFF
 
-Custom UI for [FaceFusion v4](https://github.com/facefusion/facefusion/tree/v4) face swapper.
+A desktop app for the [FaceFusion v4](https://github.com/facefusion/facefusion/tree/v4) face swapper. Not made or endorsed by the FaceFusion team.
 
-FaceFusion Studio swaps faces in images, videos and GIFs. Pick the faces to use, pick a target, preview
+StudioFF swaps faces in images, videos and GIFs. Pick the faces to use, pick a target, preview
 the swap on one frame and run it, one target at a time or a whole folder in a batch. Several people in one
 target can each get a different face.
 
 It is a Windows 11 desktop app for FaceFusion v4, which has no built-in UI of its own, only a command line.
-FaceFusion Studio builds the command for you, runs it in FaceFusion's own Python environment and shows
+StudioFF builds the command for you, runs it in FaceFusion's own Python environment and shows
 progress and the result.
 
-FaceFusion itself is not included: install FaceFusion v4 separately, then point FaceFusion Studio at it.
+FaceFusion itself is not included: install FaceFusion v4 separately, then point StudioFF at it.
 
 ## Screenshots
 
@@ -43,7 +43,7 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 ```
 
 This creates `.venv` for the UI (PySide6 + PySide6-Fluent-Widgets + OpenCV) and adds desktop and Start menu
-shortcuts. Then start **FaceFusion Studio** and open **Setup**:
+shortcuts. Then start **StudioFF** and open **Setup**:
 
 - **Already have FaceFusion v4?** Pick its folder and the `python.exe` of its environment, or press **Detect**, then press **Save and load options**.
 - **No FaceFusion v4 yet?** Use the **Install FaceFusion v4** button in the app's **Setup** page. Note that FaceFusion v4 requires **Python 3.13+**, so a

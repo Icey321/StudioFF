@@ -18,11 +18,13 @@ $targets = @(
 	(Join-Path ([Environment]::GetFolderPath('Programs')) '')
 )
 foreach ($folder in $targets) {
-	$shortcut = $shell.CreateShortcut((Join-Path $folder 'FaceFusion Studio.lnk'))
+	# the app was called FaceFusion Studio before v0.30
+	Remove-Item (Join-Path $folder 'FaceFusion Studio.lnk') -ErrorAction SilentlyContinue
+	$shortcut = $shell.CreateShortcut((Join-Path $folder 'StudioFF.lnk'))
 	$shortcut.TargetPath = Join-Path $PSScriptRoot '.venv\Scripts\pythonw.exe'
 	$shortcut.Arguments = '-m ffstudio'
 	$shortcut.WorkingDirectory = $PSScriptRoot
 	$shortcut.IconLocation = Join-Path $PSScriptRoot 'ffstudio\assets\icon.ico'
 	$shortcut.Save()
 }
-Write-Host 'Done. Start "FaceFusion Studio" from the desktop or Start menu, or run FaceFusion Studio.bat'
+Write-Host 'Done. Start "StudioFF" from the desktop or Start menu, or run StudioFF.bat'

@@ -70,12 +70,12 @@ class MainWindow(FluentWindow):
 		self.version_label.setTextColor('#808080', '#9a9a9a')
 		self.titleBar.hBoxLayout.insertSpacing(2, 8)
 		self.titleBar.hBoxLayout.insertWidget(3, self.version_label, 0, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-		# orange dot on the Setup gear while a newer FaceFusion Studio release is out
+		# orange dot on the Setup gear while a newer StudioFF release is out
 		setup_item = self.navigationInterface.widget(self.setup_page.objectName())
 		self.update_dot = DotInfoBadge.custom(UPDATE_DOT_COLOR, UPDATE_DOT_COLOR, setup_item)
 		self.update_dot.setFixedSize(8, 8)
 		self.update_dot.move(24, 7)
-		self.update_dot.setToolTip('A FaceFusion Studio update is available')
+		self.update_dot.setToolTip('A StudioFF update is available')
 		self.update_dot.hide()
 		self.setup_page.studio_update_found.connect(self.update_dot.setVisible)
 		icon_path = os.path.join(APP_DIR, 'assets', 'icon.png')
@@ -99,9 +99,9 @@ class MainWindow(FluentWindow):
 		from ffstudio.updater import read_update_result
 		update_result = read_update_result()
 		if update_result and update_result[0]:
-			self.show_notification('success', 'FaceFusion Studio updated', 'You are now on %s.' % update_result[1])
+			self.show_notification('success', 'StudioFF updated', 'You are now on %s.' % update_result[1])
 		elif update_result:
-			self.show_notification('error', 'The update did not install', '%s. FaceFusion Studio stayed on v%s.' % (update_result[1][:1].upper() + update_result[1][1:].rstrip('.'), APP_VERSION))
+			self.show_notification('error', 'The update did not install', '%s. StudioFF stayed on v%s.' % (update_result[1][:1].upper() + update_result[1][1:].rstrip('.'), APP_VERSION))
 		self.setup_page.check_studio_update(quiet = True)
 		if not self.session.is_configured():
 			self.switchTo(self.setup_page)

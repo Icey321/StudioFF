@@ -70,7 +70,7 @@ class ReportPainter:
 		when = runs[0][0].get('when') if runs and runs[0] else ''
 		self.text(QRectF(left, PADDING + 8, width, 0), when, make_font(10), MUTED, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
 		self.y += 2
-		self.y += self.text(QRectF(left, self.y, width, 0), 'FaceFusion %s · tested with FaceFusion Studio' % version, make_font(9.5), MUTED)
+		self.y += self.text(QRectF(left, self.y, width, 0), 'FaceFusion %s · tested with StudioFF' % version, make_font(9.5), MUTED)
 		self.y += 18
 
 		# hardware

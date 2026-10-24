@@ -68,7 +68,7 @@ def download_release(zip_url : str, progress : Callable[[int, int], None]) -> st
 	shutil.rmtree(UPDATE_DIR, ignore_errors = True)
 	os.makedirs(UPDATE_DIR)
 	zip_path = os.path.join(UPDATE_DIR, 'release.zip')
-	request = urllib.request.Request(zip_url, headers = { 'User-Agent': 'FaceFusion-Studio' })
+	request = urllib.request.Request(zip_url, headers = { 'User-Agent': 'StudioFF' })
 	with urllib.request.urlopen(request, timeout = 30) as response, open(zip_path, 'wb') as zip_file:
 		total = int(response.headers.get('Content-Length') or 0)
 		done = 0
@@ -96,7 +96,7 @@ def download_release(zip_url : str, progress : Callable[[int, int], None]) -> st
 	folders = os.listdir(extract_dir)
 	source = os.path.join(extract_dir, folders[0]) if len(folders) == 1 else extract_dir
 	if not os.path.isfile(os.path.join(source, 'ffstudio', '__init__.py')):
-		raise RuntimeError('the download does not contain FaceFusion Studio')
+		raise RuntimeError('the download does not contain StudioFF')
 	return source
 
 

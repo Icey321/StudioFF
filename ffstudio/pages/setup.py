@@ -107,7 +107,7 @@ class SetupPage(QWidget):
 	# the github answer arrives from a worker thread
 	update_checked = Signal(object)
 	studio_update_checked = Signal(object, bool)
-	# true while github has a newer FaceFusion Studio release than this one
+	# true while github has a newer StudioFF release than this one
 	studio_update_found = Signal(bool)
 	studio_download_progress = Signal(int, int)
 	# the folder of the downloaded files, or an error
@@ -158,7 +158,7 @@ class SetupPage(QWidget):
 		layout = QVBoxLayout(content)
 		layout.setContentsMargins(24, 8, 24, 24)
 		layout.setSpacing(12)
-		# the FaceFusion sections share one card, apart from the FaceFusion Studio updates below them
+		# the FaceFusion sections share one card, apart from the StudioFF updates below them
 		self.facefusion_group = SimpleCardWidget(content)
 		group_layout = QVBoxLayout(self.facefusion_group)
 		group_layout.setContentsMargins(0, 0, 0, 0)
@@ -589,10 +589,10 @@ class SetupPage(QWidget):
 		else:
 			self.update_status.set_status('success', 'You have the most current version installed.')
 
-	# facefusion studio updates
+	# studioff updates
 
 	def create_studio_update_card(self, parent : QWidget) -> QWidget:
-		card, layout = section_card('FaceFusion Studio updates', 'Checks GitHub for a newer release of this app. It also checks quietly each time the app starts, and an orange dot on the Setup gear means one is out.', parent)
+		card, layout = section_card('StudioFF updates', 'Checks GitHub for a newer release of this app. It also checks quietly each time the app starts, and an orange dot on the Setup gear means one is out.', parent)
 		self.studio_version_label = BodyLabel('v' + APP_VERSION, card)
 		self.studio_version_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
 		layout.addLayout(form_row('This app', [ self.studio_version_label ], card))
@@ -601,7 +601,7 @@ class SetupPage(QWidget):
 		layout.addLayout(form_row('Latest release', [ self.studio_release_label ], card))
 		buttons = QHBoxLayout()
 		buttons.addSpacing(138)
-		self.studio_install_button = PrimaryPushButton(FluentIcon.DOWNLOAD, 'Update FaceFusion Studio', card)
+		self.studio_install_button = PrimaryPushButton(FluentIcon.DOWNLOAD, 'Update StudioFF', card)
 		self.studio_install_button.clicked.connect(self.install_studio_update)
 		self.studio_install_button.hide()
 		self.studio_release = {}
@@ -656,7 +656,7 @@ class SetupPage(QWidget):
 		self.studio_release_label.setText('  ·  '.join(part for part in [ tag, release['date'][:10] ] if part) or 'No releases yet')
 		newer = is_newer_version(tag, APP_VERSION)
 		self.studio_release = release if newer else {}
-		self.studio_install_button.setText('Update to %s' % tag if newer else 'Update FaceFusion Studio')
+		self.studio_install_button.setText('Update to %s' % tag if newer else 'Update StudioFF')
 		self.studio_install_button.setVisible(newer and bool(release.get('zip')))
 		# a git checkout is updated with git, copying a release over it would mix the two
 		self.studio_install_button.setEnabled(not is_git_checkout() and self.studio_download_bar.isHidden())
@@ -664,12 +664,12 @@ class SetupPage(QWidget):
 		if newer:
 			self.studio_release_link.setUrl(release['url'])
 			self.studio_release_link.setText('Download %s' % tag)
-			self.studio_update_status.set_status('warning', 'Update available: FaceFusion Studio %s.' % tag)
+			self.studio_update_status.set_status('warning', 'Update available: StudioFF %s.' % tag)
 			self.studio_update_status.show()
 		else:
 			self.studio_release_link.setUrl('https://github.com/%s/releases' % APP_REPOSITORY)
 			self.studio_release_link.setText('Open Releases')
-			self.studio_update_status.set_status('success', 'You have the most current version of FaceFusion Studio.')
+			self.studio_update_status.set_status('success', 'You have the most current version of StudioFF.')
 			self.studio_update_status.setVisible(not quiet or self.studio_update_status.isVisible())
 		self.studio_release_link.adjustSize()
 		self.studio_update_found.emit(newer)
@@ -678,10 +678,10 @@ class SetupPage(QWidget):
 		tag = self.studio_release.get('tag', '')
 		if not tag:
 			return
-		text = 'FaceFusion Studio downloads %s, closes, updates itself and opens again. Your settings, presets and FaceFusion stay as they are.' % tag
+		text = 'StudioFF downloads %s, closes, updates itself and opens again. Your settings, presets and FaceFusion stay as they are.' % tag
 		if self.session.runner.is_running():
 			text += '\n\nFaceFusion is still running "%s", the update stops it.' % self.session.task
-		if confirm and not MessageBox('Update FaceFusion Studio to %s?' % tag, text, self.window()).exec():
+		if confirm and not MessageBox('Update StudioFF to %s?' % tag, text, self.window()).exec():
 			return
 		self.studio_install_button.setEnabled(False)
 		self.studio_update_button.setEnabled(False)

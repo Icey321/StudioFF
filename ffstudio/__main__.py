@@ -67,7 +67,7 @@ def main() -> None:
 
 	QApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
 	app = QApplication(sys.argv)
-	app.setApplicationName('FaceFusion Studio')
+	app.setApplicationName('StudioFF')
 
 	if not args.screenshot:
 		if wake_running_instance():

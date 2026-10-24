@@ -53,7 +53,7 @@ def read_facefusion_build(root : str) -> Dict[str, str]:
 
 
 def fetch_github_json(path : str) -> Any:
-	request = urllib.request.Request('https://api.github.com/' + path, headers = { 'Accept': 'application/vnd.github+json', 'User-Agent': 'FaceFusion-Studio' })
+	request = urllib.request.Request('https://api.github.com/' + path, headers = { 'Accept': 'application/vnd.github+json', 'User-Agent': 'StudioFF' })
 	with urllib.request.urlopen(request, timeout = 15) as response:
 		return json.loads(response.read().decode('utf-8'))
 
