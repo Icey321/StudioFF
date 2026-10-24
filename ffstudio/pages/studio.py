@@ -959,6 +959,12 @@ class StudioPage(SourceSelection, QWidget):
 		self.progress_bar.setValue(0)
 		status_layout.addWidget(self.progress_bar)
 		layout.addLayout(status_layout, 1)
+		layout.addSpacing(10)
+		self.open_output_button = PushButton(FluentIcon.FOLDER, 'Open Output Folder', card)
+		self.open_output_button.setToolTip('Open the folder the results are saved to in File Explorer')
+		self.open_output_button.installEventFilter(ToolTipFilter(self.open_output_button))
+		self.open_output_button.clicked.connect(self.open_output_folder)
+		layout.addWidget(self.open_output_button)
 		return card
 
 	# state

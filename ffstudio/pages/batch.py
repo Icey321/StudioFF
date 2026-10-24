@@ -343,6 +343,12 @@ class BatchPage(SourceSelection, QWidget):
 		status.addWidget(self.status_label)
 		status.addWidget(self.progress)
 		run_layout.addLayout(status, 1)
+		run_layout.addSpacing(10)
+		self.open_output_button = PushButton(FluentIcon.FOLDER, 'Open Output Folder', run_card)
+		self.open_output_button.setToolTip('Open the batch output folder in File Explorer')
+		self.open_output_button.installEventFilter(ToolTipFilter(self.open_output_button))
+		self.open_output_button.clicked.connect(self.open_output_folder)
+		run_layout.addWidget(self.open_output_button)
 		layout.addWidget(run_card)
 
 		session.busy_changed.connect(self.on_busy_changed)
