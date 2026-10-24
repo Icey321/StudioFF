@@ -28,6 +28,7 @@ LIVE_IGNORED_GROUPS = [ 'paths', 'output_creation', 'frame_extraction', 'frame_d
 PREVIEW_SECONDS = 6.0
 # the outputs of the passes of a face mapping run before the last one
 PASSES_DIR = os.path.join(PREVIEW_DIR, 'passes')
+SOURCE_FILTERS = [ 'Images and audio (*.jpg *.jpeg *.png *.webp *.bmp *.tif *.tiff *.mp3 *.wav *.flac *.m4a *.aac *.ogg *.opus)', 'All files (*)' ]
 
 
 def elastic(label : CaptionLabel) -> CaptionLabel:
@@ -197,7 +198,9 @@ class SourceCard(SimpleCardWidget):
 		layout = QVBoxLayout(self)
 		layout.setContentsMargins(16, 12, 12, 14)
 		layout.setSpacing(8)
-		header = card_header(title, self)
+		# the filter the file picker opens on
+		self.browse_filter = SOURCE_FILTERS[0]
+		self.header = header = card_header(title, self)
 		self.count_label = elastic(CaptionLabel('', self))
 		self.count_label.installEventFilter(ToolTipFilter(self.count_label))
 		self.count_label.setTextColor('#707070', '#9a9a9a')
@@ -232,9 +235,13 @@ class SourceCard(SimpleCardWidget):
 		layout.addWidget(self.strip_scroll)
 
 	def browse(self) -> None:
-		paths, _ = QFileDialog.getOpenFileNames(self, 'Choose source faces or audio', self.page.last_dir(), 'Images and audio (*.jpg *.jpeg *.png *.webp *.bmp *.tif *.tiff *.mp3 *.wav *.flac *.m4a *.aac *.ogg *.opus);;All files (*)')
+		paths, _ = QFileDialog.getOpenFileNames(self, 'Choose source faces or audio', self.page.last_dir(), ';;'.join(SOURCE_FILTERS), self.browse_filter)
 		if paths:
 			self.page.add_sources([ os.path.normpath(path) for path in paths ])
+
+	def add_tool(self, button : QWidget) -> None:
+		"""an extra button in the header, before the select all button"""
+		self.header.insertWidget(self.header.indexOf(self.select_button), button)
 
 	def refresh(self, paths : List[str]) -> None:
 		# hidden at once, the delete only happens when the event loop gets to it
@@ -597,6 +604,148 @@ class NameTagsView(FlyoutViewBase):
 		self.page.output_name_edit.setFocus()
 
 
+class SettingsColumn(QWidget):
+	"""search, processors and option groups for one set of option values, the session's or a page's OptionStore"""
+
+	def __init__(self, store, parent : Optional[QWidget] = None, header_widgets : Tuple[QWidget, ...] = ()) -> None:
+		super().__init__(parent)
+		self.store = store
+		column = QVBoxLayout(self)
+		column.setContentsMargins(0, 0, 0, 0)
+		column.setSpacing(10)
+		self.search_edit = SearchLineEdit(self)
+		self.search_edit.setPlaceholderText('Search settings')
+		self.search_edit.textChanged.connect(self.apply_filter)
+		search_row = QHBoxLayout()
+		search_row.setContentsMargins(0, 0, 10, 0)
+		search_row.addWidget(self.search_edit, 1)
+		for widget in header_widgets:
+			search_row.addWidget(widget)
+		column.addLayout(search_row)
+		self.scroll = SingleDirectionScrollArea(self, Qt.Orientation.Vertical)
+		self.scroll.setWidgetResizable(True)
+		self.scroll.enableTransparentBackground()
+		self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+		content = QWidget()
+		content.setStyleSheet('background: transparent')
+		# clicking empty space takes focus away from a control, so the wheel scrolls the page again
+		content.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
+		layout = QVBoxLayout(content)
+		layout.setContentsMargins(0, 0, 10, 0)
+		layout.setSpacing(10)
+		self.processor_card = self.create_processor_card(content)
+		layout.addWidget(self.processor_card)
+		self.favorites_panel = FavoritesPanel(store, content)
+		layout.addWidget(self.favorites_panel)
+		self.processor_panel = OptionPanel(store, [], expanded = [], parent = content, favorites = True, info_icons = True, short_labels = True)
+		layout.addWidget(self.processor_panel)
+		self.option_panel = OptionPanel(store, STUDIO_GROUPS, expanded = [ 'face_selector' ], parent = content, favorites = True, info_icons = True, short_labels = True)
+		layout.addWidget(self.option_panel)
+		self.no_match_label = CaptionLabel('No settings match your search. Options of processors that are switched off are hidden.', content)
+		self.no_match_label.setWordWrap(True)
+		self.no_match_label.setTextColor('#707070', '#9a9a9a')
+		self.no_match_label.hide()
+		layout.addWidget(self.no_match_label)
+		layout.addStretch(1)
+		self.scroll.setWidget(content)
+		column.addWidget(self.scroll, 1)
+		store.value_changed.connect(self.on_value_changed)
+		store.schema_changed.connect(self.rebuild)
+		self.rebuild()
+
+	def create_processor_card(self, parent : QWidget) -> QWidget:
+		card = SimpleCardWidget(parent)
+		layout = QVBoxLayout(card)
+		layout.setContentsMargins(16, 12, 12, 14)
+		layout.setSpacing(10)
+		header = card_header('Processors', card)
+		self.processor_hint = elastic(CaptionLabel('', card))
+		self.processor_hint.setTextColor('#707070', '#9a9a9a')
+		header.insertWidget(1, self.processor_hint, 1)
+		layout.addLayout(header)
+		order_hint = CaptionLabel('Each frame goes through the processors that are on, left to right. Drag a button to change the order.', card)
+		order_hint.setWordWrap(True)
+		order_hint.setTextColor('#707070', '#9a9a9a')
+		layout.addWidget(order_hint)
+		self.processor_area = ProcessorArea(card)
+		self.processor_area.reordered.connect(self.reorder_processors)
+		layout.addWidget(self.processor_area)
+		self.processor_buttons = {}
+		return card
+
+	def apply_filter(self, text : str) -> None:
+		self.processor_panel.set_filter(text)
+		self.option_panel.set_filter(text)
+		searching = bool(text.strip())
+		# while searching the matches show in their own groups, the copies in favorites would only repeat them
+		self.favorites_panel.setVisible(not searching)
+		self.processor_card.setVisible(not searching)
+		self.no_match_label.setVisible(searching and not self.processor_panel.has_visible_cards() and not self.option_panel.has_visible_cards())
+		self.scroll.verticalScrollBar().setValue(0)
+
+	def rebuild(self) -> None:
+		schema = self.store.schema
+		self.rebuild_processors()
+		self.processor_panel.set_groups(list(schema.processors) if schema else [])
+		self.processor_panel.expanded = self.store.processors()
+		self.processor_panel.rebuild()
+		self.option_panel.rebuild()
+		self.favorites_panel.rebuild()
+
+	def processor_order(self) -> List[str]:
+		"""every installed processor in the order shown, the ones switched on run in this order"""
+		schema = self.store.schema
+		if not schema:
+			return []
+		# without a stored order the current run order leads, so nothing changes for existing setups
+		stored = self.store.config.get(self.store.ORDER_KEY) or self.store.processors()
+		order = [ name for name in stored if name in schema.processors ]
+		return order + [ name for name in schema.processors if name not in order ]
+
+	def rebuild_processors(self) -> None:
+		self.processor_area.clear()
+		self.processor_buttons = {}
+		order = self.processor_order()
+		for processor in order:
+			button = ProcessorButton(processor, processor.replace('_', ' ').title(), self.processor_area)
+			button.setChecked(processor in self.store.processors())
+			button.toggled.connect(self.apply_processor_buttons)
+			self.processor_buttons[processor] = button
+		self.processor_area.set_buttons([ self.processor_buttons[name] for name in order ])
+		if order:
+			# keep the run order in line with the buttons
+			processors = [ name for name in order if name in self.store.processors() ]
+			if processors != self.store.processors():
+				self.store.set_value('processors', processors)
+		self.refresh_processor_hint()
+
+	def reorder_processors(self, order : List[str]) -> None:
+		self.store.config.set(self.store.ORDER_KEY, order)
+		self.processor_area.set_buttons([ self.processor_buttons[name] for name in order ])
+		self.apply_processor_buttons()
+
+	def apply_processor_buttons(self) -> None:
+		processors = [ button.name for button in self.processor_area.buttons if button.isChecked() ]
+		self.store.config.set(self.store.ORDER_KEY, [ button.name for button in self.processor_area.buttons ])
+		if processors != self.store.processors():
+			self.store.set_value('processors', processors)
+
+	def refresh_processor_hint(self) -> None:
+		processors = self.store.processors()
+		for button in self.processor_buttons.values():
+			button.set_position(processors.index(button.name) + 1 if button.name in processors else 0)
+		self.processor_hint.setText(' → '.join(name.replace('_', ' ') for name in processors) if processors else 'Switch on at least one processor')
+		self.processor_hint.setToolTip(self.processor_hint.text())
+
+	def on_value_changed(self, dest : str, _ : object) -> None:
+		if dest == 'processors':
+			for name, button in self.processor_buttons.items():
+				button.blockSignals(True)
+				button.setChecked(name in self.store.processors())
+				button.blockSignals(False)
+			self.refresh_processor_hint()
+
+
 class StudioPage(SourceSelection, QWidget):
 	def __init__(self, session : Session, parent : Optional[QWidget] = None) -> None:
 		super().__init__(parent)
@@ -685,46 +834,9 @@ class StudioPage(SourceSelection, QWidget):
 		self.splitter.addWidget(left_widget)
 
 		# right column: search, processors + options
-		right_widget = QWidget(self.splitter)
-		right_widget.setMinimumWidth(340)
-		right_column = QVBoxLayout(right_widget)
-		right_column.setContentsMargins(0, 0, 0, 0)
-		right_column.setSpacing(10)
-		self.search_edit = SearchLineEdit(right_widget)
-		self.search_edit.setPlaceholderText('Search settings')
-		self.search_edit.textChanged.connect(self.apply_filter)
-		search_row = QHBoxLayout()
-		search_row.setContentsMargins(0, 0, 10, 0)
-		search_row.addWidget(self.search_edit)
-		right_column.addLayout(search_row)
-		self.scroll = SingleDirectionScrollArea(right_widget, Qt.Orientation.Vertical)
-		self.scroll.setWidgetResizable(True)
-		self.scroll.enableTransparentBackground()
-		self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-		right_content = QWidget()
-		right_content.setStyleSheet('background: transparent')
-		# clicking empty space takes focus away from a control, so the wheel scrolls the page again
-		right_content.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
-		right = QVBoxLayout(right_content)
-		right.setContentsMargins(0, 0, 10, 0)
-		right.setSpacing(10)
-		self.processor_card = self.create_processor_card(right_content)
-		right.addWidget(self.processor_card)
-		self.favorites_panel = FavoritesPanel(session, right_content)
-		right.addWidget(self.favorites_panel)
-		self.processor_panel = OptionPanel(session, [], expanded = [], parent = right_content, favorites = True, info_icons = True, short_labels = True)
-		right.addWidget(self.processor_panel)
-		self.option_panel = OptionPanel(session, STUDIO_GROUPS, expanded = [ 'face_selector' ], parent = right_content, favorites = True, info_icons = True, short_labels = True)
-		right.addWidget(self.option_panel)
-		self.no_match_label = CaptionLabel('No settings match your search. Options of processors that are switched off are hidden.', right_content)
-		self.no_match_label.setWordWrap(True)
-		self.no_match_label.setTextColor('#707070', '#9a9a9a')
-		self.no_match_label.hide()
-		right.addWidget(self.no_match_label)
-		right.addStretch(1)
-		self.scroll.setWidget(right_content)
-		right_column.addWidget(self.scroll, 1)
-		self.splitter.addWidget(right_widget)
+		self.settings_column = SettingsColumn(session, self.splitter)
+		self.settings_column.setMinimumWidth(340)
+		self.splitter.addWidget(self.settings_column)
 		self.splitter.setStretchFactor(0, 11)
 		self.splitter.setStretchFactor(1, 9)
 		self.splitter.setSizes(session.config.get('studio_split') or [ 1100, 900 ])
@@ -792,26 +904,6 @@ class StudioPage(SourceSelection, QWidget):
 		column.addWidget(self.name_preview_label)
 		return card
 
-	def create_processor_card(self, parent : QWidget) -> QWidget:
-		card = SimpleCardWidget(parent)
-		layout = QVBoxLayout(card)
-		layout.setContentsMargins(16, 12, 12, 14)
-		layout.setSpacing(10)
-		header = card_header('Processors', card)
-		self.processor_hint = elastic(CaptionLabel('', card))
-		self.processor_hint.setTextColor('#707070', '#9a9a9a')
-		header.insertWidget(1, self.processor_hint, 1)
-		layout.addLayout(header)
-		order_hint = CaptionLabel('Each frame goes through the processors that are on, left to right. Drag a button to change the order.', card)
-		order_hint.setWordWrap(True)
-		order_hint.setTextColor('#707070', '#9a9a9a')
-		layout.addWidget(order_hint)
-		self.processor_area = ProcessorArea(card)
-		self.processor_area.reordered.connect(self.reorder_processors)
-		layout.addWidget(self.processor_area)
-		self.processor_buttons = {}
-		return card
-
 	def create_run_bar(self) -> QWidget:
 		card = SimpleCardWidget(self)
 		layout = QHBoxLayout(card)
@@ -865,16 +957,6 @@ class StudioPage(SourceSelection, QWidget):
 		self.refresh_name_preview()
 		if change != 'names':
 			self.schedule_live_preview()
-
-	def apply_filter(self, text : str) -> None:
-		self.processor_panel.set_filter(text)
-		self.option_panel.set_filter(text)
-		searching = bool(text.strip())
-		# while searching the matches show in their own groups, the copies in favorites would only repeat them
-		self.favorites_panel.setVisible(not searching)
-		self.processor_card.setVisible(not searching)
-		self.no_match_label.setVisible(searching and not self.processor_panel.has_visible_cards() and not self.option_panel.has_visible_cards())
-		self.scroll.verticalScrollBar().setValue(0)
 
 	def set_target(self, path : str) -> None:
 		if path and media_kind(path) not in [ 'image', 'video' ]:
@@ -956,70 +1038,13 @@ class StudioPage(SourceSelection, QWidget):
 			self.result_reader.release()
 			self.result_reader = None
 
-	def processor_order(self) -> List[str]:
-		"""every installed processor in the order shown, the ones switched on run in this order"""
-		schema = self.session.schema
-		if not schema:
-			return []
-		# without a stored order the current run order leads, so nothing changes for existing setups
-		stored = self.session.config.get('processor_order') or self.session.processors()
-		order = [ name for name in stored if name in schema.processors ]
-		return order + [ name for name in schema.processors if name not in order ]
-
-	def rebuild_processors(self) -> None:
-		self.processor_area.clear()
-		self.processor_buttons = {}
-		order = self.processor_order()
-		for processor in order:
-			button = ProcessorButton(processor, processor.replace('_', ' ').title(), self.processor_area)
-			button.setChecked(processor in self.session.processors())
-			button.toggled.connect(self.apply_processor_buttons)
-			self.processor_buttons[processor] = button
-		self.processor_area.set_buttons([ self.processor_buttons[name] for name in order ])
-		if order:
-			# keep the run order in line with the buttons
-			processors = [ name for name in order if name in self.session.processors() ]
-			if processors != self.session.processors():
-				self.session.set_value('processors', processors)
-		self.refresh_processor_hint()
-
-	def reorder_processors(self, order : List[str]) -> None:
-		self.session.config.set('processor_order', order)
-		self.processor_area.set_buttons([ self.processor_buttons[name] for name in order ])
-		self.apply_processor_buttons()
-
-	def apply_processor_buttons(self) -> None:
-		processors = [ button.name for button in self.processor_area.buttons if button.isChecked() ]
-		self.session.config.set('processor_order', [ button.name for button in self.processor_area.buttons ])
-		if processors != self.session.processors():
-			self.session.set_value('processors', processors)
-
-	def refresh_processor_hint(self) -> None:
-		processors = self.session.processors()
-		for button in self.processor_buttons.values():
-			button.set_position(processors.index(button.name) + 1 if button.name in processors else 0)
-		self.processor_hint.setText(' → '.join(name.replace('_', ' ') for name in processors) if processors else 'Switch on at least one processor')
-		self.processor_hint.setToolTip(self.processor_hint.text())
-
 	def on_schema_changed(self) -> None:
 		schema = self.session.schema
 		self.version_label.setText(('FaceFusion %s' % schema.version) if schema else 'FaceFusion is not set up yet — open Setup')
-		self.rebuild_processors()
-		self.processor_panel.set_groups(list(schema.processors) if schema else [])
-		self.processor_panel.expanded = self.session.processors()
-		self.processor_panel.rebuild()
-		self.option_panel.rebuild()
-		self.favorites_panel.rebuild()
 
 	def on_value_changed(self, dest : str, _ : object) -> None:
 		if self.session.schema and self.session.schema.options.get(dest, {}).get('group') not in LIVE_IGNORED_GROUPS and dest not in [ 'reference_frame_index', 'trim_frame_start', 'trim_frame_end' ]:
 			self.schedule_live_preview()
-		if dest == 'processors':
-			for name, button in self.processor_buttons.items():
-				button.blockSignals(True)
-				button.setChecked(name in self.session.processors())
-				button.blockSignals(False)
-			self.refresh_processor_hint()
 		if dest == 'processors' or dest.endswith('_model'):
 			self.refresh_name_preview()
 		if dest in [ 'reference_frame_index', 'trim_frame_start', 'trim_frame_end' ]:

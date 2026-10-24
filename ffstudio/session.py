@@ -57,8 +57,25 @@ def folder_is_writable(folder : str) -> bool:
 		return False
 
 
+def load_values(schema : Optional[Schema], stored : Dict[str, Any]) -> Dict[str, Any]:
+	"""a value for every option, the stored one unless it no longer exists in the installed facefusion"""
+	values : Dict[str, Any] = {}
+	if schema:
+		for dest, option in schema.options.items():
+			values[dest] = stored.get(dest, option.get('default'))
+		for dest in list(values):
+			resolved = schema.resolve(dest, values)
+			value = values.get(dest)
+			if resolved.get('choices') and value is not None and not resolved.get('multiple'):
+				if str(value) not in [ str(choice) for choice in resolved.get('choices') ]:
+					values[dest] = resolved.get('default')
+	return values
+
+
 class Session(QObject):
 	"""shared state between pages: config, option schema, option values and the process runner"""
+	# where the order of the processor buttons is kept
+	ORDER_KEY = 'processor_order'
 	schema_changed = Signal()
 	schema_loading = Signal(bool)
 	value_changed = Signal(str, object)
@@ -120,18 +137,7 @@ class Session(QObject):
 	# option values
 
 	def init_values(self) -> None:
-		stored = self.config.get('options') or {}
-		self.values = {}
-		if self.schema:
-			for dest, option in self.schema.options.items():
-				self.values[dest] = stored.get(dest, option.get('default'))
-			# drop values that no longer exist in the installed facefusion
-			for dest in list(self.values):
-				resolved = self.schema.resolve(dest, self.values)
-				value = self.values.get(dest)
-				if resolved.get('choices') and value is not None and not resolved.get('multiple'):
-					if str(value) not in [ str(choice) for choice in resolved.get('choices') ]:
-						self.values[dest] = resolved.get('default')
+		self.values = load_values(self.schema, self.config.get('options') or {})
 
 	def set_value(self, dest : str, value : Any) -> None:
 		self.values[dest] = value
@@ -309,6 +315,65 @@ class Session(QObject):
 		values = values if values is not None else self.values
 		args = [ '--processors' ] + list(values.get('processors') or self.schema.options.get('processors', {}).get('default') or [])
 		return args + build_option_args(self.schema, values, groups)
+
+
+class OptionStore(QObject):
+	"""a page's own set of option values, shown and edited like the session's but kept apart from them
+
+	option panels take it in place of the session, favorites and the schema stay shared
+	"""
+	value_changed = Signal(str, object)
+	# the values were loaded again, panels rebuild their rows
+	schema_changed = Signal()
+
+	def __init__(self, session : Session, values_key : str, order_key : str) -> None:
+		super().__init__(session)
+		self.session = session
+		self.config = session.config
+		self.values_key = values_key
+		self.ORDER_KEY = order_key
+		self.favorites_changed = session.favorites_changed
+		self.values : Dict[str, Any] = {}
+		self.init_values()
+		session.schema_changed.connect(self.on_schema_changed)
+
+	@property
+	def schema(self) -> Optional[Schema]:
+		return self.session.schema
+
+	def init_values(self) -> None:
+		# the first time they start as a copy of the session's values
+		stored = self.config.get(self.values_key)
+		self.load(stored if stored is not None else self.session.values)
+
+	def load(self, values : Dict[str, Any]) -> None:
+		# rows keep a reference to this dict, so it is filled again rather than replaced
+		self.values.clear()
+		self.values.update(load_values(self.schema, values))
+		self.config.set(self.values_key, dict(self.values))
+
+	def on_schema_changed(self) -> None:
+		self.init_values()
+		self.schema_changed.emit()
+
+	def copy_from(self, values : Dict[str, Any], order : List[str]) -> None:
+		self.load(values)
+		self.config.set(self.ORDER_KEY, list(order))
+		self.schema_changed.emit()
+
+	def set_value(self, dest : str, value : Any) -> None:
+		self.values[dest] = value
+		self.config.set(self.values_key, dict(self.values))
+		self.value_changed.emit(dest, value)
+
+	def processors(self) -> List[str]:
+		return list(self.values.get('processors') or [])
+
+	def favorites(self) -> List[str]:
+		return self.session.favorites()
+
+	def toggle_favorite(self, dest : str) -> None:
+		self.session.toggle_favorite(dest)
 
 
 def app_python() -> str:
