@@ -3,18 +3,20 @@ import os
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
-from PySide6.QtCore import QFileSystemWatcher, QRectF, QSize, Qt, QTimer
-from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPainterPath, QPixmap
-from PySide6.QtWidgets import QFileDialog, QHBoxLayout, QListWidgetItem, QStackedWidget, QVBoxLayout, QWidget
-from qfluentwidgets import BodyLabel, CaptionLabel, ComboBox, FluentIcon, Flyout, FlyoutAnimationType, LineEdit, ListItemDelegate, ListWidget, PrimaryPushButton, ProgressBar, PushButton, SegmentedWidget, SimpleCardWidget, StrongBodyLabel, SubtitleLabel, TogglePushButton, ToolTipFilter, TransparentPushButton, getFont, isDarkTheme, themeColor
+import cv2
+from PySide6.QtCore import QFileSystemWatcher, QItemSelectionModel, QRectF, QSize, Qt, QTimer
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QKeySequence, QPainter, QPainterPath, QPixmap, QShortcut
+from PySide6.QtWidgets import QAbstractItemView, QFileDialog, QHBoxLayout, QListWidgetItem, QVBoxLayout, QWidget
+from qfluentwidgets import BodyLabel, CaptionLabel, ComboBox, FluentIcon, Flyout, FlyoutAnimationType, IndeterminateProgressBar, LineEdit, ListItemDelegate, ListWidget, PrimaryPushButton, ProgressBar, PushButton, SimpleCardWidget, StrongBodyLabel, SubtitleLabel, TogglePushButton, ToolTipFilter, TransparentPushButton, getFont, isDarkTheme, themeColor
 
-from ffstudio.media import media_kind, thumbnail
+from ffstudio.config import PREVIEW_DIR
+from ffstudio.media import media_kind, read_frame, thumbnail, to_pixmap, write_image
 from ffstudio.nsfw import BLOCKED_TITLE, NsfwDialog, show_blocked_bar
 from ffstudio.output_name import AUTOMATIC_TEMPLATE, build_output, unknown_tags
 from ffstudio.pages.setup import SYSTEM_GROUPS, form_row, section_card
-from ffstudio.pages.studio import NameTagsView, SettingsColumn, SourceCard, SourceSelection, elastic, run_tag_values
+from ffstudio.pages.studio import LIVE_IGNORED_GROUPS, NameTagsView, SettingsColumn, SourceCard, SourceSelection, StudioPage, elastic, run_tag_values, tool_button
 from ffstudio.session import OptionStore, Session, explain_error, folder_is_writable
-from ffstudio.widgets import add_edit_button
+from ffstudio.widgets import PreviewView, Splitter, add_edit_button
 
 TARGET_FILTERS = [ ('*.*', 'All files'), ('*.mp4', 'MP4 videos'), ('*.jpg', 'JPG images'), ('*.png', 'PNG images'), ('*.mov', 'MOV videos'), ('*.webm', 'WebM videos') ]
 DEFAULT_TEMPLATE = '{target}_{source}'
@@ -33,6 +35,9 @@ STATUS_LOOK =\
 # a run that ended keeps its row until something the user changes plans the batch again
 FINISHED = ('done', 'blocked', 'failed')
 CLOCK_TAGS = re.compile(r'\{(date|time)\}')
+# the preview runs on the target scaled down to this many pixels on its long side, so it comes back quickly
+PREVIEW_SIZE = 640
+PREVIEW_WIDTH = 340
 
 
 def upgrade_template(template : str) -> str:
@@ -135,6 +140,14 @@ class BatchPage(SourceSelection, QWidget):
 		self.stopped = False
 		# the outputs a run would make right now, items is the same list with the runs that already ended kept in it
 		self.plan_items : List[Dict[str, Any]] = []
+		# runs the user took out of the list, they stay out until restored
+		self.removed : set = set()
+		# the preview of the selected output: the run it shows, and whether one is running or waits for facefusion to be free
+		self.preview_run : Optional[Dict[str, Any]] = None
+		self.preview_running = False
+		self.preview_waiting = False
+		self.preview_frame = None
+		self.removed_count = 0
 		self.load_sources()
 		# the batch has its own processors and options, the system settings from Setup are shared
 		self.store = OptionStore(session, 'batch_options', 'batch_processor_order')
@@ -155,34 +168,45 @@ class BatchPage(SourceSelection, QWidget):
 		self.watch_timer.timeout.connect(lambda: self.refresh_matches(True))
 		self.watcher = QFileSystemWatcher(self)
 		self.watcher.directoryChanged.connect(self.watch_timer.start)
+		self.preview_timer = QTimer(self)
+		self.preview_timer.setSingleShot(True)
+		self.preview_timer.setInterval(700)
+		self.preview_timer.timeout.connect(self.run_preview)
 
 		layout = QVBoxLayout(self)
 		layout.setContentsMargins(24, 16, 24, 16)
 		layout.setSpacing(12)
 		title = QHBoxLayout()
 		title.addWidget(SubtitleLabel('Batch', self))
-		hint = CaptionLabel('Runs every selected face against every target, one output at a time, with the processors and options on the Settings tab. Selected audio goes into every run.', self)
+		hint = CaptionLabel('Runs every selected face against every target, one output at a time, with the processors and options in the Settings panel. Selected audio goes into every run.', self)
 		hint.setTextColor('#707070', '#9a9a9a')
 		title.addWidget(elastic(hint), 1)
-		self.tab_switch = SegmentedWidget(self)
-		self.tab_switch.addItem('batch', 'Batch', lambda: self.show_tab('batch'))
-		self.tab_switch.addItem('settings', 'Settings', lambda: self.show_tab('settings'))
-		self.tab_switch.setCurrentItem('batch')
-		title.addWidget(self.tab_switch)
+		self.settings_button = TogglePushButton(FluentIcon.SETTING, 'Settings', self)
+		self.settings_button.setToolTip('Show or hide the processors and options of the batch on the right')
+		self.settings_button.installEventFilter(ToolTipFilter(self.settings_button))
+		title.addWidget(self.settings_button)
 		layout.addLayout(title)
 
-		self.stack = QStackedWidget(self)
-		layout.addWidget(self.stack, 1)
-		batch_tab = QWidget(self.stack)
+		# the batch on the left, its settings on the right, like the Studio page
+		self.splitter = Splitter(Qt.Orientation.Horizontal, self)
+		layout.addWidget(self.splitter, 1)
+		batch_tab = QWidget(self.splitter)
 		batch_layout = QVBoxLayout(batch_tab)
 		batch_layout.setContentsMargins(0, 0, 0, 0)
 		batch_layout.setSpacing(12)
-		self.stack.addWidget(batch_tab)
-		self.stack.addWidget(self.create_settings_tab())
+		self.splitter.addWidget(batch_tab)
+		self.splitter.addWidget(self.create_settings_column())
+		self.splitter.setStretchFactor(0, 11)
+		self.splitter.setStretchFactor(1, 9)
+		self.splitter.setSizes(session.config.get('batch_split') or [ 1100, 900 ])
+		self.splitter.splitterMoved.connect(lambda *_: self.session.config.set('batch_split', self.splitter.sizes()))
+		self.settings_button.setChecked(session.config.get('batch_settings_open') is not False)
+		self.settings_column.setVisible(self.settings_button.isChecked())
+		self.settings_button.toggled.connect(self.toggle_settings)
 
 		self.source_card = SourceCard(self, 'Source faces', 'Drop face images (or audio for lip sync) here or click to browse\nLeave empty for processors that need no source')
 		self.source_card.browse_filter = 'All files (*)'
-		copy_sources = TransparentPushButton(FluentIcon.COPY, 'Copy from Studio', self.source_card)
+		copy_sources = TransparentPushButton(FluentIcon.COPY, 'Copy Faces from Studio', self.source_card)
 		copy_sources.setToolTip('Add the sources from the Studio page, with their names and which ones are used')
 		copy_sources.installEventFilter(ToolTipFilter(copy_sources))
 		copy_sources.clicked.connect(self.copy_studio_sources)
@@ -209,7 +233,11 @@ class BatchPage(SourceSelection, QWidget):
 		self.output_dir_edit.setText(stored.get('output_dir', os.path.join(session.config.get('output_dir') or '', 'batch')))
 		output_browse = PushButton(FluentIcon.FOLDER, 'Browse', card)
 		output_browse.clicked.connect(lambda: self.browse(self.output_dir_edit))
-		form.addLayout(form_row('Output folder', [ self.output_dir_edit, output_browse ], card))
+		output_open = PushButton(FluentIcon.SHARE, 'Open Folder', card)
+		output_open.setToolTip('Open the output folder in File Explorer')
+		output_open.installEventFilter(ToolTipFilter(output_open))
+		output_open.clicked.connect(self.open_output_folder)
+		form.addLayout(form_row('Output folder', [ self.output_dir_edit, output_browse, output_open ], card))
 		self.output_name_edit = LineEdit(card)
 		self.output_name_edit.setPlaceholderText('File name (automatic)')
 		self.output_name_edit.setClearButtonEnabled(True)
@@ -241,13 +269,32 @@ class BatchPage(SourceSelection, QWidget):
 		self.summary.setTextColor('#707070', '#9a9a9a')
 		header.addWidget(self.summary)
 		header.addStretch(1)
+		self.restore_button = TransparentPushButton(FluentIcon.RETURN, 'Restore removed', matches_card)
+		self.restore_button.setToolTip('Put the outputs you removed back into the list')
+		self.restore_button.installEventFilter(ToolTipFilter(self.restore_button))
+		self.restore_button.clicked.connect(self.restore_removed)
+		header.addWidget(self.restore_button)
+		self.remove_button = TransparentPushButton(FluentIcon.DELETE, 'Remove', matches_card)
+		self.remove_button.setToolTip('Take the selected outputs out of this batch (Delete key). Files already made are kept.')
+		self.remove_button.installEventFilter(ToolTipFilter(self.remove_button))
+		self.remove_button.clicked.connect(self.remove_selected)
+		header.addWidget(self.remove_button)
 		matches_layout.addLayout(header)
 		self.match_list = ListWidget(matches_card)
 		self.match_list.setUniformItemSizes(True)
+		self.match_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
 		self.match_list.setItemDelegate(OutputDelegate(self))
 		self.match_list.itemDoubleClicked.connect(self.show_item_result)
+		self.match_list.itemSelectionChanged.connect(self.on_selection_changed)
+		delete_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Delete), self.match_list)
+		delete_shortcut.setContext(Qt.ShortcutContext.WidgetShortcut)
+		delete_shortcut.activated.connect(self.remove_selected)
 		matches_layout.addWidget(self.match_list, 1)
-		batch_layout.addWidget(matches_card, 1)
+		outputs_row = QHBoxLayout()
+		outputs_row.setSpacing(12)
+		outputs_row.addWidget(matches_card, 1)
+		outputs_row.addWidget(self.create_preview_card(batch_tab))
+		batch_layout.addLayout(outputs_row, 1)
 
 		run_card = SimpleCardWidget(self)
 		run_layout = QHBoxLayout(run_card)
@@ -279,22 +326,54 @@ class BatchPage(SourceSelection, QWidget):
 		session.runner.log.connect(self.on_log)
 		session.runner.finished.connect(self.on_finished)
 		session.content_checked.connect(self.on_content_checked)
-		self.store.value_changed.connect(lambda *_: self.refresh_timer.start())
+		self.store.value_changed.connect(self.on_value_changed)
 		self.store.schema_changed.connect(self.refresh_timer.start)
+		self.store.schema_changed.connect(self.schedule_preview)
 		self.source_card.refresh(self.source_paths)
 		self.refresh_matches()
 
-	def create_settings_tab(self) -> QWidget:
+	def create_settings_column(self) -> QWidget:
 		copy_button = PushButton(FluentIcon.COPY, 'Copy Settings from Studio', self)
 		copy_button.setToolTip('Make the processors and options here the same as on the Studio page. Later changes on either page stay on that page.')
 		copy_button.installEventFilter(ToolTipFilter(copy_button))
 		copy_button.clicked.connect(self.copy_studio_settings)
-		self.settings_column = SettingsColumn(self.store, self, (copy_button,))
+		self.settings_column = SettingsColumn(self.store, self.splitter, (copy_button,))
 		return self.settings_column
 
-	def show_tab(self, tab : str) -> None:
-		self.tab_switch.setCurrentItem(tab)
-		self.stack.setCurrentIndex(1 if tab == 'settings' else 0)
+	def toggle_settings(self, shown : bool) -> None:
+		self.settings_column.setVisible(shown)
+		self.session.config.set('batch_settings_open', shown)
+
+	def create_preview_card(self, parent : QWidget) -> QWidget:
+		card = SimpleCardWidget(parent)
+		card.setFixedWidth(PREVIEW_WIDTH)
+		column = QVBoxLayout(card)
+		column.setContentsMargins(16, 14, 16, 16)
+		header = QHBoxLayout()
+		header.addWidget(StrongBodyLabel('Preview', card))
+		header.addStretch(1)
+		self.live_button = TogglePushButton(FluentIcon.SYNC, 'Auto', card)
+		self.live_button.setToolTip('Make the preview again by itself when a setting, a source or the selected output changes')
+		self.live_button.installEventFilter(ToolTipFilter(self.live_button))
+		self.live_button.setChecked(self.session.config.get('batch_live_preview') is not False)
+		self.live_button.toggled.connect(self.on_live_toggled)
+		header.addWidget(self.live_button)
+		refresh = tool_button(FluentIcon.UPDATE, 'Make the preview now', card)
+		refresh.clicked.connect(lambda: self.schedule_preview(True))
+		header.addWidget(refresh)
+		column.addLayout(header)
+		self.preview_view = PreviewView('Select an output to preview it', card)
+		self.preview_view.setAcceptDrops(False)
+		self.preview_view.setMinimumHeight(180)
+		column.addWidget(self.preview_view, 1)
+		self.preview_bar = IndeterminateProgressBar(card)
+		self.preview_bar.hide()
+		column.addWidget(self.preview_bar)
+		self.preview_label = elastic(CaptionLabel('', card))
+		self.preview_label.setTextColor('#707070', '#9a9a9a')
+		self.preview_label.setWordWrap(True)
+		column.addWidget(self.preview_label)
+		return card
 
 	def copy_studio_settings(self) -> None:
 		order = self.session.config.get(Session.ORDER_KEY) or self.session.processors()
@@ -323,6 +402,135 @@ class BatchPage(SourceSelection, QWidget):
 
 	def on_sources_changed(self, change : str) -> None:
 		self.refresh_matches()
+		self.schedule_preview()
+
+	def on_value_changed(self, dest : str, _ : object) -> None:
+		self.refresh_timer.start()
+		schema = self.store.schema
+		if not schema or schema.options.get(dest, {}).get('group') not in LIVE_IGNORED_GROUPS:
+			self.schedule_preview()
+
+	def open_output_folder(self) -> None:
+		StudioPage.open_path(self.output_dir())
+
+	# the outputs in the list
+
+	def on_selection_changed(self) -> None:
+		item = self.preview_item()
+		if item and (not self.preview_run or self.run_key(item) != self.run_key(self.preview_run)):
+			self.schedule_preview()
+
+	def remove_selected(self) -> None:
+		if self.running:
+			return
+		rows = sorted({ self.match_list.row(list_item) for list_item in self.match_list.selectedItems() })
+		if not rows:
+			self.session.notify.emit('info', 'Nothing selected', 'Click an output in the list first, Ctrl+click or Shift+click for several.')
+			return
+		self.removed.update(self.run_key(self.items[row]) for row in rows if row < len(self.items))
+		self.match_list.clearSelection()
+		self.refresh_matches(True)
+		self.match_list.setCurrentRow(min(rows[0], self.match_list.count() - 1), QItemSelectionModel.SelectionFlag.ClearAndSelect)
+
+	def restore_removed(self) -> None:
+		self.removed.clear()
+		self.refresh_matches(True)
+
+	# preview of the selected output, made on a smaller copy of its target with the settings of the batch
+
+	def on_live_toggled(self, checked : bool) -> None:
+		self.session.config.set('batch_live_preview', checked)
+		if checked:
+			self.schedule_preview()
+
+	def schedule_preview(self, now : bool = False) -> None:
+		if now:
+			self.preview_timer.stop()
+			self.run_preview()
+		elif self.live_button.isChecked():
+			self.preview_timer.start()
+
+	def preview_item(self) -> Optional[Dict[str, Any]]:
+		row = self.match_list.currentRow() if self.match_list.selectedItems() else 0
+		return self.items[row] if 0 <= row < len(self.items) else None
+
+	def showEvent(self, event) -> None:
+		super().showEvent(event)
+		# a preview asked for while the page was hidden is made once it shows
+		if self.preview_waiting or (self.preview_run is None and self.live_button.isChecked()):
+			self.schedule_preview()
+
+	def run_preview(self) -> None:
+		item = self.preview_item()
+		if not item:
+			self.preview_run = None
+			self.preview_view.set_pixmap(QPixmap())
+			self.preview_label.setText('')
+			return
+		# a batch, another page or the last preview is still running, this one follows once facefusion is free
+		if self.running or not self.isVisible() or self.session.runner.is_running():
+			self.preview_waiting = True
+			if self.preview_running or self.session.runner.is_running():
+				self.preview_label.setText('Waiting for FaceFusion to finish…')
+			return
+		self.preview_waiting = False
+		frame = read_frame(item.get('target'), 0)
+		if frame is None:
+			self.preview_label.setText('Could not read %s' % os.path.basename(item.get('target')))
+			return
+		height, width = frame.shape[:2]
+		scale = PREVIEW_SIZE / max(height, width)
+		if scale < 1:
+			frame = cv2.resize(frame, (max(1, int(width * scale)), max(1, int(height * scale))), interpolation = cv2.INTER_AREA)
+		os.makedirs(PREVIEW_DIR, exist_ok = True)
+		frame_path = os.path.join(PREVIEW_DIR, 'batch_frame.png')
+		output_path = os.path.join(PREVIEW_DIR, 'batch_result.png')
+		for path in [ frame_path, output_path ]:
+			if os.path.exists(path):
+				os.remove(path)
+		write_image(frame_path, frame)
+		values = self.run_values()
+		values.update({ 'reference_frame_index': 0, 'trim_frame_start': None, 'trim_frame_end': None, 'workflow_mode': 'auto' })
+		args = [ 'run' ]
+		image_sources = [ path for path in item.get('sources') if media_kind(path) == 'image' ]
+		if image_sources:
+			args += [ '-s' ] + image_sources
+		args += [ '-t', frame_path, '-o', output_path ] + self.session.option_args(values)
+		# a single frame has no sound to sync lips to
+		if '--processors' in args:
+			start = args.index('--processors') + 1
+			args[start:] = [ arg for arg in args[start:] if arg != 'lip_syncer' ]
+		self.preview_run = item
+		self.preview_frame = frame
+		self.preview_running = True
+		self.preview_bar.show()
+		self.preview_bar.start()
+		self.preview_label.setText('Making the preview of %s…' % os.path.basename(item.get('target')))
+		if not self.session.run_facefusion('Batch preview of ' + os.path.basename(item.get('target')), args):
+			self.preview_running = False
+			self.preview_bar.stop()
+			self.preview_bar.hide()
+			self.preview_label.setText('')
+
+	def on_preview_finished(self, exit_code : int, elapsed : float) -> None:
+		self.preview_running = False
+		self.preview_bar.stop()
+		self.preview_bar.hide()
+		output_path = os.path.join(PREVIEW_DIR, 'batch_result.png')
+		name = os.path.basename(self.preview_run.get('target')) if self.preview_run else ''
+		if exit_code == 0 and os.path.exists(output_path):
+			self.preview_view.set_compare(to_pixmap(self.preview_frame), to_pixmap(read_frame(output_path)))
+			self.preview_label.setText('%s  ·  %.1f s  ·  drag the divider to compare' % (name, elapsed))
+		elif exit_code == -1:
+			self.preview_label.setText('Preview stopped')
+		elif self.session.nsfw_block_message(True):
+			self.preview_view.set_pixmap(to_pixmap(self.preview_frame))
+			self.preview_label.setText('⛔ %s in %s, FaceFusion refused to process it' % (BLOCKED_TITLE, name))
+		else:
+			status, _ = self.session.describe_run_error()
+			self.preview_label.setText(status if self.session.run_error() else 'Preview failed (exit code %d), see Console' % exit_code)
+		if self.preview_waiting:
+			QTimer.singleShot(0, self.run_preview)
 
 	def on_clock(self) -> None:
 		template = self.output_name_edit.text() or AUTOMATIC_TEMPLATE
@@ -404,7 +612,9 @@ class BatchPage(SourceSelection, QWidget):
 		# outputs planned earlier in the list count as taken, so {n} keeps counting across the batch
 		taken : set = set()
 		items = []
-		for run in self.runs():
+		runs = self.runs()
+		self.removed_count = sum(1 for run in runs if self.run_key(run) in self.removed)
+		for run in [ run for run in runs if self.run_key(run) not in self.removed ]:
 			path, replaces = build_output(template, self.name_tag_values(run), output_dir, self.output_extension(run), subfolders, taken)
 			key = os.path.normcase(path)
 			name = os.path.relpath(path, output_dir) if subfolders and output_dir else os.path.basename(path)
@@ -427,7 +637,10 @@ class BatchPage(SourceSelection, QWidget):
 		self.refresh_list()
 		faces = len({ item.get('source') for item in self.items if item.get('source') })
 		targets = len({ item.get('target') for item in self.items })
-		self.summary.setText('%d faces × %d targets = %d outputs' % (faces, targets, len(self.items)) if faces else '%d targets' % targets)
+		summary = '%d faces × %d targets = %d outputs' % (faces, targets, len(self.items)) if faces else '%d targets' % targets
+		self.summary.setText(summary + ('  ·  %d removed' % self.removed_count if self.removed_count else ''))
+		self.restore_button.setVisible(bool(self.removed_count))
+		self.remove_button.setEnabled(bool(self.items))
 		self.refresh_name_preview()
 		self.watch_output_folders()
 
@@ -585,6 +798,12 @@ class BatchPage(SourceSelection, QWidget):
 		pass
 
 	def on_finished(self, exit_code : int, elapsed : float) -> None:
+		if self.preview_running:
+			self.on_preview_finished(exit_code, elapsed)
+			return
+		if self.preview_waiting and not self.running:
+			# something else used facefusion, the preview that waited for it goes now
+			QTimer.singleShot(0, self.run_preview)
 		if not self.running or self.current < 0:
 			return
 		index, self.current = self.current, -1
@@ -603,6 +822,9 @@ class BatchPage(SourceSelection, QWidget):
 			# an image gives no reason when it is refused, the nsfw check confirms it once the batch is done
 			item['confirm'] = bool(self.session.nsfw_block_message(media_kind(item.get('target')) == 'image'))
 		self.refresh_item(index)
+		# facefusion prints no progress for an image, so the bar moves on as each output ends
+		total = self.started_count + len(self.queued())
+		self.progress.setValue(int(self.started_count / max(total, 1) * 1000))
 		# let every listener see this run end before the next one starts
 		QTimer.singleShot(0, self.run_next)
 
@@ -616,6 +838,8 @@ class BatchPage(SourceSelection, QWidget):
 			self.confirming = False
 		self.running = False
 		self.on_busy_changed(self.session.runner.is_running(), self.session.task)
+		if self.preview_waiting:
+			QTimer.singleShot(0, self.run_preview)
 		counts = { status: sum(1 for item in self.items if item.get('status') == status) for status in [ 'done', 'blocked', 'failed' ] }
 		# the made files take their names, Saves As and the rows not run yet move on to the next free ones
 		self.refresh_matches(True)

@@ -20,6 +20,10 @@ NAME_EXAMPLES = [ '{target}_{source}', '{source}_on_{target}_{date}', '{target}_
 AUTOMATIC_TEMPLATE = '{target}_{processors}'
 TAG_PATTERN = re.compile(r'\{(\w+)\}')
 INVALID_CHARACTERS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+# stands in for a tag that came out empty, until the separators around it are tidied
+EMPTY_TAG = ''
+# an empty tag with the separators on either side of it, several empty tags in a row count as one
+EMPTY_GAP = re.compile(r'([_\-. ]*)%s(?:[_\-. ]*%s)*([_\-. ]*)' % (EMPTY_TAG, EMPTY_TAG))
 
 
 def unknown_tags(template : str) -> List[str]:
@@ -28,14 +32,28 @@ def unknown_tags(template : str) -> List[str]:
 
 
 def clean_name(name : str) -> str:
-	name = INVALID_CHARACTERS.sub('_', name)
-	# an empty tag leaves its separators behind, "clip__swapper" or "_clip" reads better as "clip_swapper" / "clip"
-	name = re.sub(r'([_\-. ])[_\-. ]*(?=[_\-. ])', '', name)
-	return name.strip('_-. ')
+	# windows drops spaces and dots at the end of a name
+	return INVALID_CHARACTERS.sub('_', name).strip(' .')
+
+
+def close_empty_tags(template : str) -> str:
+	"""an empty tag leaves its separators behind, "clip__swapper" or "_clip" reads better as "clip_swapper" / "clip"
+
+	only the template is tidied, separators typed between two filled tags (like " - ") and the names put in stay as they are
+	"""
+	def close_gap(match : re.Match) -> str:
+		if match.start() == 0 or match.end() == len(template):
+			return ''
+		return match.group(1) or match.group(2)
+	return EMPTY_GAP.sub(close_gap, template)
 
 
 def expand(template : str, values : Dict[str, str], counter : Optional[int] = None) -> str:
 	"""replaces the tags in template, unknown tags stay as typed, {n} becomes counter (or 1)"""
+	def mark_empty(match : re.Match) -> str:
+		tag = match.group(1).lower()
+		return EMPTY_TAG if tag in values and tag != 'n' and not str(values.get(tag) or '') else match.group(0)
+
 	def replace(match : re.Match) -> str:
 		tag = match.group(1).lower()
 		if tag == 'n':
@@ -43,7 +61,7 @@ def expand(template : str, values : Dict[str, str], counter : Optional[int] = No
 		if tag in values:
 			return str(values.get(tag) or '')
 		return match.group(0)
-	return clean_name(TAG_PATTERN.sub(replace, template))
+	return clean_name(TAG_PATTERN.sub(replace, close_empty_tags(TAG_PATTERN.sub(mark_empty, template))))
 
 
 def split_extension(name : str, fallback : str) -> Tuple[str, str]:
