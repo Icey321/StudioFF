@@ -19,6 +19,8 @@ WORKER_RESULT_PREFIX = 'PREVIEW_DONE '
 WORKER_IDLE_MINUTES = 5
 # after this many failures in a row previews go back to starting facefusion.py each time
 WORKER_FAILURE_LIMIT = 2
+# a stopped preview finishes in the background so the models stay loaded, unless it still runs this long after
+WORKER_CANCEL_SECONDS = 30
 
 
 def quote_arg(arg : str) -> str:
@@ -98,7 +100,7 @@ class ProcessRunner(QObject):
 	def stop(self) -> None:
 		if self.worker is not None:
 			self.cancelled = True
-			self.worker.stop()
+			self.worker.cancel()
 		elif self.is_running():
 			self.cancelled = True
 			process = self.process
@@ -189,6 +191,9 @@ class PreviewWorker(QObject):
 		self.buffer = ''
 		self.request_id = 0
 		self.running_id : Optional[int] = None
+		# a stopped preview the worker is still making, and when it was stopped
+		self.cancelled_id : Optional[int] = None
+		self.cancelled_at = 0.0
 		self.failures = 0
 		self.idle_minutes = WORKER_IDLE_MINUTES
 		self.idle_timer = QTimer(self)
@@ -213,7 +218,9 @@ class PreviewWorker(QObject):
 
 	def run(self, python_path : str, facefusion_root : str, environment : Optional[QProcessEnvironment], args : List[str]) -> None:
 		self.idle_timer.stop()
-		if self.key != (python_path, facefusion_root):
+		# a stopped preview that hangs would hold up this one for good
+		stuck = self.cancelled_id is not None and time.monotonic() - self.cancelled_at > WORKER_CANCEL_SECONDS
+		if self.key != (python_path, facefusion_root) or stuck:
 			self.stop()
 		if not self.is_running():
 			self.start(python_path, facefusion_root, environment)
@@ -243,9 +250,18 @@ class PreviewWorker(QObject):
 		self.process.errorOccurred.connect(self.on_error)
 		self.process.start()
 
+	def cancel(self) -> None:
+		"""ends the running preview for its runner at once, the worker finishes it unseen and keeps its models loaded"""
+		if self.running_id is None:
+			return
+		self.cancelled_id, self.running_id = self.running_id, None
+		self.cancelled_at = time.monotonic()
+		self.done.emit(None)
+
 	def stop(self) -> None:
 		"""quits the worker and frees its models, a running preview ends as failed"""
 		self.idle_timer.stop()
+		self.cancelled_id = None
 		if self.process:
 			process, self.process = self.process, None
 			process.finished.disconnect(self.on_finished)
@@ -276,6 +292,11 @@ class PreviewWorker(QObject):
 			result : Any = json.loads(text)
 		except ValueError:
 			return
+		if result.get('id') == self.cancelled_id:
+			self.cancelled_id = None
+			if self.running_id is None and self.idle_minutes > 0:
+				self.idle_timer.start()
+			return
 		if result.get('id') != self.running_id:
 			return
 		self.running_id = None
@@ -295,6 +316,7 @@ class PreviewWorker(QObject):
 		self.process.deleteLater()
 		self.process = None
 		self.idle_timer.stop()
+		self.cancelled_id = None
 		if self.running_id is not None:
 			self.running_id = None
 			self.failures += 1

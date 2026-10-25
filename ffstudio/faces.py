@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Optional
 
 import cv2
 import numpy
-from PySide6.QtCore import QObject, QProcess, Signal
+from PySide6.QtCore import QObject, QProcess, QTimer, Signal
 
 from ffstudio.config import APP_DIR, PREVIEW_DIR
 from ffstudio.environment import create_process_environment, kill_process_tree
@@ -42,6 +42,23 @@ class FaceProbe(QObject):
 		self.waiting : Optional[Dict[str, Any]] = None
 		self.waiting_people : Optional[Dict[str, Any]] = None
 		self.errors : List[str] = []
+		# its models let go after the same time as the preview worker's, and when a whole run needs the memory
+		self.idle_timer = QTimer(self)
+		self.idle_timer.setSingleShot(True)
+		self.idle_timer.timeout.connect(self.stop)
+		session.busy_changed.connect(self.on_busy_changed)
+
+	def is_idle(self) -> bool:
+		return self.running is None and self.waiting is None and self.waiting_people is None
+
+	def start_idle_timer(self) -> None:
+		minutes = int(self.session.config.get('preview_keep_loaded_minutes') or 0)
+		if minutes > 0 and self.is_running() and self.is_idle():
+			self.idle_timer.start(minutes * 60 * 1000)
+
+	def on_busy_changed(self, busy : bool, _ : str) -> None:
+		if busy and not self.session.task_is_preview and self.is_running() and self.is_idle():
+			self.stop()
 
 	def is_running(self) -> bool:
 		return self.process is not None and self.process.state() != QProcess.ProcessState.NotRunning
@@ -74,7 +91,9 @@ class FaceProbe(QObject):
 		else:
 			request, self.waiting = self.waiting, None
 		if request is None:
+			self.start_idle_timer()
 			return
+		self.idle_timer.stop()
 		if self.python_path != self.session.python_path:
 			self.stop()
 		if not self.is_running() and not self.start():
@@ -118,6 +137,7 @@ class FaceProbe(QObject):
 		return True
 
 	def stop(self) -> None:
+		self.idle_timer.stop()
 		self.waiting = None
 		self.waiting_people = None
 		self.running = None

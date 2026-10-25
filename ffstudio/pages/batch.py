@@ -9,17 +9,17 @@ import cv2
 from PySide6.QtCore import QFileSystemWatcher, QItemSelectionModel, QRectF, QSize, Qt, QTimer
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QKeySequence, QPainter, QPainterPath, QPixmap, QShortcut
 from PySide6.QtWidgets import QAbstractItemView, QFileDialog, QHBoxLayout, QListWidgetItem, QVBoxLayout, QWidget
-from qfluentwidgets import BodyLabel, CaptionLabel, ComboBox, FluentIcon, Flyout, FlyoutAnimationType, LineEdit, ListItemDelegate, ListWidget, PrimaryPushButton, ProgressBar, PushButton, SimpleCardWidget, StrongBodyLabel, SubtitleLabel, TogglePushButton, ToggleToolButton, ToolTipFilter, TransparentPushButton, getFont, isDarkTheme, themeColor
+from qfluentwidgets import BodyLabel, CaptionLabel, ComboBox, FluentIcon, Flyout, FlyoutAnimationType, LineEdit, ListItemDelegate, ListWidget, MessageBox, PrimaryPushButton, ProgressBar, PushButton, SimpleCardWidget, Slider, StrongBodyLabel, SubtitleLabel, TogglePushButton, ToggleToolButton, ToolTipFilter, TransparentPushButton, getFont, isDarkTheme, themeColor
 
 from ffstudio.config import APP_DIR, PREVIEW_DIR
 from ffstudio.faces import FACE_GROUPS, MASK_GROUPS, FaceProbe, describe_faces, describe_mask, face_tag, read_mask
-from ffstudio.media import GIF_EXTENSIONS, extension, media_kind, read_frame, thumbnail, to_pixmap, write_image
+from ffstudio.media import GIF_EXTENSIONS, VideoReader, extension, format_timecode, media_kind, read_frame, thumbnail, to_pixmap, write_image
 from ffstudio.nsfw import BLOCKED_TITLE, NsfwDialog, show_blocked_bar
 from ffstudio.output_name import AUTOMATIC_TEMPLATE, build_output, unknown_tags
 from ffstudio.pages.setup import SYSTEM_GROUPS, form_row, section_card
 from ffstudio.pages.studio import LIVE_IGNORED_GROUPS, NameTagsView, SettingsColumn, SourceCard, SourceSelection, StudioPage, elastic, estimated_progress, preview_step_floor, run_tag_values, tool_button
 from ffstudio.session import OptionStore, Session, explain_error, folder_is_writable
-from ffstudio.widgets import PreviewView, Splitter, add_edit_button
+from ffstudio.widgets import PreviewView, Splitter, add_edit_button, guard_wheel
 
 TARGET_FILTERS = [ ('*.*', 'All files'), ('*.mp4', 'MP4 videos'), ('*.jpg', 'JPG images'), ('*.png', 'PNG images'), ('*.mov', 'MOV videos'), ('*.webm', 'WebM videos') ]
 DEFAULT_TEMPLATE = '{target}_{source}'
@@ -42,6 +42,8 @@ CLOCK_TAGS = re.compile(r'\{(date|time)\}')
 PREVIEW_SIZE = 640
 PREVIEW_WIDTH = 340
 PREVIEW_MIN_WIDTH = 280
+# at most this many removed runs are kept across restarts
+REMOVED_LIMIT = 2000
 
 
 def upgrade_template(template : str) -> str:
@@ -55,6 +57,8 @@ class OutputDelegate(ListItemDelegate):
 	ROW_HEIGHT = 52
 	THUMB_HEIGHT = 40
 	THUMB_MAX_WIDTH = 72
+	# the names get at least this much of a row before thumbnails are left out
+	MIN_TEXT_WIDTH = 200
 	# enough for every row of a long list, the oldest go first
 	CACHE_LIMIT = 500
 
@@ -121,21 +125,36 @@ class OutputDelegate(ListItemDelegate):
 		x = rect.x() + 28
 		y = rect.y() + (rect.height() - self.THUMB_HEIGHT) / 2
 		made = item.get('status') == 'done' and os.path.isfile(item.get('output'))
+		# a narrow list leaves out the source thumbnails, then the target's, so the names keep room to show
+		sources = item.get('sources')
+		room = rect.right() - x - 8
+		show_sources = room - (self.THUMB_MAX_WIDTH + 6) - len(sources) * (self.THUMB_HEIGHT + 6) >= self.MIN_TEXT_WIDTH
+		show_target = room - (self.THUMB_MAX_WIDTH + 6) >= self.MIN_TEXT_WIDTH
 		# the target gets a wide box and each source a square one, so the names line up from row to row
-		x += self.draw_thumbnail(painter, item.get('output') if made else item.get('target'), x, y, self.THUMB_MAX_WIDTH) + 6
-		for path in item.get('sources'):
+		if show_target:
+			x += self.draw_thumbnail(painter, item.get('output') if made else item.get('target'), x, y, self.THUMB_MAX_WIDTH) + 6
+		for path in sources if show_sources else []:
 			x += self.draw_thumbnail(painter, path, x, y, self.THUMB_HEIGHT) + 6
 		x += 8
+		# the output name on its own line, so a narrow list still shows most of it, what it is made from below
+		name, detail = self.page.item_lines(item)
+		width = int(rect.right() - x)
+		middle = rect.y() + rect.height() / 2
 		font = getFont(13)
 		painter.setFont(font)
 		painter.setPen(QColor(255, 255, 255) if isDarkTheme() else QColor(0, 0, 0))
-		text = QFontMetrics(font).elidedText(words + self.page.item_text(item), Qt.TextElideMode.ElideRight, int(rect.right() - x))
-		painter.drawText(QRectF(x, rect.y(), rect.right() - x, rect.height()), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, text)
+		painter.drawText(QRectF(x, middle - 21, width, 21), Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignLeft, QFontMetrics(font).elidedText(name, Qt.TextElideMode.ElideMiddle, width))
+		font = getFont(12)
+		painter.setFont(font)
+		painter.setPen(QColor(dark if isDarkTheme() else light) if words and light else QColor('#9a9a9a' if isDarkTheme() else '#707070'))
+		painter.drawText(QRectF(x, middle + 1, width, 20), Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft, QFontMetrics(font).elidedText(words + detail, Qt.TextElideMode.ElideRight, width))
 		painter.restore()
 
 
 class BatchPage(SourceSelection, QWidget):
 	SOURCE_KEYS = ('batch_source_paths', 'batch_unused_source_paths', 'batch_source_names')
+	# Batch makes whole files, there is no timeline frame to name them after
+	TAG_DESCRIPTIONS = { 'frame': 'Always 0 here, Batch makes whole videos rather than one frame' }
 
 	def __init__(self, session : Session, parent : Optional[QWidget] = None) -> None:
 		super().__init__(parent)
@@ -153,8 +172,6 @@ class BatchPage(SourceSelection, QWidget):
 		self.stopped = False
 		# the outputs a run would make right now, items is the same list with the runs that already ended kept in it
 		self.plan_items : List[Dict[str, Any]] = []
-		# runs the user took out of the list, they stay out until restored
-		self.removed : set = set()
 		# the preview of the selected output: the run it shows, and whether one is running or waits for facefusion to be free
 		self.preview_run : Optional[Dict[str, Any]] = None
 		self.preview_running = False
@@ -165,6 +182,13 @@ class BatchPage(SourceSelection, QWidget):
 		# the batch has its own processors and options, the system settings from Setup are shared
 		self.store = OptionStore(session, 'batch_options', 'batch_processor_order')
 		stored = session.config.get('batch') or {}
+		# runs the user took out of the list, they stay out until restored, also after a restart
+		self.removed : set = { (tuple(sources), target) for sources, target in stored.get('removed') or [] }
+		# the frame of each video target the preview shows, picked on the timeline under the preview
+		self.preview_frames : Dict[str, int] = {}
+		self.timeline_target = ''
+		self.timeline_reader : Optional[VideoReader] = None
+		self.preview_frame_key : Optional[Tuple[str, int]] = None
 		# typing and setting changes replan the outputs once they settle
 		self.refresh_timer = QTimer(self)
 		self.refresh_timer.setSingleShot(True)
@@ -232,7 +256,6 @@ class BatchPage(SourceSelection, QWidget):
 		self.settings_button.toggled.connect(self.toggle_settings)
 
 		self.source_card = SourceCard(self, 'Source faces', 'Drop face images (or audio for lip sync) here or click to browse\nLeave empty for processors that need no source')
-		self.source_card.browse_filter = 'All files (*)'
 		copy_sources = TransparentPushButton(FluentIcon.COPY, 'Copy Faces from Studio', self.source_card)
 		copy_sources.setToolTip('Add the sources from the Studio page, with their names and which ones are used')
 		copy_sources.installEventFilter(ToolTipFilter(copy_sources))
@@ -310,6 +333,8 @@ class BatchPage(SourceSelection, QWidget):
 		matches_layout.addLayout(header)
 		self.match_list = ListWidget(matches_card)
 		self.match_list.setUniformItemSizes(True)
+		# the rows shorten their text to fit, a sideways scroll bar would only hide the end of the names
+		self.match_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 		self.match_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
 		self.match_list.setItemDelegate(OutputDelegate(self))
 		self.match_list.itemDoubleClicked.connect(self.show_item_result)
@@ -417,6 +442,27 @@ class BatchPage(SourceSelection, QWidget):
 		self.preview_view.setAcceptDrops(False)
 		self.preview_view.setMinimumHeight(180)
 		column.addWidget(self.preview_view, 1)
+		# a video target is previewed on the frame picked here, the batch itself still makes the whole video
+		self.timeline = QWidget(card)
+		timeline_row = QHBoxLayout(self.timeline)
+		timeline_row.setContentsMargins(0, 0, 0, 0)
+		timeline_row.setSpacing(8)
+		self.preview_slider = Slider(Qt.Orientation.Horizontal, self.timeline)
+		self.preview_slider.setMinimumWidth(80)
+		self.preview_slider.setToolTip('The frame of this video the preview shows')
+		self.preview_slider.installEventFilter(ToolTipFilter(self.preview_slider))
+		self.preview_slider.valueChanged.connect(self.on_preview_frame_moved)
+		guard_wheel(self.preview_slider)
+		self.preview_time_label = CaptionLabel('', self.timeline)
+		self.preview_time_label.setTextColor('#707070', '#9a9a9a')
+		timeline_row.addWidget(self.preview_slider, 1)
+		timeline_row.addWidget(self.preview_time_label)
+		self.timeline.hide()
+		column.addWidget(self.timeline)
+		self.scrub_timer = QTimer(self)
+		self.scrub_timer.setSingleShot(True)
+		self.scrub_timer.setInterval(40)
+		self.scrub_timer.timeout.connect(self.show_scrubbed_frame)
 		# the bar and its Stop button only show while a preview runs
 		self.preview_row = QWidget(card)
 		bar_row = QHBoxLayout(self.preview_row)
@@ -443,6 +489,18 @@ class BatchPage(SourceSelection, QWidget):
 
 	def copy_studio_settings(self) -> None:
 		order = self.session.config.get(Session.ORDER_KEY) or self.session.processors()
+		schema = self.session.schema
+		# the system settings are shared already, only the batch's own options would change
+		changed = [ dest for dest, value in self.session.values.items() if (not schema or schema.options.get(dest, {}).get('group') not in SYSTEM_GROUPS) and self.store.values.get(dest) != value ]
+		if not changed and list(order) == list(self.session.config.get(self.store.ORDER_KEY) or order):
+			self.session.notify.emit('info', 'Already the same', 'Batch already uses the same processors and options as Studio.')
+			return
+		difference = ('Batch has %d option%s set differently from Studio.' % (len(changed), '' if len(changed) == 1 else 's')) if changed else 'Batch runs the processors in another order than Studio.'
+		box = MessageBox('Replace the Batch settings?', difference + ' Copying makes Batch use the processors and options of the Studio page, and the Batch settings you have now are lost.', self.window())
+		box.yesButton.setText('Copy Settings')
+		box.cancelButton.setText('Cancel')
+		if not box.exec():
+			return
 		self.store.copy_from(self.session.values, order)
 		self.session.notify.emit('success', 'Settings copied from Studio', 'Batch now uses the same processors and options as Studio. Later changes on either page stay on that page.')
 
@@ -485,6 +543,7 @@ class BatchPage(SourceSelection, QWidget):
 	# the outputs in the list
 
 	def on_selection_changed(self) -> None:
+		self.sync_timeline()
 		item = self.preview_item()
 		if item and (not self.preview_run or self.run_key(item) != self.run_key(self.preview_run)):
 			self.schedule_preview()
@@ -536,9 +595,60 @@ class BatchPage(SourceSelection, QWidget):
 		self.faces_timer.stop()
 		self.face_probe.stop()
 
+	def sync_timeline(self) -> None:
+		"""shows the timeline for a video target, on the frame last picked for it"""
+		item = self.preview_item()
+		target = item.get('target') if item else ''
+		if target == self.timeline_target:
+			return
+		self.timeline_target = target
+		if self.timeline_reader:
+			self.timeline_reader.release()
+			self.timeline_reader = None
+		if target and media_kind(target) == 'video':
+			self.timeline_reader = VideoReader(target)
+		count = self.timeline_reader.frame_count if self.timeline_reader else 0
+		self.timeline.setVisible(count > 1)
+		self.preview_slider.blockSignals(True)
+		self.preview_slider.setRange(0, max(0, count - 1))
+		self.preview_slider.setValue(min(self.preview_frames.get(target, 0), max(0, count - 1)))
+		self.preview_slider.blockSignals(False)
+		self.refresh_time_label()
+
+	def refresh_time_label(self) -> None:
+		index = self.preview_slider.value()
+		fps = self.timeline_reader.fps if self.timeline_reader else 0.0
+		self.preview_time_label.setText('%s · #%d' % (format_timecode(index, fps), index))
+
+	def preview_frame_index(self, target : str) -> int:
+		return self.preview_frames.get(target, 0) if media_kind(target) == 'video' else 0
+
+	def on_preview_frame_moved(self, index : int) -> None:
+		if self.timeline_target:
+			self.preview_frames[self.timeline_target] = index
+		self.refresh_time_label()
+		self.scrub_timer.start()
+
+	def show_scrubbed_frame(self) -> None:
+		"""the picked frame shows at once, its preview follows when Auto is on"""
+		item = self.preview_item()
+		if not item or item.get('target') != self.timeline_target:
+			return
+		frame = self.scaled_frame(item)
+		if frame is None:
+			return
+		self.preview_view.set_pixmap(to_pixmap(frame))
+		self.preview_view.set_faces([])
+		self.preview_frame = frame
+		self.preview_frame_key = (item.get('target'), self.preview_frame_index(item.get('target')))
+		self.schedule_preview()
+		self.schedule_face_scan()
+
 	def scaled_frame(self, item : Dict[str, Any]) -> Optional[Any]:
-		"""the first frame of the item's target, scaled down to the preview size"""
-		frame = read_frame(item.get('target'), 0)
+		"""the picked frame of the item's target (the first one until a frame is picked), scaled down to the preview size"""
+		target = item.get('target')
+		index = self.preview_frame_index(target)
+		frame = self.timeline_reader.read(index) if self.timeline_reader and target == self.timeline_target else read_frame(target, index)
 		if frame is None:
 			return None
 		height, width = frame.shape[:2]
@@ -585,10 +695,12 @@ class BatchPage(SourceSelection, QWidget):
 		if image_sources:
 			args += [ '-s' ] + image_sources
 		args += [ '-t', frame_path, '-o', output_path ] + self.session.option_args(values)
-		# another target shows its frame right away, so the faces drawn over it line up while the preview runs
-		if not self.preview_run or self.preview_run.get('target') != item.get('target'):
+		# another target or frame shows right away, so the faces drawn over it line up while the preview runs
+		frame_key = (item.get('target'), self.preview_frame_index(item.get('target')))
+		if frame_key != self.preview_frame_key:
 			self.preview_view.set_pixmap(to_pixmap(frame))
 			self.preview_view.set_faces([])
+			self.preview_frame_key = frame_key
 		self.preview_run = item
 		self.preview_frame = frame
 		self.preview_running = True
@@ -611,9 +723,16 @@ class BatchPage(SourceSelection, QWidget):
 		expected = self.session.expected_preview_seconds(self.preview_estimate)
 		ratio = estimated_progress(elapsed, expected, self.preview_floor)
 		left = expected - elapsed
-		name = os.path.basename(self.preview_run.get('target')) if self.preview_run else ''
+		name = self.preview_name()
 		self.preview_bar.setValue(int(ratio * 1000))
 		self.preview_label.setText('Making the preview of %s…  %d%%' % (name, ratio * 100) + ('  ·  about %d s left' % round(left) if left >= 1 and self.preview_floor < 0.9 else ''))
+
+	def preview_name(self) -> str:
+		"""the previewed target, with the frame when it is a video"""
+		if not self.preview_run:
+			return ''
+		target = self.preview_run.get('target')
+		return os.path.basename(target) + (' #%d' % self.preview_frame_index(target) if media_kind(target) == 'video' else '')
 
 	def stop_preview(self) -> None:
 		if not self.preview_running:
@@ -628,7 +747,7 @@ class BatchPage(SourceSelection, QWidget):
 		self.preview_clock.stop()
 		self.preview_row.hide()
 		output_path = os.path.join(PREVIEW_DIR, 'batch_result.png')
-		name = os.path.basename(self.preview_run.get('target')) if self.preview_run else ''
+		name = self.preview_name()
 		if exit_code == 0 and os.path.exists(output_path):
 			self.session.remember_preview_seconds(self.preview_estimate, elapsed)
 			self.preview_view.set_compare(to_pixmap(self.preview_frame), to_pixmap(read_frame(output_path)))
@@ -679,14 +798,17 @@ class BatchPage(SourceSelection, QWidget):
 		mask = self.mask_button.isChecked()
 		sources = [ path for path in item.get('sources') if media_kind(path) == 'image' ]
 		args = self.session.option_args(self.run_values(), FACE_GROUPS + (MASK_GROUPS if mask else []))
-		self.face_probe.scan(frame, None, sources, args, tag = ('batch', self.run_key(item)), mask = mask)
+		self.face_probe.scan(frame, None, sources, args, tag = self.faces_tag(item), mask = mask)
+
+	def faces_tag(self, item : Dict[str, Any]) -> Tuple:
+		return 'batch', self.run_key(item), self.preview_frame_index(item.get('target'))
 
 	def on_faces_loading(self, loading : bool) -> None:
 		if loading and self.overlays_on():
 			self.faces_label.setText('Loading the face models…')
 
 	def on_faces_scanned(self, result : dict) -> None:
-		if not self.overlays_on() or not self.preview_run or result.get('tag') != ('batch', self.run_key(self.preview_run)):
+		if not self.overlays_on() or not self.preview_run or result.get('tag') != self.faces_tag(self.preview_run):
 			return
 		faces = (result.get('faces') or []) if self.faces_button.isChecked() else []
 		mask = read_mask(result.get('mask')) if self.mask_button.isChecked() else None
@@ -816,6 +938,7 @@ class BatchPage(SourceSelection, QWidget):
 		self.remove_button.setEnabled(bool(self.items))
 		self.refresh_name_preview()
 		self.watch_output_folders()
+		self.sync_timeline()
 
 	def refresh_name_preview(self) -> None:
 		"""what the next run would call its files, which moves on once a run made the files before"""
@@ -850,10 +973,15 @@ class BatchPage(SourceSelection, QWidget):
 		result = self.check_results.get(item.get('target'))
 		return 'skip' if result and result.get('blocked') else ''
 
-	def item_text(self, item : Dict[str, Any]) -> str:
+	def item_lines(self, item : Dict[str, Any]) -> Tuple[str, str]:
+		"""the output name, and what it is made from with why it failed"""
 		reason = item.get('reason') if self.item_status(item) == 'failed' else ''
 		sources = ''.join('  +  ' + self.source_name(path) for path in item.get('sources'))
-		return '%s  ←  %s%s' % (item.get('name'), os.path.basename(item.get('target')), sources) + ('  ·  ' + reason if reason else '')
+		return item.get('name'), '←  %s%s' % (os.path.basename(item.get('target')), sources) + ('  ·  ' + reason if reason else '')
+
+	def item_text(self, item : Dict[str, Any]) -> str:
+		name, detail = self.item_lines(item)
+		return '%s  %s' % (name, detail)
 
 	def item_tooltip(self, item : Dict[str, Any]) -> str:
 		words = STATUS_LOOK.get(self.item_status(item), ('', '', None, None))[1]
@@ -889,7 +1017,8 @@ class BatchPage(SourceSelection, QWidget):
 			'target_pattern': self.target_filter.currentData(),
 			'output_dir': self.output_dir(),
 			'template': self.output_name_edit.text().strip(),
-			'subfolders': self.subfolders_button.isChecked()
+			'subfolders': self.subfolders_button.isChecked(),
+			'removed': [ [ list(sources), target ] for sources, target in list(self.removed)[:REMOVED_LIMIT] ]
 		})
 
 	# running, one facefusion run per output so a refused target only fails its own output

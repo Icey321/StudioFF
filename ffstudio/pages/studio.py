@@ -10,7 +10,7 @@ import cv2
 from PySide6.QtCore import QPoint, QSize, Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QFileDialog, QGridLayout, QHBoxLayout, QSizePolicy, QVBoxLayout, QWidget
-from qfluentwidgets import Action, BodyLabel, CaptionLabel, FlowLayout, FluentIcon, Flyout, FlyoutAnimationType, FlyoutViewBase, IndeterminateProgressBar, LineEdit, PrimaryPushButton, ProgressBar, PushButton, RoundMenu, SearchLineEdit, SegmentedWidget, SimpleCardWidget, SingleDirectionScrollArea, Slider, StrongBodyLabel, SubtitleLabel, TogglePushButton, ToolTipFilter, TransparentPushButton, TransparentToolButton
+from qfluentwidgets import Action, BodyLabel, CaptionLabel, FlowLayout, FluentIcon, Flyout, FlyoutAnimationType, FlyoutViewBase, IndeterminateProgressBar, LineEdit, PrimaryPushButton, ProgressBar, PushButton, RoundMenu, ScrollArea, SearchLineEdit, SegmentedWidget, SimpleCardWidget, SingleDirectionScrollArea, Slider, StrongBodyLabel, SubtitleLabel, TogglePushButton, ToolTipFilter, TransparentPushButton, TransparentToolButton
 
 from ffstudio.config import APP_DIR, PREVIEW_DIR
 from ffstudio.face_mapping import FACE_PROCESSORS, FRAME_PROCESSORS, LEAVE, PEOPLE_FILE, SELECTED, FaceMappingCard, box_overlap, is_mapped, merge_people, people_dir, person_color, person_name, plan_passes
@@ -19,7 +19,7 @@ from ffstudio.media import GIF_EXTENSIONS, VideoReader, extension, format_timeco
 from ffstudio.nsfw import BLOCKED_STATUS, NsfwDialog, describe_result, show_blocked_bar
 from ffstudio.option_panel import FavoritesPanel, OptionPanel
 from ffstudio.output_name import AUTOMATIC_TEMPLATE, NAME_EXAMPLES, NAME_TAGS, build_output, build_output_path, unknown_tags
-from ffstudio.session import Session, folder_is_writable
+from ffstudio.session import CONTENT_RESULT_PREFIX, Session, folder_is_writable
 from ffstudio.widgets import PreviewView, ProcessorArea, ProcessorButton, Splitter, Thumbnail, add_edit_button, collect_drop_paths, guard_wheel
 
 STUDIO_GROUPS = [ 'face_selector', 'face_masker', 'face_detector', 'face_aligner', 'face_tracker', 'output_creation', 'frame_extraction', 'frame_distribution', 'voice_extractor', 'workflow' ]
@@ -95,6 +95,16 @@ class StripScroll(SingleDirectionScrollArea):
 	def resizeEvent(self, event) -> None:
 		super().resizeEvent(event)
 		QTimer.singleShot(0, self.fit)
+
+
+class ShrinkingColumn(QVBoxLayout):
+	"""a column in a scroll area that only scrolls once its cards are at their smallest
+
+	a scroll area gives a column with wrapped text the height that text prefers, this one gets the height of the scroll area
+	"""
+
+	def hasHeightForWidth(self) -> bool:
+		return False
 
 
 def run_tag_values(session : Session) -> Dict[str, str]:
@@ -214,8 +224,8 @@ class SourceCard(SimpleCardWidget):
 		layout = QVBoxLayout(self)
 		layout.setContentsMargins(16, 12, 12, 14)
 		layout.setSpacing(8)
-		# the filter the file picker opens on
-		self.browse_filter = SOURCE_FILTERS[0]
+		# the filter the file picker opens on, all files so nothing a source could be is hidden
+		self.browse_filter = SOURCE_FILTERS[-1]
 		self.header = header = card_header(title, self)
 		self.count_label = elastic(CaptionLabel('', self))
 		self.count_label.installEventFilter(ToolTipFilter(self.count_label))
@@ -592,7 +602,7 @@ class NameTagsView(FlyoutViewBase):
 			button.setToolTip('Insert {%s} at the cursor' % tag)
 			button.installEventFilter(ToolTipFilter(button))
 			button.clicked.connect(lambda _ = False, text = '{%s}' % tag: self.insert(text))
-			label = CaptionLabel(description, self)
+			label = CaptionLabel(getattr(page, 'TAG_DESCRIPTIONS', {}).get(tag, description), self)
 			label.setWordWrap(True)
 			value = CaptionLabel('1, 2, 3 …' if tag == 'n' else values.get(tag) or '(empty)', self)
 			value.setTextColor('#707070', '#9a9a9a')
@@ -806,6 +816,9 @@ class StudioPage(SourceSelection, QWidget):
 		self.preview_started = 0.0
 		self.preview_floor = 0.0
 		self.preview_estimate = 'preview_seconds'
+		# a face mapping preview runs several steps on one clock, timed apart from single previews
+		self.preview_single_estimate = 'preview_seconds'
+		self.preview_steps = 1
 		# face detection on the shown frame, rerun shortly after the frame or a face setting changes
 		self.face_probe = FaceProbe(session, self)
 		self.face_probe.scanned.connect(self.on_faces_scanned)
@@ -837,10 +850,17 @@ class StudioPage(SourceSelection, QWidget):
 		self.splitter = Splitter(Qt.Orientation.Horizontal, self)
 		root.addWidget(self.splitter, 1)
 
-		# left column: media
-		left_widget = QWidget(self.splitter)
-		left_widget.setMinimumWidth(480)
-		left = QVBoxLayout(left_widget)
+		# left column: media, it scrolls when the window is too short for every card at its smallest
+		left_scroll = ScrollArea(self.splitter)
+		left_scroll.setWidgetResizable(True)
+		left_scroll.enableTransparentBackground()
+		left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+		left_scroll.setMinimumWidth(480)
+		left_widget = QWidget()
+		left_widget.setObjectName('studioMedia')
+		left_widget.setStyleSheet('#studioMedia { background: transparent }')
+		left_scroll.setWidget(left_widget)
+		left = ShrinkingColumn(left_widget)
 		left.setContentsMargins(0, 0, 0, 0)
 		left.setSpacing(12)
 		self.source_card = SourceCard(self)
@@ -851,7 +871,7 @@ class StudioPage(SourceSelection, QWidget):
 		left.addWidget(self.target_card, 1)
 		left.addWidget(self.mapping_card)
 		left.addWidget(self.create_output_card())
-		self.splitter.addWidget(left_widget)
+		self.splitter.addWidget(left_scroll)
 
 		# right column: search, processors + options
 		self.settings_column = SettingsColumn(session, self.splitter, expansion_key = 'studio_groups_expanded')
@@ -1297,25 +1317,41 @@ class StudioPage(SourceSelection, QWidget):
 			self.progress_bar.setValue(0)
 			self.progress_bar.resume()
 		if busy and self.preview_mode and self.pending_output:
-			self.preview_started = time.monotonic()
-			self.preview_floor = 0.0
-			self.preview_estimate = self.session.preview_key('preview_seconds')
+			# the later steps of a face mapping preview go on with the clock of its first step
+			if not (self.chain and self.chain.get('index') > 0):
+				self.preview_started = time.monotonic()
+				self.preview_floor = 0.0
+				self.preview_single_estimate = self.session.preview_key('preview_seconds')
+				self.preview_steps = len(self.chain.get('steps')) if self.chain else 1
+				self.preview_estimate = self.preview_single_estimate + ('_mapped%d' % self.preview_steps if self.preview_steps > 1 else '')
 			self.preview_clock.start()
 			self.tick_preview_progress()
-		elif self.preview_clock.isActive():
-			# show the bar full for a moment so a finished preview does not look cut off
+		elif self.preview_clock.isActive() and self.chain and self.preview_mode:
+			# between the steps of a face mapping preview the bar waits where it is
 			self.preview_clock.stop()
-			self.target_card.set_preview_progress(1.0)
-			QTimer.singleShot(400, lambda: None if self.preview_clock.isActive() else self.target_card.set_preview_progress(None))
+		elif self.preview_clock.isActive():
+			self.end_preview_progress()
 		else:
 			self.target_card.set_preview_progress(None)
 		if not busy and self.auto_check_pending:
 			QTimer.singleShot(0, self.auto_check_content)
 
+	def end_preview_progress(self) -> None:
+		# show the bar full for a moment so a finished preview does not look cut off
+		self.preview_clock.stop()
+		self.target_card.set_preview_progress(1.0)
+		QTimer.singleShot(400, lambda: None if self.preview_clock.isActive() else self.target_card.set_preview_progress(None))
+
+	def expected_preview_seconds(self) -> float:
+		"""until a face mapping preview of this many steps was timed, each step counts as a single preview"""
+		if self.preview_steps > 1 and not self.session.config.get(self.preview_estimate):
+			return self.preview_steps * self.session.expected_preview_seconds(self.preview_single_estimate)
+		return self.session.expected_preview_seconds(self.preview_estimate)
+
 	def tick_preview_progress(self) -> None:
 		"""moves the preview bar along the time previews usually take, slowing down near the end instead of stopping"""
 		elapsed = time.monotonic() - self.preview_started
-		expected = self.session.expected_preview_seconds(self.preview_estimate)
+		expected = self.expected_preview_seconds()
 		ratio = estimated_progress(elapsed, expected, self.preview_floor)
 		left = expected - elapsed
 		text = '%d%%' % (ratio * 100) + ('  ·  about %d s left' % round(left) if left >= 1 and self.preview_floor < 0.9 else '')
@@ -1330,10 +1366,12 @@ class StudioPage(SourceSelection, QWidget):
 			self.progress_bar.setValue(int(ratio * 1000))
 
 	def on_log(self, line : str) -> None:
-		if self.session.task and not self.session.task_is_preview and not line.startswith('Traceback'):
+		# the nsfw check's result lines are data for the session, not something to read
+		if self.session.task and not self.session.task_is_preview and not line.startswith(('Traceback', CONTENT_RESULT_PREFIX)):
 			self.detail_label.setText(line[-110:])
-		# the last steps of a preview move its bar forward
-		if self.preview_clock.isActive():
+		# the last steps of a preview move its bar forward, of a face mapping preview only those of its last step
+		last_step = not self.chain or self.chain.get('index') == len(self.chain.get('steps')) - 1
+		if self.preview_clock.isActive() and last_step:
 			self.preview_floor = preview_step_floor(line, self.preview_floor)
 			self.tick_preview_progress()
 
@@ -1354,6 +1392,8 @@ class StudioPage(SourceSelection, QWidget):
 			# the whole face mapping run took this long, not only its last step
 			elapsed = time.monotonic() - chain.get('started')
 			self.end_chain()
+			if self.preview_mode and self.target_card.progress_bar.isVisible():
+				self.end_preview_progress()
 			if kind == 'compose' and exit_code not in [ 0, -1 ]:
 				if not self.preview_mode:
 					self.progress_bar.error()
@@ -1363,7 +1403,8 @@ class StudioPage(SourceSelection, QWidget):
 				return
 		if exit_code == 0 and os.path.exists(output_path):
 			if self.preview_mode:
-				self.session.remember_preview_seconds(self.preview_estimate, elapsed)
+				# timed like the bar, a face mapping preview from its first step rather than from finding the people
+				self.session.remember_preview_seconds(self.preview_estimate, time.monotonic() - self.preview_started)
 			self.release_result_reader()
 			self.last_output = output_path
 			self.result_info = self.pending_info
@@ -1640,8 +1681,10 @@ class StudioPage(SourceSelection, QWidget):
 			chain['located'].append(item)
 			self.locate_next()
 			return
-		self.status_label.setText('Face mapping · finding %s' % item.get('label'))
-		self.detail_label.setText('')
+		# a preview leaves the run bar as it was, like a preview without face mapping
+		if not chain.get('preview'):
+			self.status_label.setText('Face mapping · finding %s' % item.get('label'))
+			self.detail_label.setText('')
 		frame = read_frame(chain.get('target'), item.get('frame') if chain.get('video') else 0)
 		if frame is None:
 			self.fail_chain('Could not read the reference frame of %s.' % item.get('label'))
