@@ -19,7 +19,7 @@ from ffstudio.environment import is_newer_version
 from ffstudio.face_mapping import SELECTED, pass_distance, plan_passes
 from ffstudio.media import VideoReader
 from ffstudio.output_name import build_output, build_output_path, clean_name, expand, unknown_tags
-from ffstudio.runner import ProcessRunner
+from ffstudio.runner import PreviewWorker, ProcessRunner
 from ffstudio.schema import Schema, build_option_args
 from ffstudio.updater import APP_ROOT, RETIRED_FILES, download_release
 
@@ -192,6 +192,24 @@ class ProgressParsingTest(unittest.TestCase):
 		self.assertEqual(progress, [])
 		runner.flush_buffer(final = True)
 		self.assertEqual(progress, [ 0.25 ])
+
+
+class WorkerOutputTest(unittest.TestCase):
+	def test_output_and_result_split(self) -> None:
+		worker = PreviewWorker()
+		worker.process = mock.Mock()
+		worker.running_id = 1
+		output, done = [], []
+		worker.output.connect(output.append)
+		worker.done.connect(done.append)
+		bar = '\x1b[Gprocessing \x1b[94m==\x1b[90m==\x1b[0m 50%\x1b[K'
+		# the result line arrives in two pieces, right after a progress bar
+		for chunk in [ 'log line\n' + bar, 'PREV', 'IEW_DONE {"id": 1, "code": 0}\nidle talk\n' ]:
+			worker.process.readAllStandardOutput.return_value.data.return_value = chunk.encode()
+			worker.on_output()
+		self.assertEqual(''.join(output), 'log line\n' + bar)
+		self.assertEqual(done, [ 0 ])
+		worker.idle_timer.stop()
 
 
 class VideoReaderTest(unittest.TestCase):

@@ -5,8 +5,11 @@ Makes preview frames exactly the way `facefusion.py run` does, through the same 
 content check, but stays running, so the models the processors load stay loaded and the next preview
 skips starting Python and loading them again.
 
+Batch runs whole outputs on it the same way, so the models stay loaded from one output to the next.
+
 usage: python preview_worker.py
-	reads one request per line on stdin: {"id": 1, "args": [<facefusion.py arguments, starting with run>]}
+	reads one request per line on stdin: {"id": 1, "script": "facefusion.py", "args": [<facefusion.py arguments, starting with run>]}
+	with "script": "gif_run.py" the args are gif_run.py's, which converts the gif around a run made here
 	prints facefusion's own log lines while it works, then one line per request: PREVIEW_DONE {"id": 1, "code": <exit code>}
 	the exit code is the one facefusion.py would exit with. null means the worker itself failed and
 	the caller makes the preview with facefusion.py instead, the worker quits after it
@@ -77,11 +80,13 @@ def run(argv : list) -> int:
 	from facefusion.program_helper import validate_args
 
 	forget_files()
+	# some defaults depend on other options, such as the pixel boost on the swapper model, and facefusion reads those from sys.argv
+	sys.argv[1:] = argv + KEEP_MODELS_ARGS
 	program = create_program()
 	if not validate_args(program):
 		return 2
 	try:
-		args = vars(program.parse_args(argv + KEEP_MODELS_ARGS))
+		args = vars(program.parse_args())
 	except SystemExit as error:
 		# argparse already printed what was wrong
 		return error.code if isinstance(error.code, int) else 2
@@ -94,6 +99,16 @@ def run(argv : list) -> int:
 	if not job_manager.init_jobs(state_manager.get_jobs_path()):
 		return 1
 	return process_headless(args)
+
+
+def run_request(request : dict) -> int:
+	args = list(request.get('args') or [])
+	if request.get('script') == 'gif_run.py':
+		# it lives next to this script, which python put first on the path before main added the facefusion folder
+		from gif_run import run_gif
+
+		return run_gif(args, run)
+	return run(args)
 
 
 def main() -> int:
@@ -125,7 +140,7 @@ def main() -> int:
 		except ValueError:
 			continue
 		try:
-			code = run(list(request.get('args') or []))
+			code = run_request(request)
 		except BaseException:
 			# facefusion may be left half way, a fresh worker starts next time
 			traceback.print_exc()

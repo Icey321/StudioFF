@@ -43,6 +43,8 @@ class ProcessRunner(QObject):
 		# the preview worker running the current command, and how to run it without the worker
 		self.worker : Optional['PreviewWorker'] = None
 		self.fallback : Optional[Tuple[str, List[str], str, Optional[QProcessEnvironment]]] = None
+		# a stopped preview finishes unseen on the worker, a stopped whole run quits the worker with it
+		self.worker_keeps_on_stop = True
 
 	def is_running(self) -> bool:
 		return self.worker is not None or (self.process is not None and self.process.state() != QProcess.ProcessState.NotRunning)
@@ -67,32 +69,38 @@ class ProcessRunner(QObject):
 		self.process.start()
 		return True
 
-	def start_on_worker(self, worker : 'PreviewWorker', program : str, args : List[str], working_dir : str, environment : Optional[QProcessEnvironment] = None) -> bool:
-		"""runs facefusion.py's arguments on the preview worker, or as a process of their own when the worker fails"""
+	def start_on_worker(self, worker : 'PreviewWorker', program : str, args : List[str], working_dir : str, environment : Optional[QProcessEnvironment] = None, keeps_on_stop : bool = True) -> bool:
+		"""runs the arguments of facefusion.py or gif_run.py on the preview worker, or as a process of their own when the worker fails"""
 		if self.is_running():
 			return False
 		self.buffer = ''
 		self.cancelled = False
 		self.start_time = time.monotonic()
 		self.worker = worker
+		self.worker_keeps_on_stop = keeps_on_stop
 		self.fallback = (program, args, working_dir, environment)
-		worker.log.connect(self.emit_line)
+		worker.output.connect(self.on_worker_output)
 		worker.done.connect(self.on_worker_done)
 		self.started.emit(' '.join(quote_arg(part) for part in [ program ] + args) + '   (on the preview worker)')
-		worker.run(program, working_dir, environment, args[1:])
+		worker.run(program, working_dir, environment, args[1:], os.path.basename(args[0]))
 		return True
+
+	def on_worker_output(self, text : str) -> None:
+		self.buffer += text
+		self.flush_buffer(final = False)
 
 	def on_worker_done(self, exit_code : Optional[int]) -> None:
 		worker, self.worker = self.worker, None
-		worker.log.disconnect(self.emit_line)
+		worker.output.disconnect(self.on_worker_output)
 		worker.done.disconnect(self.on_worker_done)
+		self.flush_buffer(final = True)
 		fallback, self.fallback = self.fallback, None
 		if self.cancelled:
 			self.finished.emit(-1, time.monotonic() - self.start_time)
 			return
 		if exit_code is None:
-			# the same preview the usual way, only slower
-			self.log.emit('The preview worker stopped, making this preview with facefusion.py instead')
+			# the same run the usual way, only slower
+			self.log.emit('The preview worker stopped, running this again with its models loaded anew')
 			self.start(*fallback)
 			return
 		self.finished.emit(exit_code, time.monotonic() - self.start_time)
@@ -100,7 +108,10 @@ class ProcessRunner(QObject):
 	def stop(self) -> None:
 		if self.worker is not None:
 			self.cancelled = True
-			self.worker.cancel()
+			if self.worker_keeps_on_stop:
+				self.worker.cancel()
+			else:
+				self.worker.stop()
 		elif self.is_running():
 			self.cancelled = True
 			process = self.process
@@ -178,10 +189,11 @@ class ProcessRunner(QObject):
 class PreviewWorker(QObject):
 	"""keeps preview_worker.py running in the facefusion environment, so a preview after the first one skips loading the models
 
-	it makes one preview at a time for a ProcessRunner. done reports facefusion's exit code, or None when the worker itself
-	failed, the runner then makes the preview with facefusion.py. it quits after a while without previews to free the memory
+	it makes one preview or batch run at a time for a ProcessRunner. done reports facefusion's exit code, or None when the
+	worker itself failed, the runner then runs it with facefusion.py. it quits after a while without runs to free the memory
 	"""
-	log = Signal(str)
+	# facefusion's output as it comes, progress bars included, without the result lines
+	output = Signal(str)
 	done = Signal(object)
 
 	def __init__(self, parent : Optional[QObject] = None) -> None:
@@ -216,7 +228,7 @@ class PreviewWorker(QObject):
 	def is_usable(self) -> bool:
 		return self.failures < WORKER_FAILURE_LIMIT
 
-	def run(self, python_path : str, facefusion_root : str, environment : Optional[QProcessEnvironment], args : List[str]) -> None:
+	def run(self, python_path : str, facefusion_root : str, environment : Optional[QProcessEnvironment], args : List[str], script : str = 'facefusion.py') -> None:
 		self.idle_timer.stop()
 		# a stopped preview that hangs would hold up this one for good
 		stuck = self.cancelled_id is not None and time.monotonic() - self.cancelled_at > WORKER_CANCEL_SECONDS
@@ -231,7 +243,7 @@ class PreviewWorker(QObject):
 			return
 		self.request_id += 1
 		self.running_id = self.request_id
-		line = json.dumps({ 'id': self.request_id, 'args': args })
+		line = json.dumps({ 'id': self.request_id, 'script': script, 'args': args })
 		self.process.write((line + '\n').encode('utf-8'))
 
 	def start(self, python_path : str, facefusion_root : str, environment : Optional[QProcessEnvironment]) -> None:
@@ -279,13 +291,26 @@ class PreviewWorker(QObject):
 		if not self.process:
 			return
 		self.buffer += bytes(self.process.readAllStandardOutput().data()).decode('utf-8', errors = 'replace')
-		while '\n' in self.buffer:
-			line, self.buffer = self.buffer.split('\n', 1)
-			if line.startswith(WORKER_RESULT_PREFIX):
-				self.on_result(line[len(WORKER_RESULT_PREFIX):])
-			# what the worker says between previews, such as that it is ready, is nobody's run log
-			elif self.running_id is not None:
-				self.log.emit(line)
+		while True:
+			# a result can follow a progress bar on the same line
+			index = self.buffer.find(WORKER_RESULT_PREFIX)
+			end = self.buffer.find('\n', index) if index >= 0 else -1
+			if end < 0:
+				break
+			self.pass_output(self.buffer[:index])
+			result, self.buffer = self.buffer[index + len(WORKER_RESULT_PREFIX):end], self.buffer[end + 1:]
+			self.on_result(result)
+		# the rest goes on now, except an end that could be the start of a result line
+		held = self.buffer.find(WORKER_RESULT_PREFIX)
+		if held < 0:
+			held = next((len(self.buffer) - size for size in range(min(len(WORKER_RESULT_PREFIX), len(self.buffer)), 0, -1) if WORKER_RESULT_PREFIX.startswith(self.buffer[-size:])), len(self.buffer))
+		self.pass_output(self.buffer[:held])
+		self.buffer = self.buffer[held:]
+
+	def pass_output(self, text : str) -> None:
+		# what the worker says between runs, such as that it is ready, is nobody's run log
+		if text and self.running_id is not None:
+			self.output.emit(text)
 
 	def on_result(self, text : str) -> None:
 		try:

@@ -1091,7 +1091,8 @@ class BatchPage(SourceSelection, QWidget):
 		total = self.started_count + len(queued) - 1
 		task = 'Batch %d of %d: %s' % (self.started_count, total, item.get('name'))
 		self.status_label.setText(task)
-		if not self.session.run_facefusion(task, args, script = script):
+		# the models stay loaded from one output to the next
+		if not self.session.run_facefusion(task, args, script = script, keep_loaded = True):
 			# the message says why, the batch ends here as if stopped so the buttons and status come back
 			item['status'] = ''
 			self.refresh_item(self.current)

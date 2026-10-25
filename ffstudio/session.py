@@ -204,8 +204,9 @@ class Session(QObject):
 		self.task_is_preview = preview and bool(task)
 		self.busy_changed.emit(bool(task), task)
 
-	def run_facefusion(self, task : str, command_args : List[str], script : str = 'facefusion.py', preview : bool = False) -> bool:
-		"""a preview of one image runs on the preview worker, which keeps its models loaded, everything else as a process of its own"""
+	def run_facefusion(self, task : str, command_args : List[str], script : str = 'facefusion.py', preview : bool = False, keep_loaded : bool = False) -> bool:
+		"""a preview, or a run that keeps its models loaded for the next one such as a batch's, runs on the preview worker,
+		everything else as a process of its own"""
 		if self.runner.is_running():
 			self.notify.emit('warning', 'Busy', 'FaceFusion is already running: ' + self.task)
 			return False
@@ -220,8 +221,9 @@ class Session(QObject):
 		# gif_run.py hands facefusion an output.mp4 of its own
 		self.facefusion_output = 'output.mp4' if os.path.basename(script) == 'gif_run.py' else next((command_args[index + 1] for index in reversed(range(len(command_args) - 1)) if command_args[index] in [ '-o', '--output-path' ]), '')
 		environment = create_process_environment(self.python_path)
-		if preview and script == 'facefusion.py' and self.preview_worker.is_usable():
-			return self.runner.start_on_worker(self.preview_worker, self.python_path, [ script ] + command_args, self.facefusion_root, environment)
+		if (preview or keep_loaded) and os.path.basename(script) in [ 'facefusion.py', 'gif_run.py' ] and self.preview_worker.is_usable():
+			# Stop on a whole run quits the worker, it would go on making the run unseen
+			return self.runner.start_on_worker(self.preview_worker, self.python_path, [ script ] + command_args, self.facefusion_root, environment, keeps_on_stop = preview)
 		if not preview:
 			# a whole run needs the memory the preview models take
 			self.preview_worker.stop()

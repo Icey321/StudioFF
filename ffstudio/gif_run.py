@@ -5,11 +5,13 @@ FaceFusion does not accept GIF targets, so this converts the GIF to a lossless
 MP4, runs FaceFusion on it and turns the result back into a looping GIF.
 
 usage: python gif_run.py <target_gif> <output_gif> <work_dir> -- <facefusion run args without -t / -o>
+preview_worker.py imports run_gif to make the same run on the models it keeps loaded
 """
 import os
 import shutil
 import subprocess
 import sys
+from typing import Callable, List
 
 
 def run_ffmpeg(ffmpeg : str, args) -> int:
@@ -17,9 +19,14 @@ def run_ffmpeg(ffmpeg : str, args) -> int:
 
 
 def main() -> int:
-	separator = sys.argv.index('--')
-	target_path, output_path, work_dir = sys.argv[1:separator]
-	facefusion_args = sys.argv[separator + 1:]
+	return run_gif(sys.argv[1:], lambda args: subprocess.call([ sys.executable, 'facefusion.py' ] + args))
+
+
+def run_gif(argv : List[str], run_facefusion : Callable[[List[str]], int]) -> int:
+	"""argv as the usage above, run_facefusion makes the run from facefusion.py's arguments and returns its exit code"""
+	separator = argv.index('--')
+	target_path, output_path, work_dir = argv[:separator]
+	facefusion_args = argv[separator + 1:]
 	ffmpeg = shutil.which('ffmpeg')
 	if not ffmpeg:
 		print('ffmpeg was not found on PATH, it is needed to convert GIF files', flush = True)
@@ -34,7 +41,7 @@ def main() -> int:
 		if run_ffmpeg(ffmpeg, [ '-i', target_path, '-vf', 'pad=ceil(iw/2)*2:ceil(ih/2)*2', '-c:v', 'libx264', '-qp', '0', '-pix_fmt', 'yuv444p', temp_target ]):
 			print('Could not convert ' + target_path, flush = True)
 			return 1
-		exit_code = subprocess.call([ sys.executable, 'facefusion.py' ] + facefusion_args + [ '-t', temp_target, '-o', temp_output ])
+		exit_code = run_facefusion(facefusion_args + [ '-t', temp_target, '-o', temp_output ])
 		if exit_code or not os.path.isfile(temp_output):
 			return exit_code or 1
 
