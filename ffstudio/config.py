@@ -74,17 +74,31 @@ DEFAULT_CONFIG : Dict[str, Any] =\
 class AppConfig:
 	def __init__(self) -> None:
 		self.data : Dict[str, Any] = dict(DEFAULT_CONFIG)
+		# false when a settings file was there but could not be read, save then moves it aside instead of writing over it
+		self.loaded = True
 		self.load()
 
 	def load(self) -> None:
-		try:
-			with open(CONFIG_FILE, encoding = 'utf-8') as config_file:
-				self.data.update(json.load(config_file))
-		except (OSError, ValueError):
-			pass
+		# another program, a virus scanner say, can hold the file for a moment, so a failed read is tried again
+		for attempt in range(10):
+			if not os.path.exists(CONFIG_FILE):
+				return
+			try:
+				with open(CONFIG_FILE, encoding = 'utf-8') as config_file:
+					self.data.update(json.load(config_file))
+				return
+			except (OSError, ValueError):
+				time.sleep(0.2)
+		self.loaded = False
 
 	def save(self) -> None:
 		os.makedirs(DATA_DIR, exist_ok = True)
+		if not self.loaded and os.path.exists(CONFIG_FILE):
+			try:
+				os.replace(CONFIG_FILE, os.path.join(DATA_DIR, time.strftime('config.unread-%Y%m%d-%H%M%S.json')))
+			except OSError:
+				return
+			self.loaded = True
 		temp_file = CONFIG_FILE + '.tmp'
 		with open(temp_file, 'w', encoding = 'utf-8') as config_file:
 			json.dump(self.data, config_file, indent = 1)

@@ -11,7 +11,10 @@ import zipfile
 import cv2
 import numpy
 
-from ffstudio.config import migrate_data_dir
+from unittest import mock
+
+from ffstudio import config
+from ffstudio.config import AppConfig, migrate_data_dir
 from ffstudio.environment import is_newer_version
 from ffstudio.face_mapping import SELECTED, pass_distance, plan_passes
 from ffstudio.media import VideoReader
@@ -268,6 +271,44 @@ class DataFolderTest(unittest.TestCase):
 		finally:
 			if saved is not None:
 				os.environ['FFSTUDIO_DATA_DIR'] = saved
+
+
+class AppConfigTest(unittest.TestCase):
+	def test_a_file_held_for_a_moment_is_read_again(self) -> None:
+		with tempfile.TemporaryDirectory() as data_dir:
+			config_file = os.path.join(data_dir, 'config.json')
+			with open(config_file, 'w', encoding = 'utf-8') as file:
+				json.dump({ 'facefusion_root': 'C:\ff' }, file)
+			real_open = open
+			calls = []
+
+			def busy_once(*args, **kwargs):
+				calls.append(args[0])
+				if len(calls) == 1:
+					raise PermissionError('held by another program')
+				return real_open(*args, **kwargs)
+			with mock.patch.object(config, 'CONFIG_FILE', config_file), mock.patch('builtins.open', busy_once):
+				app_config = AppConfig()
+			self.assertTrue(app_config.loaded)
+			self.assertEqual(app_config.get('facefusion_root'), 'C:\ff')
+
+	def test_an_unread_file_is_moved_aside_not_written_over(self) -> None:
+		with tempfile.TemporaryDirectory() as data_dir:
+			config_file = os.path.join(data_dir, 'config.json')
+			with open(config_file, 'w', encoding = 'utf-8') as file:
+				file.write('{ "facefusion_root": ')
+			with mock.patch.object(config, 'CONFIG_FILE', config_file), mock.patch.object(config, 'DATA_DIR', data_dir), mock.patch('time.sleep'):
+				app_config = AppConfig()
+				self.assertFalse(app_config.loaded)
+				self.assertEqual(app_config.get('facefusion_root'), '')
+				app_config.set('theme', 'dark')
+				app_config.save()
+			kept = [ name for name in os.listdir(data_dir) if name.startswith('config.unread-') ]
+			self.assertEqual(len(kept), 1)
+			with open(os.path.join(data_dir, kept[0]), encoding = 'utf-8') as file:
+				self.assertEqual(file.read(), '{ "facefusion_root": ')
+			with open(config_file, encoding = 'utf-8') as file:
+				self.assertEqual(json.load(file)['theme'], 'dark')
 
 
 class RetiredFilesTest(unittest.TestCase):
