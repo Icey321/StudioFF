@@ -7,15 +7,16 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import cv2
 from PySide6.QtCore import QFileSystemWatcher, QItemSelectionModel, QRectF, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFont, QFontMetrics, QKeySequence, QPainter, QPainterPath, QPixmap, QShortcut
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QKeySequence, QPainter, QPainterPath, QPen, QPixmap, QShortcut
 from PySide6.QtWidgets import QAbstractItemView, QFileDialog, QHBoxLayout, QListWidgetItem, QVBoxLayout, QWidget
 from qfluentwidgets import BodyLabel, CaptionLabel, ComboBox, FluentIcon, Flyout, FlyoutAnimationType, LineEdit, ListItemDelegate, ListWidget, MessageBox, PrimaryPushButton, ProgressBar, PushButton, SimpleCardWidget, Slider, StrongBodyLabel, SubtitleLabel, TogglePushButton, ToggleToolButton, ToolTipFilter, TransparentPushButton, getFont, isDarkTheme, themeColor
 
 from ffstudio.config import APP_DIR, PREVIEW_DIR
 from ffstudio.faces import FACE_GROUPS, MASK_GROUPS, FaceProbe, describe_faces, describe_mask, face_tag, read_mask
-from ffstudio.media import GIF_EXTENSIONS, VideoReader, extension, format_timecode, media_kind, read_frame, thumbnail, to_pixmap, write_image
+from ffstudio.media import GIF_EXTENSIONS, VideoReader, extension, format_length, format_timecode, media_kind, read_frame, thumbnail, to_pixmap, video_seconds, write_image
 from ffstudio.nsfw import BLOCKED_TITLE, NsfwDialog, show_blocked_bar
 from ffstudio.output_name import AUTOMATIC_TEMPLATE, build_output, unknown_tags
+from ffstudio.pages.models import format_size
 from ffstudio.pages.setup import SYSTEM_GROUPS, form_row, section_card
 from ffstudio.pages.studio import LIVE_IGNORED_GROUPS, NameTagsView, SettingsColumn, SourceCard, SourceSelection, StudioPage, elastic, estimated_progress, preview_step_floor, run_tag_values, tool_button
 from ffstudio.session import OptionStore, Session, explain_error, folder_is_writable
@@ -38,6 +39,8 @@ STATUS_LOOK =\
 }
 # a run that ended keeps its row until something the user changes plans the batch again
 FINISHED = ('done', 'blocked', 'failed')
+# facefusion's title for the step that makes the frames, the steps around it are quick or report nothing
+PROCESSING_TITLE = 'processing'
 CLOCK_TAGS = re.compile(r'\{(date|time)\}')
 # the preview runs on the target scaled down to this many pixels on its long side, so it comes back quickly
 PREVIEW_SIZE = 640
@@ -108,6 +111,8 @@ class OutputDelegate(ListItemDelegate):
 	"""a planned output: its status mark, thumbnails of the target (of the result once it is made) and the sources, then the names"""
 	ROW_HEIGHT = 52
 	THUMB_HEIGHT = 40
+	# the running output's ring, a little wider than the marks, it reaches into the gap before the thumbnails
+	RING_SIZE = 24
 	THUMB_MAX_WIDTH = 72
 	# the names get at least this much of a row before thumbnails are left out
 	MIN_TEXT_WIDTH = 200
@@ -118,6 +123,8 @@ class OutputDelegate(ListItemDelegate):
 		super().__init__(page.match_list)
 		self.page = page
 		self.pixmaps : 'OrderedDict[Tuple[str, float, int, int], QPixmap]' = OrderedDict()
+		# a target's length and size by its path and change time, a video is opened once to read its length
+		self.sizes : Dict[Tuple[str, float], str] = {}
 
 	def sizeHint(self, option, index) -> QSize:
 		return QSize(option.rect.width(), self.ROW_HEIGHT)
@@ -140,6 +147,20 @@ class OutputDelegate(ListItemDelegate):
 			self.pixmaps.popitem(last = False)
 		return pixmap
 
+	def size_text(self, path : str) -> str:
+		"""how long the target plays and how big it is, such as 0:42  ·  18.5 MB"""
+		try:
+			key = (path, os.path.getmtime(path))
+			if key not in self.sizes:
+				parts = [ format_size(os.path.getsize(path)) ]
+				seconds = video_seconds(path) if media_kind(path) == 'video' else 0.0
+				if seconds > 0:
+					parts.insert(0, format_length(seconds))
+				self.sizes[key] = '  ·  '.join(parts)
+			return self.sizes.get(key)
+		except OSError:
+			return ''
+
 	def draw_thumbnail(self, painter : QPainter, path : str, x : float, y : float, width : float) -> float:
 		height = self.THUMB_HEIGHT
 		box = QRectF(x, y, width, height)
@@ -159,6 +180,21 @@ class OutputDelegate(ListItemDelegate):
 		painter.restore()
 		return width
 
+	def draw_ring(self, painter : QPainter, x : float, middle : float, ratio : float) -> None:
+		pen_width = 2.5
+		size = self.RING_SIZE - pen_width
+		box = QRectF(x - 2 + pen_width / 2, middle - size / 2, size, size)
+		shade = 255 if isDarkTheme() else 0
+		painter.setBrush(Qt.BrushStyle.NoBrush)
+		painter.setPen(QPen(QColor(shade, shade, shade, 40), pen_width))
+		painter.drawEllipse(box)
+		if ratio > 0:
+			pen = QPen(themeColor(), pen_width)
+			pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+			painter.setPen(pen)
+			# clockwise from the top, qt counts sixteenths of a degree
+			painter.drawArc(box, 90 * 16, -int(min(ratio, 1.0) * 360 * 16))
+
 	def paint(self, painter : QPainter, option, index) -> None:
 		# the background, hover and selection, the row itself has no text
 		super().paint(painter, option, index)
@@ -169,8 +205,12 @@ class OutputDelegate(ListItemDelegate):
 		painter.save()
 		painter.setRenderHints(QPainter.RenderHint.Antialiasing | QPainter.RenderHint.SmoothPixmapTransform)
 		rect = QRectF(option.rect).adjusted(12, 0, -8, 0)
-		mark, words, light, dark = STATUS_LOOK.get(self.page.item_status(item), ('', '', None, None))
-		if mark:
+		status = self.page.item_status(item)
+		mark, words, light, dark = STATUS_LOOK.get(status, ('', '', None, None))
+		if status == 'running':
+			self.draw_ring(painter, rect.x(), rect.y() + rect.height() / 2, item.get('progress', 0.0))
+			words = self.page.progress_words(item)
+		elif mark:
 			painter.setPen(QColor(dark if isDarkTheme() else light) if light else themeColor())
 			painter.setFont(getFont(16, QFont.Weight.DemiBold))
 			painter.drawText(QRectF(rect.x(), rect.y(), 20, rect.height()), Qt.AlignmentFlag.AlignCenter, mark)
@@ -192,14 +232,33 @@ class OutputDelegate(ListItemDelegate):
 		name, detail = self.page.item_lines(item)
 		width = int(rect.right() - x)
 		middle = rect.y() + rect.height() / 2
+		# the target's length and size at the end of the name line, quiet, a hint of how long the output takes
+		size = self.size_text(item.get('target'))
+		name_width = width
+		font = getFont(12)
+		size_width = QFontMetrics(font).horizontalAdvance(size)
+		if size and width - size_width - 12 >= self.MIN_TEXT_WIDTH / 2:
+			painter.setFont(font)
+			painter.setPen(QColor('#9a9a9a' if isDarkTheme() else '#707070'))
+			painter.drawText(QRectF(rect.right() - size_width, middle - 21, size_width, 21), Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignRight, size)
+			name_width -= size_width + 12
 		font = getFont(13)
 		painter.setFont(font)
 		painter.setPen(QColor(255, 255, 255) if isDarkTheme() else QColor(0, 0, 0))
-		painter.drawText(QRectF(x, middle - 21, width, 21), Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignLeft, QFontMetrics(font).elidedText(name, Qt.TextElideMode.ElideMiddle, width))
+		painter.drawText(QRectF(x, middle - 21, name_width, 21), Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignLeft, QFontMetrics(font).elidedText(name, Qt.TextElideMode.ElideMiddle, name_width))
 		font = getFont(12)
 		painter.setFont(font)
+		metrics = QFontMetrics(font)
+		if status == 'running' and words:
+			# how far the output is in the theme color, what it is made from after it as usual
+			painter.setPen(themeColor())
+			painter.drawText(QRectF(x, middle + 1, width, 20), Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft, metrics.elidedText(words, Qt.TextElideMode.ElideRight, width))
+			x += metrics.horizontalAdvance(words)
+			width = int(rect.right() - x)
+			words = ''
 		painter.setPen(QColor(dark if isDarkTheme() else light) if words and light else QColor('#9a9a9a' if isDarkTheme() else '#707070'))
-		painter.drawText(QRectF(x, middle + 1, width, 20), Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft, QFontMetrics(font).elidedText(words + detail, Qt.TextElideMode.ElideRight, width))
+		if width > 0:
+			painter.drawText(QRectF(x, middle + 1, width, 20), Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft, metrics.elidedText(words + detail, Qt.TextElideMode.ElideRight, width))
 		painter.restore()
 
 
@@ -219,6 +278,8 @@ class BatchPage(SourceSelection, QWidget):
 		# nsfw check results by target, from NSFW Check or from confirming refused images after a batch
 		self.check_results : Dict[str, Dict[str, Any]] = {}
 		self.current = -1
+		# the running output's line in the status, the percent follows it
+		self.run_task = ''
 		self.started_count = 0
 		self.confirming = False
 		self.stopped = False
@@ -1096,6 +1157,14 @@ class BatchPage(SourceSelection, QWidget):
 		name, detail = self.item_lines(item)
 		return '%s  %s' % (name, detail)
 
+	@staticmethod
+	def progress_words(item : Dict[str, Any]) -> str:
+		"""how far the running output is, empty until facefusion reports its frames"""
+		if 'progress' not in item:
+			return ''
+		speed = item.get('speed', '').replace('frame/s', ' frames/s')
+		return 'Processing %d%%%s  ·  ' % (int(item.get('progress') * 100), '  ·  ' + speed if speed else '')
+
 	def item_tooltip(self, item : Dict[str, Any]) -> str:
 		words = STATUS_LOOK.get(self.item_status(item), ('', '', None, None))[1]
 		return words + self.item_text(item) + '\n' + item.get('output')
@@ -1165,6 +1234,7 @@ class BatchPage(SourceSelection, QWidget):
 		self.confirming = False
 		self.started_count = 0
 		self.current = -1
+		self.run_task = ''
 		self.progress.setValue(0)
 		self.progress.resume()
 		self.run_next()
@@ -1200,6 +1270,7 @@ class BatchPage(SourceSelection, QWidget):
 			args += [ '-t', item.get('target'), '-o', item.get('output') ] + self.session.option_args(values)
 		total = self.started_count + len(queued) - 1
 		task = 'Batch %d of %d: %s' % (self.started_count, total, item.get('name'))
+		self.run_task = task
 		self.status_label.setText(task)
 		# the models stay loaded from one output to the next
 		if not self.session.run_facefusion(task, args, script = script, keep_loaded = True):
@@ -1216,7 +1287,13 @@ class BatchPage(SourceSelection, QWidget):
 		self.stop_button.setEnabled(busy and self.running)
 
 	def on_progress(self, title : str, ratio : float, status : str) -> None:
-		if self.running and self.current >= 0:
+		# the nsfw analysis before the frames fills its own bar quickly, only the frames count toward the output
+		if self.running and self.current >= 0 and title.lower() == PROCESSING_TITLE:
+			item = self.items[self.current]
+			item['progress'] = ratio
+			item['speed'] = status.split('  ·  ')[0]
+			self.refresh_item(self.current)
+			self.status_label.setText('%s  ·  processing %d%%' % (self.run_task, int(ratio * 100)))
 			total = self.started_count + len(self.queued())
 			self.progress.setValue(int((self.started_count - 1 + ratio) / max(total, 1) * 1000))
 
@@ -1236,6 +1313,8 @@ class BatchPage(SourceSelection, QWidget):
 			return
 		index, self.current = self.current, -1
 		item = self.items[index]
+		item.pop('progress', None)
+		item.pop('speed', None)
 		if exit_code == 0:
 			item['status'] = 'done'
 		elif exit_code == -1:

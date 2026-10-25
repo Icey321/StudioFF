@@ -104,6 +104,22 @@ def thumbnail(path : str, size : int = 96) -> QPixmap:
 	return to_pixmap(frame)
 
 
+def video_seconds(path : str) -> float:
+	"""how long a video plays, 0 when it cannot be read"""
+	reader = VideoReader(path)
+	seconds = reader.frame_count / reader.fps if reader.fps > 0 else 0.0
+	reader.release()
+	return seconds
+
+
+def format_length(seconds : float) -> str:
+	"""a running time like 0:42 or 1:05:03"""
+	seconds = int(round(seconds))
+	if seconds >= 3600:
+		return '%d:%02d:%02d' % (seconds // 3600, seconds % 3600 // 60, seconds % 60)
+	return '%d:%02d' % (seconds // 60, seconds % 60)
+
+
 def format_timecode(frame_index : int, fps : float) -> str:
 	if fps <= 0:
 		return str(frame_index)
