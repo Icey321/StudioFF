@@ -8,8 +8,8 @@ from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QAbstractButton, QApplication, QButtonGroup, QFileDialog, QHBoxLayout, QLabel, QSizePolicy, QVBoxLayout, QWidget
 from qfluentwidgets import BodyLabel, CaptionLabel, CheckBox, ColorPickerButton, ComboBox, EditableComboBox, FluentIcon, HyperlinkButton, IconWidget, InfoBarIcon, LineEdit, MessageBox, PrimaryPushButton, ProgressBar, PushButton, SearchLineEdit, SimpleCardWidget, SingleDirectionScrollArea, StrongBodyLabel, SubtitleLabel, SwitchButton, ToolTipFilter, TransparentToolButton
 
-from ffstudio import APP_REPOSITORY, APP_VERSION
-from ffstudio.environment import check_dependencies, create_process_environment, fetch_github_build, fetch_latest_release, find_conda, find_conda_base, find_python_candidates, has_nvidia_gpu, is_facefusion_root, is_newer_version, probe_python_version, read_facefusion_build, read_facefusion_version, read_windows_version, version_tuple
+from ffstudio import APP_REPOSITORY, APP_VERSION, TESTED_FACEFUSION_COMMIT, TESTED_FACEFUSION_DATE
+from ffstudio.environment import check_dependencies, compare_github_commits, create_process_environment, fetch_github_build, fetch_latest_release, find_conda, find_conda_base, find_python_candidates, has_nvidia_gpu, is_facefusion_root, is_newer_version, probe_python_version, read_facefusion_build, read_facefusion_version, read_windows_version, switch_facefusion_commit, version_tuple
 from ffstudio.main_window import DEFAULT_ACCENT, apply_theme
 from ffstudio.option_panel import OptionPanel
 from ffstudio.session import MINIMUM_PYTHON, Session
@@ -116,6 +116,8 @@ class SetupPage(QWidget):
 	python_probed = Signal(str, object)
 	pythons_detected = Signal(object, str)
 	build_read = Signal(str, object)
+	facefusion_switched = Signal(str, object)
+	monitor_toggled = Signal(bool)
 
 	def __init__(self, session : Session, parent : Optional[QWidget] = None) -> None:
 		super().__init__(parent)
@@ -192,6 +194,7 @@ class SetupPage(QWidget):
 		self.python_probed.connect(self.on_python_probed)
 		self.pythons_detected.connect(self.on_pythons_detected)
 		self.build_read.connect(self.show_installed_build)
+		self.facefusion_switched.connect(self.on_facefusion_switched)
 		self.refresh_status()
 
 	# search
@@ -501,6 +504,12 @@ class SetupPage(QWidget):
 		self.github_label = BodyLabel('Not checked yet', card)
 		self.github_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
 		layout.addLayout(form_row('On GitHub', [ self.github_label ], card))
+		self.tested_label = BodyLabel('commit %s  ·  %s' % (TESTED_FACEFUSION_COMMIT[:7], TESTED_FACEFUSION_DATE), card)
+		self.tested_label.setToolTip('StudioFF v%s was tested with this FaceFusion commit. Newer ones usually work too, but FaceFusion v4 is still changing and a new commit can break options' % APP_VERSION)
+		self.tested_label.installEventFilter(ToolTipFilter(self.tested_label))
+		self.tested_status = StatusLine(card)
+		layout.addLayout(form_row('Tested with', [ self.tested_label ], card))
+		layout.addLayout(form_row('', [ self.tested_status ], card))
 		buttons = QHBoxLayout()
 		buttons.addSpacing(138)
 		self.update_button = PushButton(FluentIcon.UPDATE, 'Check for FaceFusion Updates', card)
@@ -518,14 +527,101 @@ class SetupPage(QWidget):
 		buttons.addWidget(self.update_status, 1)
 		buttons.addStretch(0)
 		layout.addLayout(buttons)
+		switch_buttons = QHBoxLayout()
+		switch_buttons.addSpacing(138)
+		self.tested_button = PushButton(FluentIcon.ACCEPT, 'Use Tested Version', card)
+		self.tested_button.setToolTip('Moves FaceFusion to the commit StudioFF was tested with')
+		self.tested_button.clicked.connect(lambda: self.switch_facefusion('tested'))
+		self.latest_button = PushButton(FluentIcon.SYNC, 'Update to Latest', card)
+		self.latest_button.setToolTip('Moves FaceFusion to the newest commit on GitHub, which StudioFF may not have been tested with')
+		self.latest_button.clicked.connect(lambda: self.switch_facefusion('latest'))
+		self.back_button = PushButton(FluentIcon.RETURN, 'Go Back', card)
+		self.back_button.clicked.connect(lambda: self.switch_facefusion('back'))
+		for button in [ self.tested_button, self.latest_button, self.back_button ]:
+			button.installEventFilter(ToolTipFilter(button))
+			button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+			switch_buttons.addWidget(button)
+			switch_buttons.addSpacing(4)
+		switch_buttons.addStretch(1)
+		layout.addLayout(switch_buttons)
 		self.installed_build : Dict[str, str] = {}
+		# filled in by the update check: where the installed commit stands against the tested one
+		self.tested_compare : Dict[str, Any] = {}
 		return card
+
+	def show_tested_status(self) -> None:
+		commit = self.installed_build.get('commit', '')
+		previous = self.session.config.get('facefusion_previous_commit') or ''
+		self.back_button.setVisible(bool(previous) and bool(commit) and previous != commit)
+		self.back_button.setToolTip('Moves FaceFusion back to commit %s, where it was before the last switch' % previous[:7])
+		self.tested_button.setEnabled(bool(commit) and commit != TESTED_FACEFUSION_COMMIT)
+		self.latest_button.setEnabled(bool(commit))
+		if not commit:
+			self.tested_status.set_status('info', 'Not a git checkout, so it can not be compared or switched.' if self.installed_build else 'FaceFusion is not set up yet.')
+			return
+		if commit == TESTED_FACEFUSION_COMMIT:
+			self.tested_status.set_status('success', 'You have the tested version.')
+			return
+		status = self.tested_compare.get('status')
+		if status == 'ahead':
+			count = self.tested_compare.get('ahead', 0)
+			self.tested_status.set_status('info', 'Yours is newer than tested, by %d commit%s. Usually fine.' % (count, '' if count == 1 else 's'))
+		elif status == 'behind':
+			count = self.tested_compare.get('behind', 0)
+			self.tested_status.set_status('warning', 'Yours is older than tested, by %d commit%s.' % (count, '' if count == 1 else 's'))
+		elif status == 'diverged':
+			self.tested_status.set_status('warning', 'Yours differs from the tested version.')
+		else:
+			self.tested_status.set_status('warning', 'Not the tested version. Check for updates to see if yours is newer or older.')
+
+	def switch_facefusion(self, where : str) -> None:
+		build = self.installed_build
+		if not build.get('commit'):
+			return
+		if self.session.runner.is_running():
+			self.session.notify.emit('warning', 'Busy', 'Wait for "%s" to finish first.' % self.session.task)
+			return
+		commit = { 'tested': TESTED_FACEFUSION_COMMIT, 'latest': '', 'back': self.session.config.get('facefusion_previous_commit') or '' }[where]
+		if where == 'latest':
+			box = MessageBox('Update FaceFusion to the latest commit?', 'FaceFusion v4 is still being developed and any new commit can change or break options. StudioFF v%s was tested with commit %s.\n\nGo Back returns to your current commit if something stops working.' % (APP_VERSION, TESTED_FACEFUSION_COMMIT[:7]), self.window())
+			box.yesButton.setText('Update')
+			if not box.exec():
+				return
+		for button in [ self.tested_button, self.latest_button, self.back_button ]:
+			button.setEnabled(False)
+		self.tested_status.set_status('info', 'Switching FaceFusion…')
+		root, branch = self.session.facefusion_root, build.get('branch', '')
+		# the preview and face models run from the folder that is about to change
+		self.session.preview_worker.stop()
+		self.window().studio_page.face_probe.stop()
+		threading.Thread(target = lambda: self.facefusion_switched.emit(root, switch_facefusion_commit(root, branch, commit)), daemon = True).start()
+
+	def on_facefusion_switched(self, root : str, result : Dict[str, Any]) -> None:
+		if result.get('error'):
+			self.refresh_installed_build()
+			self.tested_status.set_status('error', 'Could not switch: %s' % result['error'])
+			return
+		if result.get('previous') and result['previous'] != result.get('commit'):
+			self.session.config.set('facefusion_previous_commit', result['previous'])
+			self.session.config.save()
+		self.tested_compare = {}
+		self.github_label.setText('Not checked yet')
+		self.update_status.hide()
+		self.refresh_installed_build()
+		if result.get('requirements_changed'):
+			self.tested_status.set_status('warning', 'Switched. FaceFusion needs other packages now: click Install FaceFusion v4 above, it skips the download.')
+			self.session.notify.emit('warning', 'FaceFusion switched', 'Its requirements changed. Click Install FaceFusion v4 in Setup to update its packages.')
+		else:
+			self.session.notify.emit('success', 'FaceFusion switched', 'Now on commit %s.' % result.get('commit', '')[:7])
+		# options can differ between commits
+		self.session.refresh_schema()
 
 	def refresh_installed_build(self, wait : bool = True) -> None:
 		root = self.session.facefusion_root
 		if not is_facefusion_root(root):
 			self.installed_build = {}
 			self.installed_label.setText('Not installed or not set')
+			self.show_tested_status()
 			return
 		if wait:
 			self.show_installed_build(root, read_facefusion_build(root))
@@ -540,6 +636,7 @@ class SetupPage(QWidget):
 		self.github_link.setUrl(github_page(build['repository']))
 		self.installed_label.setText(format_build(build['version'], build['branch'], build['commit'], build['date']))
 		self.installed_label.setToolTip(build['commit'])
+		self.show_tested_status()
 
 	def check_for_updates(self) -> None:
 		self.refresh_installed_build()
@@ -557,6 +654,8 @@ class SetupPage(QWidget):
 	def fetch_update(self, build : Dict[str, str]) -> None:
 		try:
 			remote = fetch_github_build(build['repository'], build['branch'], build['commit'])
+			if build['commit']:
+				remote['tested'] = compare_github_commits(build['repository'], TESTED_FACEFUSION_COMMIT, build['commit'])
 		except Exception as exception:
 			remote = { 'error': str(exception) }
 		self.update_checked.emit(remote)
@@ -568,6 +667,8 @@ class SetupPage(QWidget):
 			self.update_status.set_status('error', 'Could not reach GitHub: %s' % remote['error'])
 			return
 		build = self.installed_build
+		self.tested_compare = remote.get('tested') or {}
+		self.show_tested_status()
 		text = format_build(remote['branch'], '', remote['commit'], remote['date']) if remote['commit'] else ''
 		if remote['release']:
 			text += ('  ·  ' if text else '') + 'latest release %s' % remote['release']
@@ -778,6 +879,10 @@ class SetupPage(QWidget):
 		self.open_switch.setChecked(bool(self.session.config.get('open_output_when_done')))
 		self.open_switch.checkedChanged.connect(lambda checked: self.session.config.set('open_output_when_done', checked))
 		layout.addLayout(form_row('Open result', [ BodyLabel('Open the output file when processing finishes', card), self.open_switch ], card))
+		self.monitor_switch = SwitchButton(card)
+		self.monitor_switch.setChecked(bool(self.session.config.get('show_system_monitor')))
+		self.monitor_switch.checkedChanged.connect(self.on_monitor_toggled)
+		layout.addLayout(form_row('System monitor', [ BodyLabel('Show graphics card, processor and memory use in the title bar', card), self.monitor_switch ], card))
 		self.keep_loaded_combo = ComboBox(card)
 		current = int(self.session.config.get('preview_keep_loaded_minutes'))
 		for minutes, text in KEEP_LOADED_CHOICES:
@@ -793,6 +898,11 @@ class SetupPage(QWidget):
 		keep_loaded_tip.setTextColor('#606060', '#a0a0a0')
 		layout.addLayout(form_row('', [ keep_loaded_tip ], card))
 		return card
+
+	def on_monitor_toggled(self, checked : bool) -> None:
+		self.session.config.set('show_system_monitor', checked)
+		self.session.config.save()
+		self.monitor_toggled.emit(checked)
 
 	def on_keep_loaded_changed(self, _ : int) -> None:
 		minutes = int(self.keep_loaded_combo.currentData())

@@ -9,7 +9,7 @@ from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import QApplication, QWidget
 
 from ffstudio import splash
-from ffstudio.config import DATA_DIR
+from ffstudio.config import DATA_DIR, migrate_data_dir
 
 
 def instance_name() -> str:
@@ -60,6 +60,9 @@ def main() -> None:
 	parser.add_argument('--theme', help = 'override the theme (auto, light, dark)')
 	parser.add_argument('--size', default = '1500x960')
 	args = parser.parse_args()
+	migrate_data_dir()
+	from ffstudio.updater import remove_retired_files
+	remove_retired_files()
 
 	if sys.platform == 'win32':
 		import ctypes

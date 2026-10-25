@@ -70,6 +70,18 @@ class MainWindow(FluentWindow):
 		self.version_label.setTextColor('#808080', '#9a9a9a')
 		self.titleBar.hBoxLayout.insertSpacing(2, 8)
 		self.titleBar.hBoxLayout.insertWidget(3, self.version_label, 0, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+		# graphics card, processor and memory use, left of the window buttons
+		from ffstudio.monitor import MonitorBar, SystemMonitor
+		self.monitor_bar = MonitorBar(self.titleBar)
+		# the window buttons sit in the title bar's last layout
+		buttons_index = self.titleBar.hBoxLayout.count() - 1
+		self.titleBar.hBoxLayout.insertWidget(buttons_index, self.monitor_bar, 0, Qt.AlignmentFlag.AlignVCenter)
+		self.titleBar.hBoxLayout.insertSpacing(buttons_index + 1, 18)
+		self.system_monitor = SystemMonitor(session, self)
+		self.system_monitor.metrics.connect(self.monitor_bar.show_metrics)
+		self.system_monitor.stopped.connect(self.monitor_bar.clear)
+		session.schema_changed.connect(self.system_monitor.restart)
+		self.setup_page.monitor_toggled.connect(self.set_monitor_shown)
 		# orange dot on the Setup gear while a newer StudioFF release is out
 		setup_item = self.navigationInterface.widget(self.setup_page.objectName())
 		self.update_dot = DotInfoBadge.custom(UPDATE_DOT_COLOR, UPDATE_DOT_COLOR, setup_item)
@@ -95,6 +107,12 @@ class MainWindow(FluentWindow):
 			geometry = screen.availableGeometry()
 			self.move(geometry.x() + (geometry.width() - self.width()) // 2, geometry.y() + (geometry.height() - self.height()) // 2)
 
+	def set_monitor_shown(self, shown : bool) -> None:
+		if shown:
+			self.system_monitor.start()
+		else:
+			self.system_monitor.stop()
+
 	def startup(self) -> None:
 		from ffstudio.updater import read_update_result
 		update_result = read_update_result()
@@ -107,6 +125,8 @@ class MainWindow(FluentWindow):
 			self.switchTo(self.setup_page)
 			self.show_notification('info', 'Welcome', 'Point the app at your FaceFusion v4 folder, or install v4 from here.')
 			return
+		if self.session.config.get('show_system_monitor'):
+			self.system_monitor.start()
 		# the python check runs off the ui thread and fills in the session's python version
 		self.setup_page.refresh_status()
 		self.session.refresh_schema()
@@ -132,6 +152,7 @@ class MainWindow(FluentWindow):
 			self.session.clear_facefusion_temp()
 		self.studio_page.release_result_reader()
 		self.studio_page.face_probe.stop()
+		self.system_monitor.stop()
 		self.session.preview_worker.stop()
 		self.session.clear_preview_files()
 		self.session.save()

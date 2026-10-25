@@ -58,6 +58,49 @@ def fetch_github_json(path : str) -> Any:
 		return json.loads(response.read().decode('utf-8'))
 
 
+def switch_facefusion_commit(root : str, branch : str, commit : str) -> Dict[str, Any]:
+	"""moves a facefusion git checkout to one commit, or to the newest one of its branch when commit is empty. the branch keeps its
+	name, so update checks still work, and git refuses when local changes would be overwritten. blocks, so run it off the ui thread"""
+	result : Dict[str, Any] = { 'error': '', 'commit': '', 'previous': '', 'requirements_changed': False }
+
+	def git(args : List[str], timeout : int = 300) -> subprocess.CompletedProcess:
+		return subprocess.run([ 'git', '-C', root ] + args, capture_output = True, text = True, timeout = timeout, creationflags = CREATE_NO_WINDOW)
+
+	def read_requirements() -> str:
+		try:
+			with open(os.path.join(root, 'requirements.txt'), encoding = 'utf-8') as file:
+				return file.read()
+		except OSError:
+			return ''
+
+	try:
+		result['previous'] = git([ 'rev-parse', 'HEAD' ]).stdout.strip()
+		old_requirements = read_requirements()
+		# the installer makes a shallow clone, so the commit is fetched first. github serves any commit of the repository
+		fetched = git([ 'fetch', '--depth', '1', 'origin', commit or branch ])
+		if fetched.returncode != 0:
+			result['error'] = (fetched.stderr.strip().splitlines() or [ 'git fetch failed' ])[-1]
+			return result
+		target = commit or git([ 'rev-parse', 'FETCH_HEAD' ]).stdout.strip()
+		switched = git([ 'checkout', '-B', branch, target ] if branch and branch != 'HEAD' else [ 'checkout', '--detach', target ])
+		if switched.returncode != 0:
+			result['error'] = (switched.stderr.strip().splitlines() or [ 'git checkout failed' ])[-1]
+			return result
+		result['commit'] = git([ 'rev-parse', 'HEAD' ]).stdout.strip()
+		result['requirements_changed'] = read_requirements() != old_requirements
+	except (OSError, subprocess.SubprocessError) as exception:
+		result['error'] = str(exception)
+	return result
+
+
+def compare_github_commits(repository : str, base : str, head : str) -> Dict[str, Any]:
+	"""where head stands against base: identical, ahead (newer), behind (older) or diverged, with how many commits apart"""
+	if base == head:
+		return { 'status': 'identical', 'ahead': 0, 'behind': 0 }
+	compare = fetch_github_json('repos/%s/compare/%s...%s' % (repository, base, head))
+	return { 'status': compare.get('status', ''), 'ahead': compare.get('ahead_by', 0), 'behind': compare.get('behind_by', 0) }
+
+
 def fetch_github_build(repository : str, branch : str, commit : str) -> Dict[str, Any]:
 	"""newest release and branch head on github, and how far the local commit is behind it. blocks, so run it off the ui thread"""
 	result : Dict[str, Any] = { 'release': '', 'branch': branch, 'commit': '', 'date': '', 'status': '', 'behind': 0 }

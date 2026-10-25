@@ -32,7 +32,8 @@ FaceFusion itself is not included: install FaceFusion v4 separately, then point 
 - **Mask**: shades the face mask FaceFusion will blend through, and redraws as you change mask settings.
 - **Models**: download the lite or full model set, see what's installed, and delete models to free space.
 - **Benchmark**: runs FaceFusion's benchmark on your hardware and exports the results as a shareable image.
-- **Setup**: point the app at an existing FaceFusion v4 or install it from scratch, and check GitHub for FaceFusion updates.
+- **Setup**: point the app at an existing FaceFusion v4 or install it from scratch, and check GitHub for FaceFusion updates. It shows whether your FaceFusion is the version StudioFF was tested with, and can switch to that version, to the latest one or back again.
+- **System monitor**: graphics card, processor and memory use in the title bar, read with FaceFusion's own libraries. It can be turned off in Setup.
 - **Custom look**: Auto, Light or Dark theme, with your own accent color for each (one click puts back the standard purple).
 - **Fluent design**: Windows 11 style throughout, a splash screen with a loading bar, and settings remembered between runs.
 
@@ -66,9 +67,12 @@ FaceFusion also needs `ffmpeg`, `ffprobe` and `curl` on `PATH`. Setup checks for
 | `ffstudio/nsfw.py` | NSFW messages, the red bar and the flagged-frames window |
 | `ffstudio/face_probe.py` | Runs inside the FaceFusion environment and stays running: the faces found in a frame, which would be processed, and their face mask |
 | `ffstudio/faces.py` | Talks to `face_probe.py` and words its results |
+| `ffstudio/system_monitor.py` | Runs inside the FaceFusion environment and stays running: graphics card, processor and memory use once a second |
+| `ffstudio/monitor.py` | Talks to `system_monitor.py` and shows its numbers in the title bar |
 | `ffstudio/pages/*` | Studio, Batch, Models, Benchmark, Console, Setup |
 
-App data (settings, cached schema, preview frames) lives in `%APPDATA%\FaceFusionStudio`. The preview
+App data (settings, cached schema, preview frames) lives in `%APPDATA%\StudioFF` (versions before v0.40 used `%APPDATA%\FaceFusionStudio`,
+which is moved over on the first start). The preview
 folder only ever holds the latest frame and result (overwritten each time) and is deleted when the app
 closes. After **Stop** or a failed run, FaceFusion's temp folder for this machine is cleared too.
 Set `FFSTUDIO_DATA_DIR` to use a different folder.

@@ -10,8 +10,11 @@ from typing import Callable, Optional, Tuple
 from ffstudio.config import DATA_DIR
 
 APP_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-UPDATE_DIR = os.path.join(tempfile.gettempdir(), 'FaceFusionStudio-update')
+UPDATE_DIR = os.path.join(tempfile.gettempdir(), 'StudioFF-update')
 RESULT_FILE = os.path.join(DATA_DIR, 'update-result.txt')
+# top level files older releases shipped and newer ones do not, the update copies new files but never deletes old ones.
+# add a file here whenever a release removes or renames one outside ffstudio (that folder is replaced as a whole)
+RETIRED_FILES = [ 'FaceFusion Studio.bat' ]
 CREATE_NEW_PROCESS_GROUP = 0x00000200
 CREATE_NO_WINDOW = 0x08000000
 CREATE_BREAKAWAY_FROM_JOB = 0x01000000
@@ -61,6 +64,19 @@ Stop-Transcript | Out-Null
 
 def is_git_checkout() -> bool:
 	return os.path.isdir(os.path.join(APP_ROOT, '.git'))
+
+
+def remove_retired_files() -> None:
+	"""deletes what an update left behind from older releases, never in a git checkout where git owns the files"""
+	if is_git_checkout():
+		return
+	for name in RETIRED_FILES:
+		path = os.path.join(APP_ROOT, name)
+		if os.path.isfile(path):
+			try:
+				os.remove(path)
+			except OSError:
+				pass
 
 
 def download_release(zip_url : str, progress : Callable[[int, int], None]) -> str:

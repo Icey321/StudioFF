@@ -1,6 +1,9 @@
 """checks for the parts of Studio that need no window or FaceFusion, run with: python -m unittest discover tests"""
+import json
 import os
 import pathlib
+import shutil
+import subprocess
 import tempfile
 import unittest
 import zipfile
@@ -8,13 +11,14 @@ import zipfile
 import cv2
 import numpy
 
+from ffstudio.config import migrate_data_dir
 from ffstudio.environment import is_newer_version
 from ffstudio.face_mapping import SELECTED, pass_distance, plan_passes
 from ffstudio.media import VideoReader
 from ffstudio.output_name import build_output, build_output_path, clean_name, expand, unknown_tags
 from ffstudio.runner import ProcessRunner
 from ffstudio.schema import Schema, build_option_args
-from ffstudio.updater import download_release
+from ffstudio.updater import APP_ROOT, RETIRED_FILES, download_release
 
 
 class OutputNameTest(unittest.TestCase):
@@ -237,3 +241,42 @@ class DownloadReleaseTest(unittest.TestCase):
 
 if __name__ == '__main__':
 	unittest.main()
+
+
+class DataFolderTest(unittest.TestCase):
+	def test_moves_old_folder_and_its_paths(self) -> None:
+		saved = os.environ.pop('FFSTUDIO_DATA_DIR', None)
+		try:
+			with tempfile.TemporaryDirectory() as folder:
+				old_dir = os.path.join(folder, 'FaceFusionStudio')
+				new_dir = os.path.join(folder, 'StudioFF')
+				os.makedirs(os.path.join(old_dir, 'people'))
+				picture = os.path.join(old_dir, 'people', 'a.jpg')
+				with open(os.path.join(old_dir, 'config.json'), 'w', encoding = 'utf-8') as file:
+					json.dump({ 'theme': 'dark', 'people': [ picture ], 'target_path': os.path.join('C:' + os.sep, 'clip.mp4') }, file)
+				migrate_data_dir(old_dir, new_dir)
+				self.assertFalse(os.path.exists(old_dir))
+				with open(os.path.join(new_dir, 'config.json'), encoding = 'utf-8') as file:
+					data = json.load(file)
+				self.assertEqual(data['people'], [ os.path.join(new_dir, 'people', 'a.jpg') ])
+				self.assertEqual(data['target_path'], os.path.join('C:' + os.sep, 'clip.mp4'))
+				self.assertEqual(data['theme'], 'dark')
+				# a second start leaves everything alone
+				os.makedirs(old_dir)
+				migrate_data_dir(old_dir, new_dir)
+				self.assertTrue(os.path.isdir(old_dir))
+		finally:
+			if saved is not None:
+				os.environ['FFSTUDIO_DATA_DIR'] = saved
+
+
+class RetiredFilesTest(unittest.TestCase):
+	def test_every_removed_top_level_file_is_retired(self) -> None:
+		git = shutil.which('git')
+		if not git or not os.path.isdir(os.path.join(APP_ROOT, '.git')):
+			self.skipTest('needs the git checkout')
+		log = subprocess.run([ git, '-C', APP_ROOT, 'log', '--diff-filter=DR', '--name-status', '--format=' ], capture_output = True, text = True, check = True).stdout
+		current = set(subprocess.run([ git, '-C', APP_ROOT, 'ls-files' ], capture_output = True, text = True, check = True).stdout.splitlines())
+		removed = { line.split('	')[1] for line in log.splitlines() if line[:1] in 'DR' and '	' in line }
+		missing = sorted(path for path in removed - current if not path.startswith('ffstudio/') and path not in RETIRED_FILES)
+		self.assertEqual(missing, [])
