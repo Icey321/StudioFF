@@ -10,7 +10,7 @@ import math
 import os
 from typing import Any, Callable, Dict, List, Optional
 
-from PySide6.QtCore import QRectF, Qt, Signal
+from PySide6.QtCore import QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QSizePolicy, QVBoxLayout, QWidget
 from qfluentwidgets import CaptionLabel, ComboBox, FluentIcon, LineEdit, TogglePushButton, ToolTipFilter, TransparentToolButton, qconfig, themeColor
@@ -54,6 +54,11 @@ def resolve_sources(choice : str, active_images : List[str], source_paths : List
 	return []
 
 
+def is_kept(people : List[Dict[str, Any]], index : Optional[int]) -> bool:
+	"""a face's person, unless removed from the list, a removed person keeps their place so the others keep their index"""
+	return index is not None and 0 <= index < len(people) and not people[index].get('removed')
+
+
 def is_mapped(people : List[Dict[str, Any]]) -> bool:
 	return any(person.get('source') for person in people)
 
@@ -77,8 +82,11 @@ def merge_people(old : List[Dict[str, Any]], new : List[Dict[str, Any]]) -> List
 		match = next((index for index, before in enumerate(old) if index not in taken and before.get('frame') == person.get('frame') and box_overlap(before.get('box'), person.get('box')) > 0.5), None)
 		if match is not None:
 			taken.add(match)
-			person = dict(person, name = old[match].get('name', ''), source = old[match].get('source', LEAVE))
+			person = dict(person, name = old[match].get('name', ''), source = old[match].get('source', LEAVE), removed = old[match].get('removed', False))
 		merged.append(dict({ 'name': '', 'source': LEAVE }, **person))
+	# with everyone removed before, a new scan brings them all back
+	if all(person.get('removed') for person in merged):
+		merged = [ dict(person, removed = False) for person in merged ]
 	return merged
 
 
@@ -122,6 +130,7 @@ class PersonRow(QWidget):
 	changed = Signal()
 	# a new name changes no run, so it does not refresh the preview
 	renamed = Signal()
+	removed = Signal(int)
 
 	def __init__(self, card : 'FaceMappingCard', index : int, person : Dict[str, Any]) -> None:
 		super().__init__(card)
@@ -131,6 +140,13 @@ class PersonRow(QWidget):
 		layout = QHBoxLayout(self)
 		layout.setContentsMargins(0, 2, 0, 2)
 		layout.setSpacing(8)
+		self.remove_button = TransparentToolButton(FluentIcon.CLOSE.colored(QColor('#d13438'), QColor('#ff6b6b')), self)
+		self.remove_button.setFixedSize(22, 22)
+		self.remove_button.setIconSize(QSize(10, 10))
+		self.remove_button.setToolTip('Remove %s from the list, their face is left unchanged' % person_name(card.people, index))
+		self.remove_button.installEventFilter(ToolTipFilter(self.remove_button))
+		self.remove_button.clicked.connect(lambda: self.removed.emit(self.index))
+		layout.addWidget(self.remove_button)
 		self.crop = QLabel(self)
 		self.crop.setFixedSize(44, 44)
 		self.crop.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -222,23 +238,25 @@ class FaceMappingCard(CollapsibleCard):
 		self.samples = 0
 		self.rows : List[PersonRow] = []
 		self.finding = False
+		# off keeps the people, their names and sources for when it is turned on again, Start runs as usual meanwhile
+		self.enabled = True
 		self.find = find
 		self.status_label = self.subtitle_label
 		self.status_label.setMinimumWidth(0)
 		self.status_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
 		# a long summary is clipped rather than pushing the buttons away, so it takes the free room itself
 		self.header.layout().setStretchFactor(self.status_label, 1)
-		# shows in the accent color while people are found or being looked for, the card gets an accent border too
-		self.find_button = TogglePushButton(FluentIcon.PEOPLE, 'Find people', self)
-		self.find_button.setToolTip('Look through the target for the different people in it, so each one can get a source of their own')
+		self.refresh_button = TransparentToolButton(FluentIcon.SYNC, self)
+		self.refresh_button.setToolTip('Look through the target for people again, the names and sources you gave are kept')
+		self.refresh_button.installEventFilter(ToolTipFilter(self.refresh_button))
+		self.refresh_button.clicked.connect(self.find)
+		self.add_tool(self.refresh_button)
+		# the switch: in the accent color while face mapping is on or people are being looked for, the card gets an accent tint too
+		self.find_button = TogglePushButton(FluentIcon.PEOPLE, 'Face mapping off', self)
+		self.find_button.setToolTip('Turn face mapping on to give each person in the target a source of their own.\nThe first time it looks through the target for the people in it, turned off it keeps them for later.')
 		self.find_button.installEventFilter(ToolTipFilter(self.find_button))
 		self.find_button.clicked.connect(self.on_find_clicked)
 		self.add_tool(self.find_button)
-		self.clear_button = TransparentToolButton(FluentIcon.DELETE, self)
-		self.clear_button.setToolTip('Forget the people of this target, Start runs as usual again')
-		self.clear_button.installEventFilter(ToolTipFilter(self.clear_button))
-		self.clear_button.clicked.connect(self.clear)
-		self.add_tool(self.clear_button)
 		rows = QWidget(self.body)
 		self.rows_layout = QVBoxLayout(rows)
 		self.rows_layout.setContentsMargins(0, 0, 0, 0)
@@ -253,20 +271,39 @@ class FaceMappingCard(CollapsibleCard):
 		self.set_people([], 0)
 
 	def active(self) -> bool:
-		return self.finding or bool(self.people)
+		return self.finding or self.enabled and bool(self.people)
+
+	def kept_count(self) -> int:
+		return sum(1 for person in self.people if not person.get('removed'))
+
+	def active_people(self) -> List[Dict[str, Any]]:
+		"""the people runs and the face boxes follow, none while face mapping is off"""
+		return self.people if self.enabled else []
 
 	def on_find_clicked(self) -> None:
-		self.find()
-		# a click toggles the button, put it back to what the card really shows when nothing started
-		self.find_button.setChecked(self.active())
+		if self.active():
+			self.enabled = False
+			self.refresh_text()
+			self.changed.emit()
+		elif self.people:
+			self.enabled = True
+			self.refresh_text()
+			self.changed.emit()
+		else:
+			self.find()
+			# a click toggles the button, put it back to what the card really shows when nothing started
+			self.find_button.setChecked(self.active())
 
 	def paintEvent(self, event) -> None:
 		super().paintEvent(event)
 		if self.active():
 			painter = QPainter(self)
 			painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+			tint = QColor(themeColor())
+			tint.setAlpha(22)
+			painter.setBrush(tint)
+			# an outline in the accent color around the whole card says it is on
 			painter.setPen(QPen(themeColor(), 1.5))
-			painter.setBrush(Qt.BrushStyle.NoBrush)
 			painter.drawRoundedRect(QRectF(self.rect()).adjusted(1, 1, -1, -1), 7, 7)
 
 	def on_toggled(self, expanded : bool) -> None:
@@ -274,25 +311,33 @@ class FaceMappingCard(CollapsibleCard):
 			self.page.session.config.set('face_mapping_expanded', expanded)
 			self.refresh_text()
 
-	def set_people(self, people : List[Dict[str, Any]], samples : int) -> None:
+	def set_people(self, people : List[Dict[str, Any]], samples : int, enabled : bool = True) -> None:
 		self.people = people
 		self.samples = samples
+		self.enabled = enabled
 		for row in self.rows:
+			# gone right away, deleteLater alone leaves the old rows showing next to the new ones until the next event loop pass
+			row.hide()
+			self.rows_layout.removeWidget(row)
 			row.deleteLater()
 		self.rows = []
 		for index, person in enumerate(people):
+			if person.get('removed'):
+				continue
 			row = PersonRow(self, index, person)
 			row.changed.connect(self.on_row_changed)
 			row.renamed.connect(self.on_row_renamed)
+			row.removed.connect(self.remove_person)
 			self.rows_layout.addWidget(row)
 			self.rows.append(row)
-		self.clear_button.setVisible(bool(people))
 		self.refresh_text()
 
 	def set_finding(self, done : int, total : int) -> None:
 		self.finding = True
 		self.find_button.setEnabled(False)
 		self.find_button.setChecked(True)
+		self.find_button.setText('Face mapping on')
+		self.refresh_button.setEnabled(False)
 		self.update()
 		if total:
 			self.status_label.setText('Looking at frame %d of %d…' % (done + 1, total))
@@ -306,17 +351,28 @@ class FaceMappingCard(CollapsibleCard):
 
 	def refresh_text(self) -> None:
 		self.finding = False
+		on = self.active()
 		self.find_button.setEnabled(True)
-		self.find_button.setChecked(self.active())
+		self.find_button.setChecked(on)
+		self.find_button.setText('Face mapping on' if on else 'Face mapping off')
+		self.refresh_button.setEnabled(True)
+		self.refresh_button.setVisible(on)
+		self.rows_layout.parentWidget().setVisible(on)
 		self.update()
+		count = self.kept_count()
+		if self.people and not self.enabled:
+			self.status_label.setText('%d %s saved' % (count, 'person' if count == 1 else 'people'))
+			self.status_label.setToolTip('')
+			self.footer_label.setText('Face mapping is off, Start runs as usual. Turn it on to use the people found before with their names and sources.')
+			return
 		if not self.people:
 			self.status_label.setText('')
-			self.footer_label.setText('Find people to give each person in the target a source of their own.' if self.page.target_path else 'Choose a target first.')
+			self.footer_label.setText('Turn face mapping on to give each person in the target a source of their own.' if self.page.target_path else 'Choose a target first.')
 			return
 		frames = ' in %d frames' % self.samples if self.samples > 1 else ''
 		summary = [ '%s → %s' % (person_name(self.people, index), self.page.source_label(person.get('source'))) for index, person in enumerate(self.people) if person.get('source') ]
 		if self.body.isVisible() or not summary:
-			self.status_label.setText('%d %s found%s' % (len(self.people), 'person' if len(self.people) == 1 else 'people', frames))
+			self.status_label.setText('%d %s found%s' % (count, 'person' if count == 1 else 'people', frames))
 		else:
 			self.status_label.setText(' · '.join(summary))
 		self.status_label.setToolTip('\n'.join(summary))
@@ -326,7 +382,7 @@ class FaceMappingCard(CollapsibleCard):
 		elif passes[0].get('many'):
 			self.footer_label.setText('Everyone gets the same source, so it runs once like a normal run.')
 		else:
-			left = len(self.people) - len(passes)
+			left = count - len(passes)
 			self.footer_label.setText('Runs %d %s, one per mapped face.%s Pick the same source twice to put one person on both faces.' % (len(passes), 'pass' if len(passes) == 1 else 'passes', ' %d left unchanged.' % left if left else ''))
 
 	def on_row_changed(self) -> None:
@@ -337,9 +393,26 @@ class FaceMappingCard(CollapsibleCard):
 		self.refresh_text()
 		self.renamed.emit()
 
+	def remove_person(self, index : int) -> None:
+		"""takes a person off the list and leaves their face unchanged, the last one leaves no people at all"""
+		if not is_kept(self.people, index):
+			return
+		if self.kept_count() == 1:
+			self.clear()
+			return
+		self.people[index].update(removed = True, source = LEAVE)
+		self.set_people(self.people, self.samples, self.enabled)
+		self.changed.emit()
+
+	def restore_person(self, index : int) -> None:
+		if 0 <= index < len(self.people) and self.people[index].get('removed'):
+			self.people[index]['removed'] = False
+			self.set_people(self.people, self.samples, self.enabled)
+			self.changed.emit()
+
 	def clear(self) -> None:
 		self.set_people([], 0)
 		self.changed.emit()
 
 	def row(self, index : int) -> Optional[PersonRow]:
-		return self.rows[index] if 0 <= index < len(self.rows) else None
+		return next((row for row in self.rows if row.index == index), None)

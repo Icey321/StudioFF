@@ -1,7 +1,7 @@
 import math
 import os
 import textwrap
-from typing import List, Optional, Tuple
+from typing import Callable, List, Optional, Tuple
 
 import cv2
 import numpy
@@ -487,14 +487,26 @@ class SplitterHandle(QSplitterHandle):
 		self.update()
 		super().mouseReleaseEvent(event)
 
+	def mouseDoubleClickEvent(self, event) -> None:
+		if event.button() == Qt.MouseButton.LeftButton:
+			self.splitter().reset_sizes()
+
 
 class Splitter(QSplitter):
-	"""splitter with a slim grip that lights up on hover"""
+	"""splitter with a slim grip that lights up on hover, a double click on the grip puts back default_sizes"""
+	reset = Signal()
 
 	def __init__(self, orientation : Qt.Orientation, parent : Optional[QWidget] = None) -> None:
 		super().__init__(orientation, parent)
 		self.setHandleWidth(16)
 		self.setChildrenCollapsible(False)
+		# the sizes for the room there is, none leaves a double click doing nothing
+		self.default_sizes : Optional[Callable[[int], List[int]]] = None
+
+	def reset_sizes(self) -> None:
+		if self.default_sizes:
+			self.setSizes(self.default_sizes(sum(self.sizes())))
+			self.reset.emit()
 
 	def createHandle(self) -> QSplitterHandle:
 		return SplitterHandle(self.orientation(), self)

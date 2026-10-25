@@ -7,13 +7,13 @@ from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
 import cv2
-from PySide6.QtCore import QPoint, QSize, Qt, QTimer, QUrl
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtCore import QEvent, QPoint, QRectF, QSize, Qt, QTimer, QUrl, Signal
+from PySide6.QtGui import QColor, QDesktopServices, QPainter
 from PySide6.QtWidgets import QFileDialog, QGridLayout, QHBoxLayout, QSizePolicy, QVBoxLayout, QWidget
-from qfluentwidgets import Action, BodyLabel, CaptionLabel, FlowLayout, FluentIcon, Flyout, FlyoutAnimationType, FlyoutViewBase, IndeterminateProgressBar, LineEdit, PrimaryPushButton, ProgressBar, PushButton, RoundMenu, ScrollArea, SearchLineEdit, SegmentedWidget, SimpleCardWidget, SingleDirectionScrollArea, Slider, StrongBodyLabel, SubtitleLabel, TogglePushButton, ToolTipFilter, TransparentPushButton, TransparentToolButton
+from qfluentwidgets import Action, BodyLabel, CaptionLabel, FlowLayout, FluentIcon, Flyout, FlyoutAnimationType, FlyoutViewBase, IndeterminateProgressBar, LineEdit, PrimaryPushButton, ProgressBar, PushButton, RoundMenu, ScrollArea, SearchLineEdit, SegmentedWidget, SimpleCardWidget, SingleDirectionScrollArea, Slider, StrongBodyLabel, SubtitleLabel, TogglePushButton, ToolTipFilter, TransparentPushButton, TransparentToolButton, themeColor
 
 from ffstudio.config import APP_DIR, PREVIEW_DIR
-from ffstudio.face_mapping import FACE_PROCESSORS, FRAME_PROCESSORS, LEAVE, PEOPLE_FILE, SELECTED, FaceMappingCard, box_overlap, is_mapped, merge_people, people_dir, person_color, person_name, plan_passes
+from ffstudio.face_mapping import FACE_PROCESSORS, FRAME_PROCESSORS, LEAVE, PEOPLE_FILE, SELECTED, FaceMappingCard, box_overlap, is_kept, is_mapped, merge_people, people_dir, person_color, person_name, plan_passes
 from ffstudio.faces import FACE_GROUPS, MASK_GROUPS, FaceProbe, describe_faces, describe_mask, face_tag, read_mask
 from ffstudio.media import GIF_EXTENSIONS, VideoReader, extension, format_timecode, media_kind, read_frame, read_image, thumbnail, to_pixmap, write_image
 from ffstudio.nsfw import BLOCKED_STATUS, NsfwDialog, describe_result, show_blocked_bar
@@ -322,6 +322,63 @@ class SourceCard(SimpleCardWidget):
 		self.page.add_sources(collect_drop_paths(event))
 
 
+class EdgeGrip(QWidget):
+	"""the bottom edge of a card, dragging it asks for a new card height and a double click for the fitted one"""
+	dragged = Signal(int)
+	released = Signal()
+	reset = Signal()
+	HEIGHT = 10
+
+	def __init__(self, card : QWidget) -> None:
+		super().__init__(card)
+		self.card = card
+		self.hovered = False
+		# the distance from the grab point to the bottom of the card while dragging
+		self.drag_offset : Optional[float] = None
+		self.setCursor(Qt.CursorShape.SizeVerCursor)
+		self.setToolTip('Drag to make the target taller or shorter, double-click to fit it to the window again')
+		self.installEventFilter(ToolTipFilter(self))
+
+	def card_y(self, event) -> float:
+		return self.card.mapFromGlobal(event.globalPosition()).y()
+
+	def mousePressEvent(self, event) -> None:
+		if event.button() == Qt.MouseButton.LeftButton:
+			self.drag_offset = self.card.height() - self.card_y(event)
+			self.update()
+
+	def mouseMoveEvent(self, event) -> None:
+		if self.drag_offset is not None:
+			self.dragged.emit(round(self.card_y(event) + self.drag_offset))
+
+	def mouseReleaseEvent(self, event) -> None:
+		if self.drag_offset is not None and event.button() == Qt.MouseButton.LeftButton:
+			self.drag_offset = None
+			self.released.emit()
+			self.update()
+
+	def mouseDoubleClickEvent(self, event) -> None:
+		self.reset.emit()
+
+	def enterEvent(self, event) -> None:
+		self.hovered = True
+		self.update()
+
+	def leaveEvent(self, event) -> None:
+		self.hovered = False
+		self.update()
+
+	def paintEvent(self, event) -> None:
+		# a short bar in the middle of the edge shows it can be dragged
+		painter = QPainter(self)
+		painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+		painter.setPen(Qt.PenStyle.NoPen)
+		active = self.hovered or self.drag_offset is not None
+		painter.setBrush(themeColor() if active else QColor(128, 128, 128, 110))
+		width = 56 if active else 40
+		painter.drawRoundedRect(QRectF((self.width() - width) / 2, self.height() - 6, width, 3), 1.5, 1.5)
+
+
 class TargetCard(SimpleCardWidget):
 	def __init__(self, page : 'StudioPage') -> None:
 		super().__init__(page)
@@ -451,13 +508,23 @@ class TargetCard(SimpleCardWidget):
 		self.open_result_button = tool_button(FluentIcon.VIEW, 'Open Preview', self)
 		self.open_result_button.clicked.connect(lambda: self.page.open_path(self.page.last_output))
 		self.open_result_button.setEnabled(False)
-		self.show_result_button = tool_button(FluentIcon.FOLDER, 'Open Preview in Explorer', self)
+		self.show_result_button = tool_button(FluentIcon.SHARE, 'Open Preview in Explorer', self)
 		self.show_result_button.clicked.connect(self.page.reveal_output)
 		self.show_result_button.setEnabled(False)
 		result_row.addWidget(self.open_result_button)
 		result_row.addWidget(self.show_result_button)
 		layout.addLayout(result_row)
 		self.set_preview_progress(None)
+		# the bottom edge drags the card taller or shorter
+		self.grip = EdgeGrip(self)
+		self.grip.dragged.connect(self.page.set_target_height)
+		self.grip.released.connect(self.page.save_target_height)
+		self.grip.reset.connect(lambda: (self.page.set_target_height(None), self.page.save_target_height()))
+
+	def resizeEvent(self, event) -> None:
+		super().resizeEvent(event)
+		self.grip.setGeometry(0, self.height() - EdgeGrip.HEIGHT, self.width(), EdgeGrip.HEIGHT)
+		self.grip.raise_()
 
 	def set_preview_progress(self, ratio : Optional[float], text : str = '', tip : str = '') -> None:
 		"""None hides the bar, a negative ratio shows the indeterminate bar, 0 to 1 shows progress"""
@@ -861,18 +928,33 @@ class StudioPage(SourceSelection, QWidget):
 		left_widget.setStyleSheet('#studioMedia { background: transparent }')
 		left_scroll.setWidget(left_widget)
 		left = ShrinkingColumn(left_widget)
-		left.setContentsMargins(0, 0, 0, 0)
+		# room on the right for the scroll bar, so it never sits on a card
+		left.setContentsMargins(0, 0, 14, 0)
 		left.setSpacing(12)
 		self.source_card = SourceCard(self)
 		self.target_card = TargetCard(self)
 		self.mapping_card = FaceMappingCard(self, self.find_people)
 		self.mapping_card.changed.connect(self.on_mapping_changed)
 		self.mapping_card.renamed.connect(self.save_mapping)
+		self.output_card = self.create_output_card()
 		left.addWidget(self.source_card)
-		left.addWidget(self.target_card, 1)
 		left.addWidget(self.mapping_card)
-		left.addWidget(self.create_output_card())
+		left.addWidget(self.target_card)
+		left.addWidget(self.output_card)
+		left.addStretch(1)
 		self.splitter.addWidget(left_scroll)
+		# the target keeps its height when the face mapping opens, the cards below move down and the column scrolls
+		# no saved height fits it to the window as if the face mapping were folded up
+		self.left_scroll = left_scroll
+		self.left_column = left
+		self.target_height : Optional[int] = session.config.get('studio_target_height') or None
+		self.target_fit_timer = QTimer(self)
+		self.target_fit_timer.setSingleShot(True)
+		self.target_fit_timer.setInterval(0)
+		self.target_fit_timer.timeout.connect(self.fit_target)
+		left_scroll.viewport().installEventFilter(self)
+		self.source_card.installEventFilter(self)
+		self.mapping_card.installEventFilter(self)
 
 		# right column: search, processors + options
 		self.settings_column = SettingsColumn(session, self.splitter, expansion_key = 'studio_groups_expanded')
@@ -882,6 +964,9 @@ class StudioPage(SourceSelection, QWidget):
 		self.splitter.setStretchFactor(1, 9)
 		self.splitter.setSizes(session.config.get('studio_split') or [ 1100, 900 ])
 		self.splitter.splitterMoved.connect(lambda *_: self.session.config.set('studio_split', self.splitter.sizes()))
+		# a double click on the grip splits the page in half again
+		self.splitter.default_sizes = lambda total: [ total // 2, total - total // 2 ]
+		self.splitter.reset.connect(lambda: self.session.config.set('studio_split', self.splitter.sizes()))
 
 		root.addWidget(self.create_run_bar())
 
@@ -901,6 +986,38 @@ class StudioPage(SourceSelection, QWidget):
 		self.schedule_face_scan()
 
 	# layout pieces
+
+	def eventFilter(self, watched, event) -> bool:
+		if event.type() in (QEvent.Type.Resize, QEvent.Type.LayoutRequest):
+			self.target_fit_timer.start()
+		return super().eventFilter(watched, event)
+
+	def fitted_target_height(self) -> int:
+		"""the room left for the target in the window with the face mapping folded up"""
+		mapping = self.mapping_card
+		folded = mapping.sizeHint().height()
+		if mapping.body.isVisible():
+			folded -= mapping.body.sizeHint().height() + mapping.layout().spacing()
+		others = self.source_card.sizeHint().height() + folded + self.output_card.sizeHint().height() + 3 * self.left_column.spacing()
+		return self.left_scroll.viewport().height() - others
+
+	def fit_target(self) -> None:
+		card = self.target_card
+		height = max(card.minimumSizeHint().height(), self.target_height or self.fitted_target_height())
+		if card.height() != height or card.maximumHeight() != height:
+			card.setFixedHeight(height)
+
+	def set_target_height(self, height : Optional[int]) -> None:
+		"""None fits the target to the window again"""
+		self.target_height = None if height is None else max(self.target_card.minimumSizeHint().height(), min(height, 4000))
+		self.fit_target()
+		# the edge stays in view while it is dragged below the bottom of the column
+		card = self.target_card
+		if height is not None:
+			self.left_scroll.ensureVisible(0, card.y() + card.height(), 0, 24)
+
+	def save_target_height(self) -> None:
+		self.session.config.set('studio_target_height', self.target_height)
 
 	def create_output_card(self) -> QWidget:
 		card = SimpleCardWidget(self)
@@ -934,7 +1051,7 @@ class StudioPage(SourceSelection, QWidget):
 		self.subfolders_button.setChecked(bool(self.session.config.get('output_subfolders')))
 		self.subfolders_button.toggled.connect(self.on_subfolders_toggled)
 		layout.addWidget(self.subfolders_button)
-		open_button = tool_button(FluentIcon.FOLDER_ADD, 'Open output folder', card)
+		open_button = tool_button(FluentIcon.SHARE, 'Open output folder', card)
 		open_button.clicked.connect(self.open_output_folder)
 		layout.addWidget(open_button)
 		# what the file will be called, so tags can be checked before a run
@@ -980,7 +1097,7 @@ class StudioPage(SourceSelection, QWidget):
 		status_layout.addWidget(self.progress_bar)
 		layout.addLayout(status_layout, 1)
 		layout.addSpacing(10)
-		self.open_output_button = PushButton(FluentIcon.FOLDER, 'Open Output Folder', card)
+		self.open_output_button = PushButton(FluentIcon.SHARE, 'Open Output Folder', card)
 		self.open_output_button.setToolTip('Open the folder the results are saved to in File Explorer')
 		self.open_output_button.installEventFilter(ToolTipFilter(self.open_output_button))
 		self.open_output_button.clicked.connect(self.open_output_folder)
@@ -1517,12 +1634,12 @@ class StudioPage(SourceSelection, QWidget):
 			return
 		faces = (result.get('faces') or []) if card.faces_button.isChecked() else []
 		mask = read_mask(result.get('mask')) if card.mask_button.isChecked() else None
-		people = self.mapping_card.people
+		people = self.mapping_card.active_people()
 		mapped = is_mapped(people)
 		boxes = []
 		for index, face in enumerate(faces):
 			person = face.get('person')
-			if person is not None and person < len(people):
+			if is_kept(people, person):
 				# with a mapping a face is processed when its person has a source, the face selector is set per pass
 				label = '%s → %s' % (person_name(people, person), self.source_label(people[person].get('source'))) if people[person].get('source') else person_name(people, person)
 				boxes.append((face.get('box'), label, bool(people[person].get('source')) if mapped else bool(face.get('selected')), person_color(person)))
@@ -1534,9 +1651,9 @@ class StudioPage(SourceSelection, QWidget):
 		problem = bool(result.get('error'))
 		if card.faces_button.isChecked() and mapped and not problem:
 			found = '1 face detected' if len(faces) == 1 else '%d faces detected' % len(faces)
-			named = [ face for face in faces if face.get('person') is not None and face.get('person') < len(people) ]
+			named = [ face for face in faces if is_kept(people, face.get('person')) ]
 			swapped = [ face for face in named if people[face.get('person')].get('source') ]
-			lines.append('%s, %d of them mapped. Face mapping runs one pass per mapped person, the face selector is set for each pass.' % (found, len(swapped)) + ('' if len(named) == len(faces) else ' Faces without a name are left as they are, Find people again if someone is missing.'))
+			lines.append('%s, %d of them mapped. Face mapping runs one pass per mapped person, the face selector is set for each pass.' % (found, len(swapped)) + ('' if len(named) == len(faces) else ' Faces without a name are left as they are, look for people again with the refresh button if someone is missing.'))
 		elif card.faces_button.isChecked() or problem:
 			reference_index = int(self.session.values.get('reference_frame_index') or 0) if card.reader else None
 			lines.append(describe_faces(result, reference_index))
@@ -1553,10 +1670,14 @@ class StudioPage(SourceSelection, QWidget):
 		if not 0 <= index < len(self.shown_faces):
 			return
 		person = self.shown_faces[index].get('person')
-		people = self.mapping_card.people
+		people = self.mapping_card.active_people()
 		menu = RoundMenu(parent = self)
-		if person is None or person >= len(people):
-			menu.addAction(Action(FluentIcon.PEOPLE, 'Find people to name this face', triggered = self.find_people))
+		if person is not None and person < len(people) and people[person].get('removed'):
+			menu.addAction(Action(FluentIcon.ADD, 'Add %s back to Face mapping' % person_name(people, person), triggered = lambda: self.mapping_card.restore_person(person)))
+			menu.exec(position)
+			return
+		if not is_kept(people, person):
+			menu.addAction(Action(FluentIcon.PEOPLE, 'Turn face mapping on to name this face', triggered = self.turn_mapping_on))
 			menu.exec(position)
 			return
 		row = self.mapping_card.row(person)
@@ -1571,13 +1692,15 @@ class StudioPage(SourceSelection, QWidget):
 			sources.addAction(action)
 		menu.addMenu(sources)
 		menu.addAction(Action(FluentIcon.CANCEL, 'Leave unchanged', triggered = lambda: row.set_source(LEAVE)))
+		menu.addSeparator()
+		menu.addAction(Action(FluentIcon.DELETE, 'Remove %s from Face mapping' % person_name(people, person), triggered = lambda: self.mapping_card.remove_person(person)))
 		menu.exec(position)
 
 	# face mapping
 
 	def load_mapping(self) -> None:
 		stored = (self.session.config.get('face_maps') or {}).get(self.target_path) if self.target_path else None
-		self.mapping_card.set_people([ dict(person) for person in (stored or {}).get('people') or [] ], int((stored or {}).get('samples') or 0))
+		self.mapping_card.set_people([ dict(person) for person in (stored or {}).get('people') or [] ], int((stored or {}).get('samples') or 0), (stored or {}).get('enabled', True))
 
 	def on_mapping_changed(self) -> None:
 		self.save_mapping()
@@ -1586,7 +1709,7 @@ class StudioPage(SourceSelection, QWidget):
 	def save_mapping(self) -> None:
 		maps = dict(self.session.config.get('face_maps') or {})
 		if self.mapping_card.people:
-			maps[self.target_path] = { 'people': self.mapping_card.people, 'samples': self.mapping_card.samples }
+			maps[self.target_path] = { 'people': self.mapping_card.people, 'samples': self.mapping_card.samples, 'enabled': self.mapping_card.enabled }
 		else:
 			maps.pop(self.target_path, None)
 			shutil.rmtree(people_dir(self.target_path), ignore_errors = True)
@@ -1597,7 +1720,7 @@ class StudioPage(SourceSelection, QWidget):
 		self.schedule_face_scan()
 
 	def people_file(self) -> Optional[str]:
-		path = os.path.join(people_dir(self.target_path), PEOPLE_FILE) if self.target_path and self.mapping_card.people else ''
+		path = os.path.join(people_dir(self.target_path), PEOPLE_FILE) if self.target_path and self.mapping_card.active_people() else ''
 		return path if path and os.path.isfile(path) else None
 
 	def source_label(self, choice : str) -> str:
@@ -1622,6 +1745,10 @@ class StudioPage(SourceSelection, QWidget):
 		self.mapping_card.set_finding(0, 0)
 		self.face_probe.find_people(self.target_path, start, end, self.session.option_args(groups = FACE_GROUPS), crops, tag = self.target_path)
 
+	def turn_mapping_on(self) -> None:
+		if not self.mapping_card.active():
+			self.mapping_card.on_find_clicked()
+
 	def on_people_found(self, result : dict) -> None:
 		if result.get('tag') != self.target_path:
 			return
@@ -1629,16 +1756,21 @@ class StudioPage(SourceSelection, QWidget):
 			self.mapping_card.refresh_text()
 			self.session.notify.emit('error', 'Find people', result.get('error'))
 			return
+		passes = self.mapping_passes()
 		people = merge_people(self.mapping_card.people, result.get('people') or [])
-		self.mapping_card.set_people(people, int(result.get('samples') or 0))
+		self.mapping_card.set_people(people, int(result.get('samples') or 0), bool(people))
 		self.mapping_card.set_expanded(True)
-		self.on_mapping_changed()
+		# finding the same people again leaves the runs as they were, so the preview is not made again, like after a rename
+		if self.mapping_passes() == passes:
+			self.save_mapping()
+		else:
+			self.on_mapping_changed()
 		if not people:
 			self.session.notify.emit('info', 'Find people', 'No face was found in the target. Try a lower Face detector Score or another Model.')
 
 	def mapping_passes(self) -> List[dict]:
 		"""the runs a face mapping needs, none when there is no mapping or no processor follows the face selector"""
-		people = self.mapping_card.people
+		people = self.mapping_card.active_people()
 		if not people or not any(processor in FACE_PROCESSORS for processor in self.session.processors()):
 			return []
 		images = [ path for path in self.active_sources() if media_kind(path) == 'image' ]
@@ -1651,7 +1783,7 @@ class StudioPage(SourceSelection, QWidget):
 		trim_end = self.session.values.get('trim_frame_end')
 		for item in passes:
 			if not item.get('many') and video and (item.get('frame') < trim_start or trim_end is not None and item.get('frame') >= trim_end):
-				self.session.notify.emit('warning', 'Face mapping', "%s's reference frame #%d is outside the trimmed part. Click Find people again." % (item.get('label'), item.get('frame')))
+				self.session.notify.emit('warning', 'Face mapping', "%s's reference frame #%d is outside the trimmed part. Look for people again with the refresh button." % (item.get('label'), item.get('frame')))
 				return
 		shutil.rmtree(PASSES_DIR, ignore_errors = True)
 		os.makedirs(PASSES_DIR, exist_ok = True)
@@ -1716,7 +1848,7 @@ class StudioPage(SourceSelection, QWidget):
 			self.locate_next()
 			return
 		if not candidates:
-			self.fail_chain('Could not find %s in frame #%d any more. Click Find people again.' % (item.get('label'), item.get('frame')))
+			self.fail_chain('Could not find %s in frame #%d any more. Look for people again with the refresh button.' % (item.get('label'), item.get('frame')))
 			return
 		position = candidates[0].get('position', -1)
 		if position < 0:

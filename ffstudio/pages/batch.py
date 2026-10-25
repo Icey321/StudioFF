@@ -6,9 +6,9 @@ from collections import OrderedDict
 from typing import Any, Dict, List, Optional, Tuple
 
 import cv2
-from PySide6.QtCore import QFileSystemWatcher, QItemSelectionModel, QRectF, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFont, QFontMetrics, QKeySequence, QPainter, QPainterPath, QPen, QPixmap, QShortcut
-from PySide6.QtWidgets import QAbstractItemView, QFileDialog, QHBoxLayout, QListWidgetItem, QVBoxLayout, QWidget
+from PySide6.QtCore import QEvent, QFileSystemWatcher, QItemSelectionModel, QRectF, QSize, Qt, QTimer, Signal
+from PySide6.QtGui import QColor, QCursor, QFont, QFontMetrics, QKeySequence, QPainter, QPainterPath, QPen, QPixmap, QShortcut
+from PySide6.QtWidgets import QAbstractItemView, QFileDialog, QHBoxLayout, QListWidgetItem, QToolTip, QVBoxLayout, QWidget
 from qfluentwidgets import BodyLabel, CaptionLabel, ComboBox, FluentIcon, Flyout, FlyoutAnimationType, LineEdit, ListItemDelegate, ListWidget, MessageBox, PrimaryPushButton, ProgressBar, PushButton, SimpleCardWidget, Slider, StrongBodyLabel, SubtitleLabel, TogglePushButton, ToggleToolButton, ToolTipFilter, TransparentPushButton, getFont, isDarkTheme, themeColor
 
 from ffstudio.config import APP_DIR, PREVIEW_DIR
@@ -35,10 +35,13 @@ STATUS_LOOK =\
 	'blocked': ('⛔', 'NSFW content detected  ·  ', '#c42b1c', '#ff99a4'),
 	'skip': ('⛔', 'NSFW content detected, will be skipped  ·  ', '#9d5d00', '#fce100'),
 	'failed': ('✗', 'Failed  ·  ', '#c42b1c', '#ff99a4'),
+	'skipped': ('↷', 'Skipped  ·  ', '#9d5d00', '#fce100'),
 	'running': ('▶', '', None, None)
 }
 # a run that ended keeps its row until something the user changes plans the batch again
-FINISHED = ('done', 'blocked', 'failed')
+FINISHED = ('done', 'blocked', 'failed', 'skipped')
+# the outputs a hovered row offers to run again
+RETRY_STATUSES = ('skipped', 'failed')
 # facefusion's title for the step that makes the frames, the steps around it are quick or report nothing
 PROCESSING_TITLE = 'processing'
 CLOCK_TAGS = re.compile(r'\{(date|time)\}')
@@ -58,13 +61,72 @@ def upgrade_template(template : str) -> str:
 
 
 class OutputList(ListWidget):
-	"""the planned outputs, image and video files dropped on it are added as targets"""
+	"""the planned outputs, image and video files dropped on it are added as targets
+
+	the row under the mouse shows a retry button over its mark when it can run again, and a remove button at its right end
+	"""
 	files_dropped = Signal(list)
+	retry_clicked = Signal(int)
+	remove_clicked = Signal(int)
+	BUTTON_TIPS = { 'retry': 'Retry this output', 'remove': 'Remove this output from the list' }
 
 	def __init__(self, parent : Optional[QWidget] = None) -> None:
 		super().__init__(parent)
 		self.drag_active = False
 		self.viewport().setAcceptDrops(True)
+		self.hover_row = -1
+		# which button of the hovered row the mouse is on, it is drawn stronger
+		self.hover_button = ''
+		self.setMouseTracking(True)
+
+	def button_at(self, pos) -> Tuple[int, str]:
+		index = self.indexAt(pos)
+		if not index.isValid():
+			return -1, ''
+		return index.row(), self.itemDelegate().button_at(self.visualRect(index), pos, index.row())
+
+	def set_hover(self, row : int, button : str) -> None:
+		if (row, button) != (self.hover_row, self.hover_button):
+			self.hover_row, self.hover_button = row, button
+			self.viewport().setCursor(Qt.CursorShape.PointingHandCursor if button else Qt.CursorShape.ArrowCursor)
+			self.viewport().update()
+
+	def refresh_hover(self) -> None:
+		"""after the rows changed under a still mouse"""
+		pos = self.viewport().mapFromGlobal(QCursor.pos())
+		self.set_hover(*self.button_at(pos)) if self.viewport().rect().contains(pos) else self.set_hover(-1, '')
+
+	def mouseMoveEvent(self, event) -> None:
+		self.set_hover(*self.button_at(event.position().toPoint()))
+		super().mouseMoveEvent(event)
+
+	def leaveEvent(self, event) -> None:
+		self.set_hover(-1, '')
+		super().leaveEvent(event)
+
+	def mousePressEvent(self, event) -> None:
+		row, button = self.button_at(event.position().toPoint())
+		if button and event.button() == Qt.MouseButton.LeftButton:
+			# a button press neither selects the row nor starts a drag
+			event.accept()
+			(self.retry_clicked if button == 'retry' else self.remove_clicked).emit(row)
+			self.refresh_hover()
+			return
+		super().mousePressEvent(event)
+
+	def mouseDoubleClickEvent(self, event) -> None:
+		if self.button_at(event.position().toPoint())[1]:
+			event.accept()
+			return
+		super().mouseDoubleClickEvent(event)
+
+	def viewportEvent(self, event) -> bool:
+		if event.type() == QEvent.Type.ToolTip:
+			button = self.button_at(event.pos())[1]
+			if button:
+				QToolTip.showText(event.globalPos(), self.BUTTON_TIPS.get(button), self.viewport())
+				return True
+		return super().viewportEvent(event)
 
 	def dragEnterEvent(self, event) -> None:
 		if event.mimeData().hasUrls():
@@ -128,6 +190,41 @@ class OutputDelegate(ListItemDelegate):
 
 	def sizeHint(self, option, index) -> QSize:
 		return QSize(option.rect.width(), self.ROW_HEIGHT)
+
+	@staticmethod
+	def mark_rect(row_rect) -> QRectF:
+		rect = QRectF(row_rect).adjusted(12, 0, -8, 0)
+		return QRectF(rect.x() - 4, rect.y() + rect.height() / 2 - 14, 28, 28)
+
+	@staticmethod
+	def remove_rect(row_rect) -> QRectF:
+		rect = QRectF(row_rect).adjusted(12, 0, -8, 0)
+		return QRectF(rect.right() - 28, rect.y() + rect.height() / 2 - 14, 28, 28)
+
+	def buttons(self, row : int) -> List[str]:
+		"""the buttons the row shows while the mouse is over it"""
+		if row >= len(self.page.items):
+			return []
+		status = self.page.item_status(self.page.items[row])
+		buttons = [ 'retry' ] if status in RETRY_STATUSES else []
+		if status != 'running':
+			buttons.append('remove')
+		return buttons
+
+	def button_at(self, row_rect, pos, row : int) -> str:
+		for button in self.buttons(row):
+			rect = self.mark_rect(row_rect) if button == 'retry' else self.remove_rect(row_rect)
+			if rect.contains(pos.x(), pos.y()):
+				return button
+		return ''
+
+	@staticmethod
+	def draw_button_back(painter : QPainter, rect : QRectF, color : QColor) -> None:
+		back = QColor(color)
+		back.setAlpha(40)
+		painter.setPen(Qt.PenStyle.NoPen)
+		painter.setBrush(back)
+		painter.drawRoundedRect(rect, 6, 6)
 
 	def pixmap(self, path : str, size : QSize) -> QPixmap:
 		"""the thumbnail already scaled to fill the box, so painting a row only draws it"""
@@ -207,7 +304,14 @@ class OutputDelegate(ListItemDelegate):
 		rect = QRectF(option.rect).adjusted(12, 0, -8, 0)
 		status = self.page.item_status(item)
 		mark, words, light, dark = STATUS_LOOK.get(status, ('', '', None, None))
-		if status == 'running':
+		buttons = self.buttons(row) if self.page.match_list.hover_row == row else []
+		if 'retry' in buttons:
+			# the mark turns into the retry button
+			button_rect = self.mark_rect(option.rect)
+			if self.page.match_list.hover_button == 'retry':
+				self.draw_button_back(painter, button_rect, themeColor())
+			FluentIcon.SYNC.render(painter, button_rect.adjusted(6, 6, -6, -6).toRect(), fill = themeColor().name())
+		elif status == 'running':
 			self.draw_ring(painter, rect.x(), rect.y() + rect.height() / 2, item.get('progress', 0.0))
 			words = self.page.progress_words(item)
 		elif mark:
@@ -222,6 +326,17 @@ class OutputDelegate(ListItemDelegate):
 		room = rect.right() - x - 8
 		show_sources = room - (self.THUMB_MAX_WIDTH + 6) - len(sources) * (self.THUMB_HEIGHT + 6) >= self.MIN_TEXT_WIDTH
 		show_target = room - (self.THUMB_MAX_WIDTH + 6) >= self.MIN_TEXT_WIDTH
+		if 'remove' in buttons:
+			# a red cross at the right end, the size and names keep clear of it
+			red = QColor('#ff99a4' if isDarkTheme() else '#c42b1c')
+			button_rect = self.remove_rect(option.rect)
+			if self.page.match_list.hover_button == 'remove':
+				self.draw_button_back(painter, button_rect, red)
+			painter.setPen(QPen(red, 1.8, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+			cross = button_rect.adjusted(9, 9, -9, -9)
+			painter.drawLine(cross.topLeft(), cross.bottomRight())
+			painter.drawLine(cross.topRight(), cross.bottomLeft())
+			rect.setRight(button_rect.left() - 6)
 		# the target gets a wide box and each source a square one, so the names line up from row to row
 		if show_target:
 			x += self.draw_thumbnail(painter, item.get('output') if made else item.get('target'), x, y, self.THUMB_MAX_WIDTH) + 6
@@ -283,6 +398,12 @@ class BatchPage(SourceSelection, QWidget):
 		self.started_count = 0
 		self.confirming = False
 		self.stopped = False
+		# Skip ends the output that is running and the batch goes on with the next one
+		self.skipping = False
+		# the outputs Retry runs on their own, empty when the whole batch runs
+		self.retry_only : set = set()
+		# a retry that waits for the batch preview to stop
+		self.retry_waiting = False
 		# the outputs a run would make right now, items is the same list with the runs that already ended kept in it
 		self.plan_items : List[Dict[str, Any]] = []
 		# the preview of the selected output: the run it shows, and whether one is running or waits for facefusion to be free
@@ -366,6 +487,9 @@ class BatchPage(SourceSelection, QWidget):
 		self.splitter.setStretchFactor(1, 9)
 		self.splitter.setSizes(session.config.get('batch_split') or [ 1100, 900 ])
 		self.splitter.splitterMoved.connect(lambda *_: self.session.config.set('batch_split', self.splitter.sizes()))
+		# a double click on the grip splits the page in half again
+		self.splitter.default_sizes = lambda total: [ total // 2, total - total // 2 ]
+		self.splitter.reset.connect(lambda: self.session.config.set('batch_split', self.splitter.sizes()))
 		self.settings_button.setChecked(session.config.get('batch_settings_open') is not False)
 		self.settings_column.setVisible(self.settings_button.isChecked())
 		self.settings_button.toggled.connect(self.toggle_settings)
@@ -459,6 +583,8 @@ class BatchPage(SourceSelection, QWidget):
 		self.match_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
 		self.match_list.setItemDelegate(OutputDelegate(self))
 		self.match_list.itemDoubleClicked.connect(self.show_item_result)
+		self.match_list.retry_clicked.connect(self.retry_item)
+		self.match_list.remove_clicked.connect(self.remove_item)
 		self.match_list.itemSelectionChanged.connect(self.on_selection_changed)
 		delete_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Delete), self.match_list)
 		delete_shortcut.setContext(Qt.ShortcutContext.WidgetShortcut)
@@ -473,6 +599,9 @@ class BatchPage(SourceSelection, QWidget):
 		self.outputs_splitter.setStretchFactor(1, 0)
 		self.outputs_splitter.setSizes(session.config.get('batch_preview_split') or [ 700, PREVIEW_WIDTH ])
 		self.outputs_splitter.splitterMoved.connect(lambda *_: self.session.config.set('batch_preview_split', self.outputs_splitter.sizes()))
+		# and here gives the preview its first width back
+		self.outputs_splitter.default_sizes = lambda total: [ total - PREVIEW_WIDTH, PREVIEW_WIDTH ]
+		self.outputs_splitter.reset.connect(lambda: self.session.config.set('batch_preview_split', self.outputs_splitter.sizes()))
 		batch_layout.addWidget(self.outputs_splitter, 1)
 
 		run_card = SimpleCardWidget(self)
@@ -483,12 +612,18 @@ class BatchPage(SourceSelection, QWidget):
 		self.stop_button = PushButton(FluentIcon.CLOSE, 'Stop', run_card)
 		self.stop_button.setEnabled(False)
 		self.stop_button.clicked.connect(self.stop)
+		self.skip_button = PushButton(FluentIcon.PAGE_RIGHT, 'Skip', run_card)
+		self.skip_button.setToolTip('Stop the output that is being made and go on with the next one')
+		self.skip_button.installEventFilter(ToolTipFilter(self.skip_button))
+		self.skip_button.setEnabled(False)
+		self.skip_button.clicked.connect(self.skip)
 		self.check_button = PushButton(FluentIcon.CERTIFICATE, 'NSFW Check', run_card)
 		self.check_button.setToolTip("Run FaceFusion's NSFW filter on every target without processing them. Start skips the targets it flags.")
 		self.check_button.installEventFilter(ToolTipFilter(self.check_button))
 		self.check_button.clicked.connect(self.check_targets)
 		run_layout.addWidget(self.start_button)
 		run_layout.addWidget(self.stop_button)
+		run_layout.addWidget(self.skip_button)
 		run_layout.addWidget(self.check_button)
 		run_layout.addSpacing(10)
 		status = QVBoxLayout()
@@ -499,7 +634,7 @@ class BatchPage(SourceSelection, QWidget):
 		status.addWidget(self.progress)
 		run_layout.addLayout(status, 1)
 		run_layout.addSpacing(10)
-		self.open_output_button = PushButton(FluentIcon.FOLDER, 'Open Output Folder', run_card)
+		self.open_output_button = PushButton(FluentIcon.SHARE, 'Open Output Folder', run_card)
 		self.open_output_button.setToolTip('Open the batch output folder in File Explorer')
 		self.open_output_button.installEventFilter(ToolTipFilter(self.open_output_button))
 		self.open_output_button.clicked.connect(self.open_output_folder)
@@ -681,6 +816,54 @@ class BatchPage(SourceSelection, QWidget):
 		self.match_list.clearSelection()
 		self.refresh_matches(True)
 		self.match_list.setCurrentRow(min(rows[0], self.match_list.count() - 1), QItemSelectionModel.SelectionFlag.ClearAndSelect)
+
+	def remove_item(self, row : int) -> None:
+		"""the remove button of a row, while the batch runs it works for every output but the running one"""
+		if row >= len(self.items) or self.items[row].get('status') == 'running':
+			return
+		key = self.run_key(self.items[row])
+		self.removed.add(key)
+		if not self.running:
+			self.forget_removed_files()
+			self.refresh_matches(True)
+			return
+		# the batch goes on with the list it has, the plan after it leaves the output out
+		self.items.pop(row)
+		self.retry_only.discard(key)
+		if row < self.current:
+			self.current -= 1
+		self.refresh_list()
+
+	def retry_item(self, row : int) -> None:
+		"""the retry button of a skipped or failed output, it joins a running batch or runs on its own"""
+		if row >= len(self.items) or self.items[row].get('status') not in RETRY_STATUSES:
+			return
+		item = self.items[row]
+		folder = os.path.dirname(item.get('output'))
+		busy = not self.running and not self.retry_waiting and self.session.runner.is_running()
+		if busy and not self.preview_running:
+			self.session.notify.emit('warning', 'Busy', 'FaceFusion is already running: %s. Retry once it has finished.' % self.session.task)
+			return
+		if not self.running and not folder_is_writable(folder):
+			self.session.notify.emit('error', 'Cannot save to this folder', 'Windows does not allow saving to %s. Choose another output folder, such as Videos or Documents.' % folder)
+			return
+		item.pop('reason', None)
+		item.pop('confirm', None)
+		item['status'] = ''
+		if self.running or self.retry_waiting:
+			if self.retry_only:
+				self.retry_only.add(self.run_key(item))
+			self.refresh_item(row)
+			return
+		# only this output runs, the other rows keep what they show
+		self.retry_only = { self.run_key(item) }
+		if busy:
+			# the preview of the selected output gives way, the retry starts once it has ended
+			self.retry_waiting = True
+			self.refresh_item(row)
+			self.stop_preview()
+			return
+		self.begin_run()
 
 	def forget_removed_files(self) -> None:
 		"""an added file with all its outputs removed leaves the batch, rather than wait in the removed list"""
@@ -923,7 +1106,10 @@ class BatchPage(SourceSelection, QWidget):
 		else:
 			status, _ = self.session.describe_run_error()
 			self.preview_label.setText(status if self.session.run_error() else 'Preview failed (exit code %d), see Console' % exit_code)
-		if self.preview_waiting:
+		if self.retry_waiting:
+			self.retry_waiting = False
+			QTimer.singleShot(0, self.begin_run)
+		elif self.preview_waiting:
 			QTimer.singleShot(0, self.run_preview)
 
 	# faces and mask over the preview, scanned on the same smaller frame the preview runs on
@@ -1228,6 +1414,10 @@ class BatchPage(SourceSelection, QWidget):
 		for item in self.items:
 			# targets the nsfw check flagged would only be refused, so they are not run
 			item['status'] = 'blocked' if self.item_status(item) == 'skip' else ''
+		self.retry_only = set()
+		self.begin_run()
+
+	def begin_run(self) -> None:
 		self.refresh_list()
 		self.running = True
 		self.stopped = False
@@ -1243,8 +1433,13 @@ class BatchPage(SourceSelection, QWidget):
 		self.stopped = True
 		self.session.runner.stop()
 
+	def skip(self) -> None:
+		if self.running and self.current >= 0:
+			self.skipping = True
+			self.session.runner.stop()
+
 	def queued(self) -> List[int]:
-		return [ index for index, item in enumerate(self.items) if not item.get('status') ]
+		return [ index for index, item in enumerate(self.items) if not item.get('status') and (not self.retry_only or self.run_key(item) in self.retry_only) ]
 
 	def run_next(self) -> None:
 		queued = self.queued()
@@ -1252,6 +1447,7 @@ class BatchPage(SourceSelection, QWidget):
 			self.finish()
 			return
 		self.current = queued[0]
+		self.skipping = False
 		item = self.items[self.current]
 		item['status'] = 'running'
 		self.refresh_item(self.current)
@@ -1285,6 +1481,7 @@ class BatchPage(SourceSelection, QWidget):
 		self.start_button.setEnabled(not busy and not self.running)
 		self.check_button.setEnabled(not busy and not self.running)
 		self.stop_button.setEnabled(busy and self.running)
+		self.skip_button.setEnabled(busy and self.running and not self.confirming)
 
 	def on_progress(self, title : str, ratio : float, status : str) -> None:
 		# the nsfw analysis before the frames fills its own bar quickly, only the frames count toward the output
@@ -1318,7 +1515,7 @@ class BatchPage(SourceSelection, QWidget):
 		if exit_code == 0:
 			item['status'] = 'done'
 		elif exit_code == -1:
-			item['status'] = ''
+			item['status'] = 'skipped' if self.skipping and not self.stopped else ''
 		elif self.session.nsfw_block_is_certain():
 			item['status'] = 'blocked'
 			self.check_results[item.get('target')] = { 'path': item.get('target'), 'kind': 'video', 'blocked': True, 'rate': self.session.content_rate, 'checked': 0, 'flagged': [], 'previews': [] }
@@ -1347,10 +1544,12 @@ class BatchPage(SourceSelection, QWidget):
 		self.on_busy_changed(self.session.runner.is_running(), self.session.task)
 		if self.preview_waiting:
 			QTimer.singleShot(0, self.run_preview)
-		counts = { status: sum(1 for item in self.items if item.get('status') == status) for status in [ 'done', 'blocked', 'failed' ] }
+		counts = { status: sum(1 for item in self.items if item.get('status') == status) for status in [ 'done', 'skipped', 'blocked', 'failed' ] }
 		# the made files take their names, Saves As and the rows not run yet move on to the next free ones
 		self.refresh_matches(True)
 		parts = [ '%d done' % counts.get('done') ]
+		if counts.get('skipped'):
+			parts.append('%d skipped' % counts.get('skipped'))
 		if counts.get('blocked'):
 			parts.append('%d skipped: NSFW content detected' % counts.get('blocked'))
 		if counts.get('failed'):

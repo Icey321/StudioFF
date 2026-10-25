@@ -9,6 +9,8 @@ from qfluentwidgets import BodyLabel, CaptionLabel, IconWidget, ImageLabel, Info
 from ffstudio.media import format_timecode
 
 BLOCKED_TITLE = 'NSFW content detected'
+# how long the red NSFW bar shows before it closes by itself
+BLOCKED_BAR_MS = 10000
 BLOCKED_STATUS = "⛔ NSFW content detected: FaceFusion refused this target"
 TRIM_TIP = 'FaceFusion only checks the trimmed part of a video, so trimming away the flagged part lets the rest be processed.'
 THUMBNAIL_SIZE = 180
@@ -121,8 +123,8 @@ class NsfwDialog(MessageBoxBase):
 
 
 def show_blocked_bar(parent : QWidget, message : str, button_text : str = '', on_button : Optional[Callable[[], None]] = None) -> InfoBar:
-	"""a red bar that stays until closed, so a refused run is hard to miss"""
-	bar = InfoBar.error(BLOCKED_TITLE, message, orient = Qt.Orientation.Vertical, isClosable = True, position = InfoBarPosition.TOP_RIGHT, duration = -1, parent = parent)
+	"""a red bar that stays longer than the other notifications, so a refused run is hard to miss, and then goes by itself"""
+	bar = InfoBar.error(BLOCKED_TITLE, message, orient = Qt.Orientation.Vertical, isClosable = True, position = InfoBarPosition.TOP_RIGHT, duration = BLOCKED_BAR_MS, parent = parent)
 	if on_button:
 		button = PushButton(button_text, bar)
 		button.clicked.connect(on_button)
