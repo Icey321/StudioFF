@@ -1,12 +1,96 @@
+import re
 from typing import Optional
 
-from PySide6.QtGui import QColor, QFont, QGuiApplication, QTextCharFormat, QTextCursor
+from PySide6.QtGui import QColor, QFont, QGuiApplication, QSyntaxHighlighter, QTextCharFormat, QTextCursor, QTextDocument
 from PySide6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
-from qfluentwidgets import CaptionLabel, FluentIcon, PlainTextEdit, PushButton, SubtitleLabel, isDarkTheme
+from qfluentwidgets import CaptionLabel, FluentIcon, PlainTextEdit, PushButton, SubtitleLabel, isDarkTheme, qconfig
 
 from ffstudio.session import Session, is_error_line
 
 MAX_BLOCKS = 20000
+# VS Code's Light+ and Dark+ colours, (light, dark)
+COLORS ={
+	'keyword': ('#0000ff', '#569cd6'),
+	'function': ('#795e26', '#dcdcaa'),
+	'flag': ('#001080', '#9cdcfe'),
+	'string': ('#a31515', '#ce9178'),
+	'number': ('#098658', '#b5cea8'),
+	'tag': ('#267f99', '#4ec9b0'),
+	'muted': ('#008000', '#6a9955'),
+	'link': ('#006ab1', '#3794ff'),
+	'success': ('#388a34', '#89d185'),
+	'warning': ('#bf8803', '#cca700'),
+	'error': ('#cd3131', '#f48771')
+}
+COMMAND_TOKEN_PATTERN = re.compile(r'"[^"]*"|\S+')
+TAG_PATTERN = re.compile(r'^\[[\w.\-]+\]')
+NUMBER_PATTERN = re.compile(r'(?<![\w.])\d+(?:\.\d+)*%?')
+STRING_PATTERN = re.compile(r'"[^"]*"|(?<!\w)\'[^\']*\'')
+PATH_PATTERN = re.compile(r'(?<![\w"\'])[A-Za-z]:[\\/][^\s"\'<>|,;]*')
+URL_PATTERN = re.compile(r'https?://[^\s"\'<>]+')
+SUCCESS_PATTERN = re.compile(r'\b(?:[Ss]uccessfully|[Ff]inished|[Cc]ompleted|[Dd]one)\b')
+FUNCTION_PATTERN = re.compile(r'(?<=, in )[\w<>.]+$')
+WARNING_PATTERN = re.compile(r'\b\w*Warning\b|^WARNING\b|^warning:')
+TOOL_ERROR_PATTERN = re.compile(r'^(?:ERROR|error|fatal)\b:?')
+
+
+class ConsoleHighlighter(QSyntaxHighlighter):
+	"""colours the log the way VS Code colours code, picked again when the theme changes"""
+
+	def __init__(self, document : QTextDocument) -> None:
+		super().__init__(document)
+		self.formats = {}
+		self.load_formats()
+		qconfig.themeChanged.connect(self.on_theme_changed)
+
+	def load_formats(self) -> None:
+		index = 1 if isDarkTheme() else 0
+		for key, colors in COLORS.items():
+			text_format = QTextCharFormat()
+			text_format.setForeground(QColor(colors[index]))
+			if key == 'error':
+				text_format.setFontWeight(600)
+			if key == 'link':
+				text_format.setFontUnderline(True)
+			self.formats[key] = text_format
+
+	def on_theme_changed(self) -> None:
+		self.load_formats()
+		self.rehighlight()
+
+	def paint(self, pattern : re.Pattern, text : str, key : str) -> None:
+		for match in pattern.finditer(text):
+			self.setFormat(match.start(), match.end() - match.start(), self.formats.get(key))
+
+	def highlightBlock(self, text : str) -> None:
+		if text.startswith('> '):
+			self.setFormat(0, 1, self.formats.get('keyword'))
+			for index, match in enumerate(COMMAND_TOKEN_PATTERN.finditer(text, 2)):
+				token = match.group()
+				key = 'function' if index == 0 else 'flag' if token.startswith('-') else 'number' if NUMBER_PATTERN.fullmatch(token) else 'string'
+				self.setFormat(match.start(), len(token), self.formats.get(key))
+			return
+		if text.startswith('— '):
+			key = 'success' if ' finished ' in text else 'warning' if ' stopped ' in text else 'error'
+			self.setFormat(0, len(text), self.formats.get(key))
+			return
+		if is_error_line(text) or TOOL_ERROR_PATTERN.match(text):
+			self.setFormat(0, len(text), self.formats.get('error'))
+			return
+		if text.startswith('Traceback '):
+			self.setFormat(0, len(text), self.formats.get('keyword'))
+			return
+		warning = WARNING_PATTERN.search(text)
+		if warning:
+			self.setFormat(0, len(text), self.formats.get('warning'))
+		else:
+			self.paint(NUMBER_PATTERN, text, 'number')
+			self.paint(SUCCESS_PATTERN, text, 'success')
+		self.paint(STRING_PATTERN, text, 'string')
+		self.paint(PATH_PATTERN, text, 'string')
+		self.paint(FUNCTION_PATTERN, text, 'function')
+		self.paint(URL_PATTERN, text, 'link')
+		self.paint(TAG_PATTERN, text, 'tag')
 
 
 class ConsolePage(QWidget):
@@ -41,6 +125,7 @@ class ConsolePage(QWidget):
 		font.setStyleHint(QFont.StyleHint.Monospace)
 		font.setPointSize(9)
 		self.output.setFont(font)
+		self.highlighter = ConsoleHighlighter(self.output.document())
 		layout.addWidget(self.output, 1)
 
 		for runner in [ session.runner, session.schema_runner ]:
@@ -51,19 +136,9 @@ class ConsolePage(QWidget):
 
 	def append(self, line : str) -> None:
 		self.output.appendPlainText(line)
-		if is_error_line(line):
-			# only the error line stands out, the traceback above it stays plain
-			cursor = QTextCursor(self.output.document().lastBlock())
-			cursor.select(QTextCursor.SelectionType.BlockUnderCursor)
-			error_format = QTextCharFormat()
-			error_format.setForeground(QColor('#ff8a8a' if isDarkTheme() else '#c42b1c'))
-			error_format.setFontWeight(600)
-			cursor.mergeCharFormat(error_format)
 		self.output.moveCursor(QTextCursor.MoveOperation.End)
 		# back to the left edge, a long line before would keep the start of this one out of view
 		self.output.moveCursor(QTextCursor.MoveOperation.StartOfBlock)
-		# the next line would carry on in red otherwise
-		self.output.setCurrentCharFormat(QTextCharFormat())
 
 	def on_started(self, command : str) -> None:
 		self.last_command = command
