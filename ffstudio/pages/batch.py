@@ -42,8 +42,9 @@ CLOCK_TAGS = re.compile(r'\{(date|time)\}')
 PREVIEW_SIZE = 640
 PREVIEW_WIDTH = 340
 PREVIEW_MIN_WIDTH = 280
-# at most this many removed runs are kept across restarts
+# at most this many removed runs and picked video frames are kept across restarts
 REMOVED_LIMIT = 2000
+FRAMES_LIMIT = 2000
 
 
 def upgrade_template(template : str) -> str:
@@ -184,8 +185,8 @@ class BatchPage(SourceSelection, QWidget):
 		stored = session.config.get('batch') or {}
 		# runs the user took out of the list, they stay out until restored, also after a restart
 		self.removed : set = { (tuple(sources), target) for sources, target in stored.get('removed') or [] }
-		# the frame of each video target the preview shows, picked on the timeline under the preview
-		self.preview_frames : Dict[str, int] = {}
+		# the frame of each video target the preview shows, picked on the timeline under the preview, also after a restart
+		self.preview_frames : Dict[str, int] = { target: index for target, index in (stored.get('preview_frames') or {}).items() if isinstance(index, int) and index > 0 }
 		self.timeline_target = ''
 		self.timeline_reader : Optional[VideoReader] = None
 		self.preview_frame_key : Optional[Tuple[str, int]] = None
@@ -625,6 +626,8 @@ class BatchPage(SourceSelection, QWidget):
 
 	def on_preview_frame_moved(self, index : int) -> None:
 		if self.timeline_target:
+			# set again at the end, so the newest picks are the ones kept
+			self.preview_frames.pop(self.timeline_target, None)
 			self.preview_frames[self.timeline_target] = index
 		self.refresh_time_label()
 		self.scrub_timer.start()
@@ -641,6 +644,7 @@ class BatchPage(SourceSelection, QWidget):
 		self.preview_view.set_faces([])
 		self.preview_frame = frame
 		self.preview_frame_key = (item.get('target'), self.preview_frame_index(item.get('target')))
+		self.save()
 		self.schedule_preview()
 		self.schedule_face_scan()
 
@@ -1018,7 +1022,9 @@ class BatchPage(SourceSelection, QWidget):
 			'output_dir': self.output_dir(),
 			'template': self.output_name_edit.text().strip(),
 			'subfolders': self.subfolders_button.isChecked(),
-			'removed': [ [ list(sources), target ] for sources, target in list(self.removed)[:REMOVED_LIMIT] ]
+			'removed': [ [ list(sources), target ] for sources, target in list(self.removed)[:REMOVED_LIMIT] ],
+			# the first frame needs no entry, the newest picks are kept
+			'preview_frames': dict([ (target, index) for target, index in self.preview_frames.items() if index > 0 ][-FRAMES_LIMIT:])
 		})
 
 	# running, one facefusion run per output so a refused target only fails its own output

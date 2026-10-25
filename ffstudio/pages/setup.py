@@ -553,6 +553,8 @@ class SetupPage(QWidget):
 		commit = self.installed_build.get('commit', '')
 		previous = self.session.config.get('facefusion_previous_commit') or ''
 		self.back_button.setVisible(bool(previous) and bool(commit) and previous != commit)
+		# a switch turns all three off while it runs
+		self.back_button.setEnabled(bool(commit))
 		self.back_button.setToolTip('Moves FaceFusion back to commit %s, where it was before the last switch' % previous[:7])
 		self.tested_button.setEnabled(bool(commit) and commit != TESTED_FACEFUSION_COMMIT)
 		self.latest_button.setEnabled(bool(commit))
