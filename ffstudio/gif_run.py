@@ -18,6 +18,13 @@ def run_ffmpeg(ffmpeg : str, args) -> int:
 	return subprocess.call([ ffmpeg, '-hide_banner', '-loglevel', 'error', '-y' ] + args)
 
 
+def gif_to_video_args(gif_path : str, video_path : str) -> List[str]:
+	"""the ffmpeg arguments that turn the gif into the video facefusion runs on, the nsfw check and previews use them too,
+	since facefusion's nsfw filter can judge the converted frames differently from the gif's own"""
+	# h264 needs even sizes, the padding is cropped off again at the end
+	return [ '-i', gif_path, '-vf', 'pad=ceil(iw/2)*2:ceil(ih/2)*2', '-c:v', 'libx264', '-qp', '0', '-pix_fmt', 'yuv444p', video_path ]
+
+
 def main() -> int:
 	return run_gif(sys.argv[1:], lambda args: subprocess.call([ sys.executable, 'facefusion.py' ] + args))
 
@@ -37,8 +44,7 @@ def run_gif(argv : List[str], run_facefusion : Callable[[List[str]], int]) -> in
 	temp_output = os.path.join(work_dir, 'output.mp4')
 	try:
 		print('Converting GIF to video', flush = True)
-		# h264 needs even sizes, the padding is cropped off again at the end
-		if run_ffmpeg(ffmpeg, [ '-i', target_path, '-vf', 'pad=ceil(iw/2)*2:ceil(ih/2)*2', '-c:v', 'libx264', '-qp', '0', '-pix_fmt', 'yuv444p', temp_target ]):
+		if run_ffmpeg(ffmpeg, gif_to_video_args(target_path, temp_target)):
 			print('Could not convert ' + target_path, flush = True)
 			return 1
 		exit_code = run_facefusion(facefusion_args + [ '-t', temp_target, '-o', temp_output ])

@@ -860,6 +860,8 @@ class StudioPage(SourceSelection, QWidget):
 		self.pending_info : dict = {}
 		self.result_reader : Optional[VideoReader] = None
 		self.blocked_target = ''
+		# what the last nsfw check of the whole target said when it flagged it, a preview frame that goes through shows this again
+		self.target_blocked_status = ''
 		# the last nsfw check result for the target, and whether that check followed a refused run
 		self.content_result : Optional[dict] = None
 		self.check_after_run = False
@@ -1046,7 +1048,7 @@ class StudioPage(SourceSelection, QWidget):
 		self.tags_button = add_edit_button(self.output_name_edit, FluentIcon.TAG, 'File name tags and examples')
 		self.tags_button.clicked.connect(self.show_name_tags)
 		self.subfolders_button = TogglePushButton('Sub-Folders', card)
-		self.subfolders_button.setToolTip('Save into <output folder>\\<source name>\\Images or Videos, created as needed')
+		self.subfolders_button.setToolTip('Save into <output folder>\\<source name>\\Images, Videos or GIF, created as needed')
 		self.subfolders_button.installEventFilter(ToolTipFilter(self.subfolders_button))
 		self.subfolders_button.setChecked(bool(self.session.config.get('output_subfolders')))
 		self.subfolders_button.toggled.connect(self.on_subfolders_toggled)
@@ -1129,6 +1131,8 @@ class StudioPage(SourceSelection, QWidget):
 			self.session.set_value('reference_frame_index', 0)
 			self.session.set_value('trim_frame_start', None)
 			self.session.set_value('trim_frame_end', None)
+		if path != self.target_path:
+			self.target_blocked_status = ''
 		self.target_path = path
 		self.content_result = None
 		self.target_card.set_blocked('')
@@ -1239,7 +1243,7 @@ class StudioPage(SourceSelection, QWidget):
 		return os.path.splitext(self.target_path)[1] or '.mp4'
 
 	def build_output(self) -> Tuple[str, bool]:
-		"""the output path and whether it replaces a file, inside <source name>\\Images or Videos when Sub-Folders is on"""
+		"""the output path and whether it replaces a file, inside <source name>\\Images, Videos or GIF when Sub-Folders is on"""
 		return build_output(self.output_name_edit.text(), self.name_tag_values(), self.output_dir(), self.output_extension(), self.subfolders_button.isChecked())
 
 	def suggest_output_path(self) -> str:
@@ -1383,7 +1387,7 @@ class StudioPage(SourceSelection, QWidget):
 	def preview_frame(self) -> None:
 		if not self.validate():
 			return
-		frame = self.target_card.current_frame()
+		frame = self.session.run_frame(self.target_path, self.target_card.current_frame_index(), self.target_card.current_frame())
 		if frame is None:
 			self.session.notify.emit('error', 'Preview', 'Could not read the current frame.')
 			return
@@ -1530,6 +1534,15 @@ class StudioPage(SourceSelection, QWidget):
 				self.progress_bar.setValue(1000)
 				self.status_label.setText('Done — ' + os.path.basename(output_path))
 				self.detail_label.setText('%.1f s' % elapsed)
+			elif self.status_label.text() == BLOCKED_STATUS:
+				# an earlier frame was refused, this one went through. what is left is the whole target's own check
+				self.status_label.setText(self.target_blocked_status or 'Ready')
+				self.detail_label.setText('')
+				self.target_card.set_blocked(self.target_blocked_status)
+				if not self.target_blocked_status:
+					self.blocked_target = ''
+					self.progress_bar.setValue(0)
+					self.progress_bar.resume()
 			self.target_card.set_result(output_path, ('preview of frame #%d' % self.pending_info.get('frame_index', 0) if self.preview_mode else 'done') + ' in %.1f s' % elapsed)
 			self.show_view('result')
 			if not self.preview_mode:
@@ -2038,6 +2051,8 @@ class StudioPage(SourceSelection, QWidget):
 				result['frame_label'] = self.pending_info.get('frame_index')
 		self.content_result = result
 		title, message = describe_result(result, self.check_after_run)
+		if not self.check_target_is_frame:
+			self.target_blocked_status = '⛔ ' + title if result.get('blocked') else ''
 		if result.get('blocked'):
 			self.progress_bar.error()
 			self.status_label.setText(BLOCKED_STATUS if self.check_after_run else '⛔ ' + title)

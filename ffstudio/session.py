@@ -12,6 +12,7 @@ from PySide6.QtCore import QObject, Signal
 
 from ffstudio.config import APP_DIR, DATA_DIR, PREVIEW_DIR, SCHEMA_FILE, AppConfig
 from ffstudio.environment import create_process_environment, is_facefusion_root, probe_python_version, version_tuple
+from ffstudio.media import media_kind, read_facefusion_frame
 from ffstudio.runner import PreviewWorker, ProcessRunner
 from ffstudio.schema import Schema, build_option_args, schema_is_stale
 
@@ -21,7 +22,11 @@ CONTENT_RATE_PATTERN = re.compile(r'rate = ([\d.]+)')
 CONTENT_RATE_LIMIT = 10.0
 # content_check.py prints one of these per target
 CONTENT_RESULT_PREFIX = 'CONTENT_RESULT '
+# what preview_worker.py prints once it has started
+WORKER_READY_LINE = 'Preview worker ready'
 CONTENT_CHECK_DIR = os.path.join(PREVIEW_DIR, 'nsfw_check')
+# the video a gif target is previewed from, the same one gif_run.py makes for a whole run
+GIF_VIDEO_DIR = os.path.join(PREVIEW_DIR, 'gif_video')
 # the last line of a python traceback, an error facefusion logs itself, or a command line mistake
 EXCEPTION_PATTERN = re.compile(r'^[\w.]*(Error|Exception)\b(:|$)')
 FACEFUSION_ERROR_PATTERN = re.compile(r'^\[FACEFUSION\.[\w.]+\] .*\b(failed|not found|not installed|not supported|could not be loaded|not implemented)\b')
@@ -132,6 +137,22 @@ class Session(QObject):
 
 	def is_configured(self) -> bool:
 		return is_facefusion_root(self.facefusion_root) and os.path.isfile(self.python_path)
+
+	def run_frame(self, path : str, frame_index : int, shown_frame : Optional[Any]) -> Optional[Any]:
+		"""the frame a preview runs on: a video or gif frame as facefusion itself reads it in a whole run, so the preview's
+		nsfw verdict matches the run's. the shown frame when that cannot be read, or when it comes out another shape,
+		such as a turned phone video that facefusion's reader would scramble"""
+		if media_kind(path) != 'video' or not os.path.isfile(self.python_path):
+			return shown_frame
+		search_path = create_process_environment(self.python_path).value('PATH')
+		frame = read_facefusion_frame(path, frame_index, search_path, GIF_VIDEO_DIR)
+		if frame is None:
+			return shown_frame
+		if shown_frame is not None:
+			# a gif's video is padded to even sizes
+			if any(abs(size - shown_size) > 1 for size, shown_size in zip(frame.shape[:2], shown_frame.shape[:2])):
+				return shown_frame
+		return frame
 
 	def check_python(self) -> Optional[str]:
 		self.python_version = probe_python_version(self.python_path) if os.path.isfile(self.python_path) else None
@@ -248,7 +269,8 @@ class Session(QObject):
 	def on_runner_progress(self, title : str, _ : float, status : str) -> None:
 		match = CONTENT_RATE_PATTERN.search(status) if title == 'analysing' else None
 		if match:
-			self.content_rate = max(self.content_rate, float(match.group(1)))
+			# the last rate decides, the running one starts high when an early checked frame is flagged
+			self.content_rate = float(match.group(1))
 
 	def on_runner_log(self, line : str) -> None:
 		if line.startswith(CONTENT_RESULT_PREFIX):
@@ -256,7 +278,8 @@ class Session(QObject):
 				self.content_results.append(json.loads(line[len(CONTENT_RESULT_PREFIX):]))
 			except ValueError:
 				pass
-		elif not re.match(r'\[FACEFUSION\.\w+\] processing step \d+ of \d+$', line):
+		# a preview that starts the worker gets its ready line too, it says nothing about the run
+		elif not re.match(r'\[FACEFUSION\.\w+\] processing step \d+ of \d+$', line) and line != WORKER_READY_LINE:
 			self.run_messages.append(line)
 
 	def run_error(self) -> Optional[str]:

@@ -18,11 +18,11 @@ from ffstudio.nsfw import BLOCKED_TITLE, NsfwDialog, show_blocked_bar
 from ffstudio.output_name import AUTOMATIC_TEMPLATE, build_output, unknown_tags
 from ffstudio.pages.models import format_size
 from ffstudio.pages.setup import SYSTEM_GROUPS, form_row, section_card
-from ffstudio.pages.studio import LIVE_IGNORED_GROUPS, NameTagsView, SettingsColumn, SourceCard, SourceSelection, StudioPage, elastic, estimated_progress, preview_step_floor, run_tag_values, tool_button
+from ffstudio.pages.studio import LIVE_IGNORED_GROUPS, PREVIEW_MAX_SIDE, NameTagsView, SettingsColumn, SourceCard, SourceSelection, StudioPage, elastic, estimated_progress, preview_step_floor, run_tag_values, tool_button
 from ffstudio.session import OptionStore, Session, explain_error, folder_is_writable
 from ffstudio.widgets import PreviewView, Splitter, add_edit_button, collect_drop_paths, guard_wheel
 
-TARGET_FILTERS = [ ('*.*', 'All files'), ('*.mp4', 'MP4 videos'), ('*.jpg', 'JPG images'), ('*.png', 'PNG images'), ('*.mov', 'MOV videos'), ('*.webm', 'WebM videos') ]
+TARGET_FILTERS = [ ('*.*', 'All files'), ('*.mp4', 'MP4 videos'), ('*.jpg', 'JPG images'), ('*.png', 'PNG images'), ('*.mov', 'MOV videos'), ('*.webm', 'WebM videos'), ('*.gif', 'GIF animations') ]
 DEFAULT_TEMPLATE = '{target}_{source}'
 # the placeholders of the first batch file names, read as the tags that replaced them
 OLD_PLACEHOLDERS = { '{target_name}': '{target}', '{source_name}': '{source}', '{target_extension}': '', '{index}': '{n}' }
@@ -45,7 +45,8 @@ RETRY_STATUSES = ('skipped', 'failed')
 # facefusion's title for the step that makes the frames, the steps around it are quick or report nothing
 PROCESSING_TITLE = 'processing'
 CLOCK_TAGS = re.compile(r'\{(date|time)\}')
-# the preview runs on the target scaled down to this many pixels on its long side, so it comes back quickly
+# the picked frame shows scaled down to this many pixels on its long side, so scrubbing stays quick. the preview runs
+# on the frame at studio's preview size instead, a smaller one can change what facefusion's nsfw filter decides
 PREVIEW_SIZE = 640
 PREVIEW_WIDTH = 340
 PREVIEW_MIN_WIDTH = 280
@@ -303,7 +304,8 @@ class OutputDelegate(ListItemDelegate):
 		painter.setRenderHints(QPainter.RenderHint.Antialiasing | QPainter.RenderHint.SmoothPixmapTransform)
 		rect = QRectF(option.rect).adjusted(12, 0, -8, 0)
 		status = self.page.item_status(item)
-		mark, words, light, dark = STATUS_LOOK.get(status, ('', '', None, None))
+		mark, _, light, dark = STATUS_LOOK.get(status, ('', '', None, None))
+		words = self.page.status_words(item)
 		buttons = self.buttons(row) if self.page.match_list.hover_row == row else []
 		if 'retry' in buttons:
 			# the mark turns into the retry button
@@ -314,6 +316,8 @@ class OutputDelegate(ListItemDelegate):
 		elif status == 'running':
 			self.draw_ring(painter, rect.x(), rect.y() + rect.height() / 2, item.get('progress', 0.0))
 			words = self.page.progress_words(item)
+		elif status == 'skipped':
+			FluentIcon.SYNC.render(painter, self.mark_rect(option.rect).adjusted(6, 6, -6, -6).toRect(), fill = dark if isDarkTheme() else light)
 		elif mark:
 			painter.setPen(QColor(dark if isDarkTheme() else light) if light else themeColor())
 			painter.setFont(getFont(16, QFont.Weight.DemiBold))
@@ -397,7 +401,14 @@ class BatchPage(SourceSelection, QWidget):
 		self.run_task = ''
 		self.started_count = 0
 		self.confirming = False
+		# Run Batch checks the targets the nsfw check has not seen yet before the first output
+		self.prechecking = False
 		self.stopped = False
+		# the time the batch started, the clock counts up from it while it runs
+		self.run_started = 0.0
+		self.run_clock = QTimer(self)
+		self.run_clock.setInterval(1000)
+		self.run_clock.timeout.connect(self.show_run_time)
 		# Skip ends the output that is running and the batch goes on with the next one
 		self.skipping = False
 		# the outputs Retry runs on their own, empty when the whole batch runs
@@ -534,7 +545,7 @@ class BatchPage(SourceSelection, QWidget):
 		self.tags_button = add_edit_button(self.output_name_edit, FluentIcon.TAG, 'File name tags and examples')
 		self.tags_button.clicked.connect(self.show_name_tags)
 		self.subfolders_button = TogglePushButton('Sub-Folders', card)
-		self.subfolders_button.setToolTip('Save into <output folder>\\<source name>\\Images or Videos, created as needed')
+		self.subfolders_button.setToolTip('Save into <output folder>\\<source name>\\Images, Videos or GIF, created as needed')
 		self.subfolders_button.installEventFilter(ToolTipFilter(self.subfolders_button))
 		self.subfolders_button.setChecked(bool(stored.get('subfolders')))
 		self.subfolders_button.toggled.connect(lambda _: self.refresh_matches())
@@ -607,7 +618,7 @@ class BatchPage(SourceSelection, QWidget):
 		run_card = SimpleCardWidget(self)
 		run_layout = QHBoxLayout(run_card)
 		run_layout.setContentsMargins(16, 12, 16, 12)
-		self.start_button = PrimaryPushButton(FluentIcon.PLAY, 'Start batch', run_card)
+		self.start_button = PrimaryPushButton(FluentIcon.PLAY, 'Run Batch', run_card)
 		self.start_button.clicked.connect(self.start)
 		self.stop_button = PushButton(FluentIcon.CLOSE, 'Stop', run_card)
 		self.stop_button.setEnabled(False)
@@ -618,7 +629,7 @@ class BatchPage(SourceSelection, QWidget):
 		self.skip_button.setEnabled(False)
 		self.skip_button.clicked.connect(self.skip)
 		self.check_button = PushButton(FluentIcon.CERTIFICATE, 'NSFW Check', run_card)
-		self.check_button.setToolTip("Run FaceFusion's NSFW filter on every target without processing them. Start skips the targets it flags.")
+		self.check_button.setToolTip("Run FaceFusion's NSFW filter on every target without processing them. Run Batch skips the targets it flags.")
 		self.check_button.installEventFilter(ToolTipFilter(self.check_button))
 		self.check_button.clicked.connect(self.check_targets)
 		run_layout.addWidget(self.start_button)
@@ -633,6 +644,11 @@ class BatchPage(SourceSelection, QWidget):
 		status.addWidget(self.status_label)
 		status.addWidget(self.progress)
 		run_layout.addLayout(status, 1)
+		run_layout.addSpacing(10)
+		self.time_label = BodyLabel('', run_card)
+		self.time_label.setToolTip('How long the batch has been running, and how long the last one took')
+		self.time_label.installEventFilter(ToolTipFilter(self.time_label))
+		run_layout.addWidget(self.time_label)
 		run_layout.addSpacing(10)
 		self.open_output_button = PushButton(FluentIcon.SHARE, 'Open Output Folder', run_card)
 		self.open_output_button.setToolTip('Open the batch output folder in File Explorer')
@@ -1003,6 +1019,20 @@ class BatchPage(SourceSelection, QWidget):
 			frame = cv2.resize(frame, (max(1, int(width * scale)), max(1, int(height * scale))), interpolation = cv2.INTER_AREA)
 		return frame
 
+	def run_frame(self, item : Dict[str, Any]) -> Optional[Any]:
+		"""the frame the preview runs on, as facefusion reads it in a whole run and at studio's preview size"""
+		target = item.get('target')
+		index = self.preview_frame_index(target)
+		shown = self.timeline_reader.read(index) if self.timeline_reader and target == self.timeline_target else read_frame(target, index)
+		frame = self.session.run_frame(target, index, shown)
+		if frame is None:
+			return None
+		height, width = frame.shape[:2]
+		scale = PREVIEW_MAX_SIDE / min(height, width)
+		if scale < 1:
+			frame = cv2.resize(frame, (max(1, round(width * scale)), max(1, round(height * scale))), interpolation = cv2.INTER_AREA)
+		return frame
+
 	def run_preview(self) -> None:
 		item = self.preview_item()
 		if not item:
@@ -1018,7 +1048,8 @@ class BatchPage(SourceSelection, QWidget):
 			return
 		self.preview_waiting = False
 		frame = self.scaled_frame(item)
-		if frame is None:
+		run_frame = self.run_frame(item)
+		if frame is None or run_frame is None:
 			self.preview_label.setText('Could not read %s' % os.path.basename(item.get('target')))
 			return
 		os.makedirs(PREVIEW_DIR, exist_ok = True)
@@ -1027,7 +1058,7 @@ class BatchPage(SourceSelection, QWidget):
 		for path in [ frame_path, output_path ]:
 			if os.path.exists(path):
 				os.remove(path)
-		write_image(frame_path, frame)
+		write_image(frame_path, run_frame)
 		values = self.run_values()
 		values.update({ 'reference_frame_index': 0, 'trim_frame_start': None, 'trim_frame_end': None, 'workflow_mode': 'auto' })
 		# a single frame has no sound to sync lips to
@@ -1097,7 +1128,13 @@ class BatchPage(SourceSelection, QWidget):
 		if exit_code == 0 and os.path.exists(output_path):
 			self.session.remember_preview_seconds(self.preview_estimate, elapsed)
 			self.preview_view.set_compare(to_pixmap(self.preview_frame), to_pixmap(read_frame(output_path)))
-			self.preview_label.setText('%s  ·  %.1f s  ·  drag the divider to compare' % (name, elapsed))
+			result = self.check_results.get(self.preview_run.get('target'))
+			if result and result.get('blocked'):
+				# one clean frame says nothing about the rest, Run Batch checks the whole video
+				flagged = self.flagged_words(self.preview_run.get('target'))
+				self.preview_label.setText('%s  ·  %.1f s  ·  This frame is OK, but Run Batch skips this %s: %s' % (name, elapsed, 'video' if result.get('kind') == 'video' else 'target', flagged or BLOCKED_TITLE))
+			else:
+				self.preview_label.setText('%s  ·  %.1f s  ·  drag the divider to compare' % (name, elapsed))
 		elif exit_code == -1:
 			self.preview_label.setText('Preview stopped')
 		elif self.session.nsfw_block_message(True):
@@ -1351,9 +1388,23 @@ class BatchPage(SourceSelection, QWidget):
 		speed = item.get('speed', '').replace('frame/s', ' frames/s')
 		return 'Processing %d%%%s  ·  ' % (int(item.get('progress') * 100), '  ·  ' + speed if speed else '')
 
+	def flagged_words(self, target : str) -> str:
+		"""how much of a video the nsfw check flagged, empty when it gave no count"""
+		result = self.check_results.get(target)
+		if not result or result.get('kind') != 'video' or not result.get('checked'):
+			return ''
+		return 'NSFW in %d of %d checked frames' % (len(result.get('flagged') or []), result.get('checked'))
+
+	def status_words(self, item : Dict[str, Any]) -> str:
+		"""the words before the names, a flagged video says how much of it was flagged"""
+		status = self.item_status(item)
+		flagged = self.flagged_words(item.get('target')) if status in [ 'blocked', 'skip' ] else ''
+		if flagged:
+			return flagged + (', will be skipped  ·  ' if status == 'skip' else '  ·  ')
+		return STATUS_LOOK.get(status, ('', '', None, None))[1]
+
 	def item_tooltip(self, item : Dict[str, Any]) -> str:
-		words = STATUS_LOOK.get(self.item_status(item), ('', '', None, None))[1]
-		return words + self.item_text(item) + '\n' + item.get('output')
+		return self.status_words(item) + self.item_text(item) + '\n' + item.get('output')
 
 	def refresh_list(self) -> None:
 		# the rows are drawn from items, so only their number has to match
@@ -1375,8 +1426,20 @@ class BatchPage(SourceSelection, QWidget):
 		index = self.match_list.row(list_item)
 		item = self.items[index] if 0 <= index < len(self.items) else None
 		result = self.check_results.get(item.get('target')) if item else None
-		if result:
-			NsfwDialog(result, item.get('status') == 'blocked', self.window()).exec()
+		if not result:
+			return
+		target = item.get('target')
+		jump = (lambda frame_index: self.show_preview_frame(target, frame_index)) if media_kind(target) == 'video' else None
+		# the preview moves to the first flagged frame behind the dialog, so closing it shows what was flagged
+		if jump and result.get('flagged'):
+			jump(result.get('flagged')[0])
+		NsfwDialog(result, item.get('status') == 'blocked', self.window(), jump).exec()
+
+	def show_preview_frame(self, target : str, index : int) -> None:
+		"""moves the timeline of the shown target to a frame, its preview follows like a picked one"""
+		if target != self.timeline_target:
+			return
+		self.preview_slider.setValue(min(index, self.preview_slider.maximum()))
 
 	def save(self) -> None:
 		self.session.config.set('batch',
@@ -1411,13 +1474,64 @@ class BatchPage(SourceSelection, QWidget):
 			if not folder_is_writable(folder):
 				self.session.notify.emit('error', 'Cannot save to this folder', 'Windows does not allow saving to %s. Choose another output folder, such as Videos or Documents.' % folder)
 				return
+		replacing = [ item for item in self.items if item.get('replaces') and self.item_status(item) != 'skip' ]
+		if replacing and not self.confirm_replace(replacing):
+			return
+		self.start_clock()
+		# the nsfw check runs first, so the flagged rows show while the rest are made
+		unchecked = sorted({ item.get('target') for item in self.items } - set(self.check_results))
+		if unchecked:
+			self.running = True
+			self.prechecking = True
+			self.stopped = False
+			self.confirming = False
+			self.progress.setValue(0)
+			self.progress.resume()
+			self.status_label.setText('Checking %d target%s with the NSFW filter before the batch…' % (len(unchecked), '' if len(unchecked) == 1 else 's'))
+			if not self.session.run_content_check('batch', unchecked):
+				self.prechecking = False
+				self.running = False
+				self.stop_clock()
+				self.on_busy_changed(self.session.runner.is_running(), self.session.task)
+				self.status_label.setText('Ready')
+			return
+		self.run_batch()
+
+	def confirm_replace(self, replacing : List[Dict[str, Any]]) -> bool:
+		"""asks before outputs replace files that are already in the output folder"""
+		names = [ item.get('name') for item in replacing ]
+		shown = '\n'.join('•  ' + name for name in names[:8]) + ('\n…and %d more' % (len(names) - 8) if len(names) > 8 else '')
+		count = 'This file is' if len(names) == 1 else 'These %d files are' % len(names)
+		box = MessageBox('Replace existing files?', '%s already in the output folder and the batch would replace %s:\n\n%s\n\nAdd {n} to the file name to keep both.' % (count, 'it' if len(names) == 1 else 'them', shown), self.window())
+		box.yesButton.setText('Replace')
+		box.cancelButton.setText('Cancel')
+		return bool(box.exec())
+
+	def run_batch(self) -> None:
 		for item in self.items:
 			# targets the nsfw check flagged would only be refused, so they are not run
 			item['status'] = 'blocked' if self.item_status(item) == 'skip' else ''
 		self.retry_only = set()
 		self.begin_run()
 
+	def start_clock(self) -> None:
+		self.run_started = time.monotonic()
+		self.run_clock.start()
+		self.show_run_time()
+
+	def stop_clock(self) -> None:
+		self.run_clock.stop()
+		self.time_label.setText('')
+
+	def run_time(self) -> str:
+		return format_length(time.monotonic() - self.run_started)
+
+	def show_run_time(self) -> None:
+		self.time_label.setText('⏱ ' + self.run_time())
+
 	def begin_run(self) -> None:
+		if not self.run_clock.isActive():
+			self.start_clock()
 		self.refresh_list()
 		self.running = True
 		self.stopped = False
@@ -1481,7 +1595,7 @@ class BatchPage(SourceSelection, QWidget):
 		self.start_button.setEnabled(not busy and not self.running)
 		self.check_button.setEnabled(not busy and not self.running)
 		self.stop_button.setEnabled(busy and self.running)
-		self.skip_button.setEnabled(busy and self.running and not self.confirming)
+		self.skip_button.setEnabled(busy and self.running and not self.confirming and not self.prechecking)
 
 	def on_progress(self, title : str, ratio : float, status : str) -> None:
 		# the nsfw analysis before the frames fills its own bar quickly, only the frames count toward the output
@@ -1541,6 +1655,9 @@ class BatchPage(SourceSelection, QWidget):
 				return
 			self.confirming = False
 		self.running = False
+		self.run_clock.stop()
+		took = self.run_time()
+		self.time_label.setText('Total ' + took)
 		self.on_busy_changed(self.session.runner.is_running(), self.session.task)
 		if self.preview_waiting:
 			QTimer.singleShot(0, self.run_preview)
@@ -1557,16 +1674,16 @@ class BatchPage(SourceSelection, QWidget):
 		summary = ', '.join(parts)
 		if self.stopped:
 			self.progress.pause()
-			self.status_label.setText('Stopped  ·  ' + summary)
+			self.status_label.setText('Stopped after %s  ·  %s' % (took, summary))
 			return
 		self.progress.setValue(1000)
 		if counts.get('failed'):
 			self.progress.error()
-		self.status_label.setText('Batch finished  ·  ' + summary + ('. Double-click a ⛔ output to see what was flagged.' if counts.get('blocked') else ''))
+		self.status_label.setText('Batch finished in %s  ·  ' % took + summary + ('. Double-click a ⛔ output to see what was flagged.' if counts.get('blocked') else ''))
 		if counts.get('blocked'):
 			show_blocked_bar(self.window(), "FaceFusion's NSFW filter flagged %d of the outputs in this batch, so they were skipped. The other outputs were made as normal." % counts.get('blocked'))
 		else:
-			self.session.notify.emit('warning' if counts.get('failed') else 'success', 'Batch finished', '%s in %s' % (summary, self.output_dir()))
+			self.session.notify.emit('warning' if counts.get('failed') else 'success', 'Batch finished in ' + took, '%s in %s' % (summary, self.output_dir()))
 
 	# nsfw check
 
@@ -1587,6 +1704,17 @@ class BatchPage(SourceSelection, QWidget):
 			return
 		for result in results:
 			self.check_results[result.get('path')] = result
+		if self.prechecking:
+			self.prechecking = False
+			if exit_code == 0:
+				self.progress.setValue(0)
+				# let every listener see the check end before the first output starts
+				QTimer.singleShot(0, self.run_batch)
+				return
+			self.running = False
+			self.stop_clock()
+			self.on_busy_changed(self.session.runner.is_running(), self.session.task)
+			self.refresh_list()
 		if self.confirming:
 			# the check after a batch: refused images it flags were nsfw, the rest failed for another reason
 			self.confirming = False
@@ -1610,8 +1738,8 @@ class BatchPage(SourceSelection, QWidget):
 		flagged = [ result for result in results if result.get('blocked') ]
 		if flagged:
 			skipped = sum(1 for item in self.items if self.item_status(item) == 'skip')
-			self.status_label.setText('⛔ %s in %d of %d targets. Start skips those %d outputs. Double-click one to see what was flagged.' % (BLOCKED_TITLE, len(flagged), len(results), skipped))
-			show_blocked_bar(self.window(), "FaceFusion's NSFW filter flagged %d of the %d targets. Start will skip them and make the rest." % (len(flagged), len(results)))
+			self.status_label.setText('⛔ %s in %d of %d targets. Run Batch skips those %d outputs. Double-click one to see what was flagged.' % (BLOCKED_TITLE, len(flagged), len(results), skipped))
+			show_blocked_bar(self.window(), "FaceFusion's NSFW filter flagged %d of the %d targets. Run Batch will skip them and make the rest." % (len(flagged), len(results)))
 		else:
 			self.status_label.setText('✓ No NSFW content detected in the %d targets' % len(results))
 			self.session.notify.emit('success', 'No NSFW content detected', "FaceFusion's NSFW filter found nothing in the %d targets." % len(results))

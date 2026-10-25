@@ -1,9 +1,15 @@
+import hashlib
 import os
+import shutil
+import subprocess
+from functools import lru_cache
 from typing import Optional
 
 import cv2
 import numpy
 from PySide6.QtGui import QImage, QPixmap
+
+from ffstudio.environment import CREATE_NO_WINDOW
 
 IMAGE_EXTENSIONS = { '.bmp', '.jpeg', '.jpg', '.png', '.tif', '.tiff', '.webp' }
 # gif is not a facefusion format, studio converts it to video around the run (see gif_run.py)
@@ -92,6 +98,100 @@ def read_frame(path : str, frame_index : int = 0) -> Optional[numpy.ndarray]:
 		reader.release()
 		return frame
 	return None
+
+
+@lru_cache(maxsize = 32)
+def probe_facefusion_video(ffprobe : str, path : str, modified : float) -> Optional[dict]:
+	"""the frame rate, frame count, size and color transfer, worked out the way facefusion's ffprobe.extract_video_metadata does"""
+	entries = {}
+	for kind, names in [ ('stream', 'width,height,avg_frame_rate,r_frame_rate,color_transfer'), ('format', 'duration') ]:
+		select = [ '-select_streams', 'v:0' ] if kind == 'stream' else []
+		try:
+			output = subprocess.run([ ffprobe, '-loglevel', 'error' ] + select + [ '-show_entries', kind + '=' + names, '-of', 'default=noprint_wrappers=1', '-i', path ], capture_output = True, text = True, timeout = 20, creationflags = CREATE_NO_WINDOW).stdout
+		except (OSError, subprocess.SubprocessError):
+			return None
+		for line in output.splitlines():
+			key, _, value = line.partition('=')
+			entries.setdefault(key.strip(), value.strip())
+	fps = 0.0
+	for frame_rate in [ entries.get('avg_frame_rate'), entries.get('r_frame_rate') ]:
+		numerator, _, denominator = (frame_rate or '').partition('/')
+		if numerator.isdigit() and denominator.isdigit() and int(numerator) and int(denominator):
+			fps = int(numerator) / int(denominator)
+			break
+	try:
+		duration = float(entries.get('duration'))
+		width, height = int(entries.get('width')), int(entries.get('height'))
+	except (TypeError, ValueError):
+		return None
+	if not fps or not width or not height:
+		return None
+	return { 'fps': fps, 'frame_total': round(duration * fps), 'width': width, 'height': height, 'color_transfer': entries.get('color_transfer', 'unknown') }
+
+
+def gif_as_video(ffmpeg : str, path : str, work_dir : str) -> Optional[str]:
+	"""the video gif_run.py turns the gif into for facefusion, made once per gif and kept for the next preview"""
+	from ffstudio.gif_run import gif_to_video_args
+
+	try:
+		modified = os.path.getmtime(path)
+	except OSError:
+		return None
+	video_path = os.path.join(work_dir, 'gif_%s.mp4' % hashlib.sha1(('%s|%f' % (os.path.abspath(path), modified)).encode()).hexdigest()[:16])
+	if os.path.isfile(video_path):
+		return video_path
+	os.makedirs(work_dir, exist_ok = True)
+	# only the last gif is kept
+	for name in os.listdir(work_dir):
+		if name.startswith('gif_') and name.endswith('.mp4'):
+			try:
+				os.remove(os.path.join(work_dir, name))
+			except OSError:
+				pass
+	temp_path = video_path + '.part.mp4'
+	try:
+		code = subprocess.run([ ffmpeg, '-hide_banner', '-loglevel', 'error', '-y' ] + gif_to_video_args(path, temp_path), capture_output = True, timeout = 120, creationflags = CREATE_NO_WINDOW).returncode
+		if code or not os.path.isfile(temp_path):
+			return None
+		os.replace(temp_path, video_path)
+	except (OSError, subprocess.SubprocessError):
+		return None
+	return video_path
+
+
+def read_facefusion_frame(path : str, frame_index : int, search_path : str, work_dir : str) -> Optional[numpy.ndarray]:
+	"""a video frame decoded by ffmpeg the way facefusion's video reader decodes it, so the nsfw filter sees the same pixels
+	in a preview as in a whole run. opencv decodes a little differently, enough to flip a borderline frame. a gif is read
+	from the video gif_run.py makes of it, which is what facefusion gets. None when ffmpeg is missing or the frame cannot
+	be read, the caller then uses opencv's frame"""
+	ffmpeg = shutil.which('ffmpeg', path = search_path)
+	ffprobe = shutil.which('ffprobe', path = search_path)
+	if not ffmpeg or not ffprobe:
+		return None
+	if extension(path) in GIF_EXTENSIONS:
+		path = gif_as_video(ffmpeg, path, work_dir)
+		if not path:
+			return None
+	try:
+		metadata = probe_facefusion_video(ffprobe, path, os.path.getmtime(path))
+	except OSError:
+		return None
+	if not metadata:
+		return None
+	frame_index = max(0, min(metadata.get('frame_total') - 1, frame_index))
+	width, height = metadata.get('width'), metadata.get('height')
+	# the same command as facefusion's ffmpeg.create_video_reader, stopped after the one frame
+	commands = [ ffmpeg, '-loglevel', 'error', '-ss', str(frame_index / metadata.get('fps')), '-i', path ]
+	if metadata.get('color_transfer') in [ 'smpte2084', 'arib-std-b67' ]:
+		commands += [ '-vf', 'scale=out_primaries=bt709:out_transfer=bt709:intent=perceptual' ]
+	commands += [ '-fps_mode', 'passthrough', '-pix_fmt', 'bgr24', '-f', 'rawvideo', '-frames:v', '1', '-' ]
+	try:
+		data = subprocess.run(commands, capture_output = True, timeout = 30, creationflags = CREATE_NO_WINDOW).stdout
+	except (OSError, subprocess.SubprocessError):
+		return None
+	if len(data) != width * height * 3:
+		return None
+	return numpy.frombuffer(data, numpy.uint8).reshape(height, width, 3).copy()
 
 
 def thumbnail(path : str, size : int = 96) -> QPixmap:

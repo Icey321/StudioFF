@@ -33,6 +33,8 @@ def describe_result(result : Dict[str, Any], after_run : bool) -> Tuple[str, str
 			return BLOCKED_TITLE, "FaceFusion's NSFW filter flagged the image %s as explicit, so FaceFusion %s. Choose a different target image." % (name, refuses)
 		return 'No NSFW content detected', "FaceFusion's NSFW filter found nothing in %s. FaceFusion will process it." % name
 	checked = result.get('checked') or 0
+	if not checked:
+		return 'Too short for the NSFW check', "FaceFusion's NSFW filter only looks at every 30th frame, and %s has fewer than 30 (in its trimmed part), so FaceFusion will process it without checking." % name
 	if result.get('blocked'):
 		return BLOCKED_TITLE, "FaceFusion's NSFW filter flagged %d of the %d checked frames in %s (%.0f%%, the limit is 10%%), so FaceFusion %s." % (flagged, checked, name, min(result.get('rate') or 0, 100), refuses)
 	if flagged:
