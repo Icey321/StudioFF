@@ -1,19 +1,20 @@
 import glob
 import os
 import re
+import subprocess
 import time
 from collections import OrderedDict
 from typing import Any, Dict, List, Optional, Tuple
 
 import cv2
-from PySide6.QtCore import QEvent, QFileSystemWatcher, QItemSelectionModel, QRectF, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QFileSystemWatcher, QItemSelectionModel, QPoint, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QCursor, QFont, QFontMetrics, QKeySequence, QPainter, QPainterPath, QPen, QPixmap, QShortcut
-from PySide6.QtWidgets import QAbstractItemView, QFileDialog, QHBoxLayout, QListWidgetItem, QToolTip, QVBoxLayout, QWidget
-from qfluentwidgets import BodyLabel, CaptionLabel, ComboBox, FluentIcon, Flyout, FlyoutAnimationType, LineEdit, ListItemDelegate, ListWidget, MessageBox, PrimaryPushButton, ProgressBar, PushButton, SimpleCardWidget, Slider, StrongBodyLabel, SubtitleLabel, TogglePushButton, ToggleToolButton, ToolTipFilter, TransparentPushButton, getFont, isDarkTheme, themeColor
+from PySide6.QtWidgets import QAbstractItemView, QApplication, QFileDialog, QHBoxLayout, QListWidgetItem, QToolTip, QVBoxLayout, QWidget
+from qfluentwidgets import Action, BodyLabel, CaptionLabel, ComboBox, FluentIcon, Flyout, FlyoutAnimationType, LineEdit, ListItemDelegate, ListWidget, MessageBox, PrimaryPushButton, ProgressBar, PushButton, RoundMenu, SegmentedWidget, SimpleCardWidget, Slider, StrongBodyLabel, SubtitleLabel, TogglePushButton, ToggleToolButton, ToolTipFilter, TransparentPushButton, getFont, isDarkTheme, themeColor
 
 from ffstudio.config import APP_DIR, PREVIEW_DIR
 from ffstudio.faces import FACE_GROUPS, MASK_GROUPS, FaceProbe, describe_faces, describe_mask, face_tag, read_mask
-from ffstudio.media import GIF_EXTENSIONS, VideoReader, extension, format_length, format_timecode, media_kind, read_frame, thumbnail, to_pixmap, video_seconds, write_image
+from ffstudio.media import GIF_EXTENSIONS, VideoReader, extension, format_length, format_timecode, media_kind, read_frame, thumbnail, to_pixmap, video_length, write_image
 from ffstudio.nsfw import BLOCKED_TITLE, NsfwDialog, show_blocked_bar
 from ffstudio.output_name import AUTOMATIC_TEMPLATE, build_output, unknown_tags
 from ffstudio.pages.models import format_size
@@ -40,8 +41,25 @@ STATUS_LOOK =\
 }
 # a run that ended keeps its row until something the user changes plans the batch again
 FINISHED = ('done', 'blocked', 'failed', 'skipped')
-# the outputs a hovered row offers to run again
+# the outputs a hovered row offers to run again, and the ones it offers to run on their own
 RETRY_STATUSES = ('skipped', 'failed')
+PLAY_STATUSES = ('', 'done')
+# how the Errors column sorts the rows, the worst first
+ERROR_RANK = { 'failed': 4, 'blocked': 3, 'skip': 2, 'skipped': 1 }
+# the tabs over the list, shown once it has more than one type of target
+TYPE_TABS = [ ('all', 'All'), ('images', 'Images'), ('videos', 'Videos'), ('gifs', 'GIFs') ]
+# the tabs after them, each shown while an output has its status
+STATUS_TABS = [ ('errors', 'Errors'), ('nsfw', 'NSFW'), ('skipped', 'Skipped') ]
+TABS = TYPE_TABS + STATUS_TABS
+TAB_STATUSES = { 'failed': 'errors', 'blocked': 'nsfw', 'skip': 'nsfw', 'skipped': 'skipped' }
+# what the start button says on a status tab, NSFW has nothing to run again so it is grayed out there
+STATUS_TAB_RUNS = { 'errors': 'Retry Errors', 'skipped': 'Run Skipped' }
+# the start button's tooltip, and the one on the NSFW tab
+START_TIPS =\
+{
+	False: 'Make every output in the list, or on a tab every output on it. With two or more outputs selected it makes only those, Esc in the list lets go of the selection.',
+	True: "FaceFusion's NSFW filter refuses the targets on this tab, so they cannot be run. Pick another tab to run the batch."
+}
 # facefusion's title for the step that makes the frames, the steps around it are quick or report nothing
 PROCESSING_TITLE = 'processing'
 CLOCK_TAGS = re.compile(r'\{(date|time)\}')
@@ -64,12 +82,16 @@ def upgrade_template(template : str) -> str:
 class OutputList(ListWidget):
 	"""the planned outputs, image and video files dropped on it are added as targets
 
-	the row under the mouse shows a retry button over its mark when it can run again, and a remove button at its right end
+	the row under the mouse shows a retry or play button over its mark when it can run on its own, and a remove button at its right end
 	"""
 	files_dropped = Signal(list)
-	retry_clicked = Signal(int)
+	run_clicked = Signal(int)
 	remove_clicked = Signal(int)
-	BUTTON_TIPS = { 'retry': 'Retry this output', 'remove': 'Remove this output from the list' }
+	# a right click on a row, with where the menu opens
+	menu_requested = Signal(int, QPoint)
+	# the sort header follows the width of the rows
+	resized = Signal()
+	BUTTON_TIPS = { 'retry': 'Retry this output', 'play': 'Run only this output', 'remove': 'Remove this output from the list' }
 
 	def __init__(self, parent : Optional[QWidget] = None) -> None:
 		super().__init__(parent)
@@ -105,15 +127,24 @@ class OutputList(ListWidget):
 		self.set_hover(-1, '')
 		super().leaveEvent(event)
 
+	def resizeEvent(self, event) -> None:
+		super().resizeEvent(event)
+		self.resized.emit()
+
 	def mousePressEvent(self, event) -> None:
 		row, button = self.button_at(event.position().toPoint())
 		if button and event.button() == Qt.MouseButton.LeftButton:
 			# a button press neither selects the row nor starts a drag
 			event.accept()
-			(self.retry_clicked if button == 'retry' else self.remove_clicked).emit(row)
+			(self.remove_clicked if button == 'remove' else self.run_clicked).emit(row)
 			self.refresh_hover()
 			return
 		super().mousePressEvent(event)
+
+	def contextMenuEvent(self, event) -> None:
+		index = self.indexAt(self.viewport().mapFrom(self, event.pos()))
+		if index.isValid():
+			self.menu_requested.emit(index.row(), event.globalPos())
 
 	def mouseDoubleClickEvent(self, event) -> None:
 		if self.button_at(event.position().toPoint())[1]:
@@ -170,6 +201,115 @@ class OutputList(ListWidget):
 			painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, 'Choose a target folder above,\nor drop image and video files here')
 
 
+class ListTabs(SegmentedWidget):
+	"""the tabs over the output list, a status tab is tinted by its status so the outputs on it stand out as needing a look"""
+	# the light and dark theme tint of each status tab, see through so the picked tab still shows white under it
+	TINTS =\
+	{
+		'errors': (QColor(234, 120, 0, 60), QColor(255, 150, 50, 70)),
+		'nsfw': (QColor(196, 43, 28, 55), QColor(255, 99, 110, 70)),
+		'skipped': (QColor(230, 190, 0, 70), QColor(255, 215, 0, 60))
+	}
+
+	def __init__(self, parent : Optional[QWidget] = None) -> None:
+		super().__init__(parent)
+		self.alert_keys : List[str] = []
+		# the page sets how narrow the tabs may get, the layout would otherwise hold them as wide as their texts
+		self.hBoxLayout.setSizeConstraint(QHBoxLayout.SizeConstraint.SetDefaultConstraint)
+
+	def paintEvent(self, event) -> None:
+		super().paintEvent(event)
+		painter = QPainter(self)
+		painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+		painter.setPen(Qt.PenStyle.NoPen)
+		for key in self.alert_keys:
+			item = self.items.get(key)
+			if item and key in self.TINTS:
+				painter.setBrush(self.TINTS.get(key)[1 if isDarkTheme() else 0])
+				painter.drawRoundedRect(QRectF(item.geometry()).adjusted(1, 1, -1, -1), 5, 5)
+
+
+class SortHeader(QWidget):
+	"""the column names over the output list, a click sorts by that column, the next one turns it around and a third goes back to the planned order"""
+	sort_changed = Signal(str, bool)
+	# the column, its name, whether its first click sorts the largest first, and its tooltip
+	COLUMNS =\
+	[
+		('errors', 'Errors', True, 'Sort by status, failed and NSFW outputs first'),
+		('name', 'Name', False, 'Sort by output name'),
+		('type', 'Type', False, 'Sort by the file type of the target'),
+		('length', 'Length', False, 'Sort by how long the target video or GIF plays, images count as no length'),
+		('frames', 'Frames', False, 'Sort by how many frames the target video or GIF has, images count as none'),
+		('size', 'Size', False, 'Sort by the file size of the target')
+	]
+
+	def __init__(self, column : str, descending : bool, parent : Optional[QWidget] = None) -> None:
+		super().__init__(parent)
+		self.column = column
+		self.descending = descending
+		self.labels : Dict[str, CaptionLabel] = {}
+		# the labels have no layout, the page puts each over its column of the rows with place
+		for key, text, _, tip in self.COLUMNS:
+			label = CaptionLabel(text, self)
+			label.setCursor(Qt.CursorShape.PointingHandCursor)
+			label.setToolTip(tip + '. Click again to reverse, a third time for the planned order.')
+			label.installEventFilter(ToolTipFilter(label))
+			label.installEventFilter(self)
+			self.labels[key] = label
+		self.refresh()
+		self.setFixedHeight(max(label.sizeHint().height() for label in self.labels.values()) + 2)
+
+	def label_width(self, key : str, arrow : bool = True) -> int:
+		"""how wide the label is, with the sort arrow it shows once sorted by it"""
+		text = dict((column, name) for column, name, *_ in self.COLUMNS).get(key)
+		return self.labels.get(key).fontMetrics().horizontalAdvance(text + (' ▼' if arrow else ''))
+
+	def place(self, spots : Dict[str, Tuple[float, float, bool]]) -> None:
+		"""puts each label at its column, a column by its left and right edge and whether it is right aligned, one left out is hidden"""
+		for key, label in self.labels.items():
+			spot = spots.get(key)
+			label.setVisible(bool(spot))
+			if spot:
+				left, right, align_right = spot
+				label.adjustSize()
+				# a right aligned name keeps its word at the column's edge, the sort arrow reaches past it into the gap like on the left aligned ones
+				x = right - self.label_width(key, False) if align_right else left
+				label.move(int(round(x)), (self.height() - label.height()) // 2)
+
+	def set_sort(self, column : str, descending : bool) -> None:
+		self.column, self.descending = column, descending
+		self.refresh()
+
+	def eventFilter(self, watched, event) -> bool:
+		if event.type() == QEvent.Type.MouseButtonRelease and event.button() == Qt.MouseButton.LeftButton:
+			for key, _, largest_first, _ in self.COLUMNS:
+				if self.labels.get(key) is watched:
+					self.click(key, largest_first)
+					return True
+		return super().eventFilter(watched, event)
+
+	def click(self, key : str, largest_first : bool) -> None:
+		if key != self.column:
+			self.column, self.descending = key, largest_first
+		elif self.descending == largest_first:
+			self.descending = not largest_first
+		else:
+			self.column, self.descending = '', False
+		self.refresh()
+		self.sort_changed.emit(self.column, self.descending)
+
+	def refresh(self) -> None:
+		for key, text, _, _ in self.COLUMNS:
+			label = self.labels.get(key)
+			if key == self.column:
+				label.setText('%s %s' % (text, '▼' if self.descending else '▲'))
+				label.setTextColor(themeColor(), themeColor())
+			else:
+				label.setText(text)
+				label.setTextColor('#707070', '#9a9a9a')
+			label.adjustSize()
+
+
 class OutputDelegate(ListItemDelegate):
 	"""a planned output: its status mark, thumbnails of the target (of the result once it is made) and the sources, then the names"""
 	ROW_HEIGHT = 52
@@ -179,6 +319,10 @@ class OutputDelegate(ListItemDelegate):
 	THUMB_MAX_WIDTH = 72
 	# the names get at least this much of a row before thumbnails are left out
 	MIN_TEXT_WIDTH = 200
+	# the right end of every row is kept for the remove button, so the columns stay put when it shows
+	REMOVE_ROOM = 34
+	# wide enough for the sort arrow of the column before
+	COLUMN_GAP = 22
 	# enough for every row of a long list, the oldest go first
 	CACHE_LIMIT = 500
 
@@ -186,11 +330,45 @@ class OutputDelegate(ListItemDelegate):
 		super().__init__(page.match_list)
 		self.page = page
 		self.pixmaps : 'OrderedDict[Tuple[str, float, int, int], QPixmap]' = OrderedDict()
-		# a target's length and size by its path and change time, a video is opened once to read its length
-		self.sizes : Dict[Tuple[str, float], str] = {}
 
 	def sizeHint(self, option, index) -> QSize:
 		return QSize(option.rect.width(), self.ROW_HEIGHT)
+
+	@classmethod
+	def content_rect(cls, row_rect) -> QRectF:
+		"""the row inside its margins, without the room of the remove button"""
+		return QRectF(row_rect).adjusted(12, 0, -8 - cls.REMOVE_ROOM, 0)
+
+	def thumbnails_shown(self, item : Dict[str, Any], rect : QRectF) -> Tuple[bool, bool]:
+		"""whether the target and the source thumbnails fit, a narrow list leaves out the sources, then the target, so the names keep room to show"""
+		room = rect.width() - 28 - 8
+		show_sources = room - (self.THUMB_MAX_WIDTH + 6) - len(item.get('sources')) * (self.THUMB_HEIGHT + 6) >= self.MIN_TEXT_WIDTH
+		show_target = room - (self.THUMB_MAX_WIDTH + 6) >= self.MIN_TEXT_WIDTH
+		return show_target, show_sources
+
+	def text_x(self, item : Dict[str, Any], rect : QRectF) -> float:
+		"""where the names start, after the mark and the thumbnails"""
+		show_target, show_sources = self.thumbnails_shown(item, rect)
+		x = rect.x() + 28
+		if show_target:
+			x += self.THUMB_MAX_WIDTH + 6
+		if show_sources:
+			x += len(item.get('sources')) * (self.THUMB_HEIGHT + 6)
+		return x + 8
+
+	def column_spots(self, rect : QRectF, text_x : float) -> Dict[str, Tuple[float, float]]:
+		"""the left and right edge of the type, length, frames and size columns at the end of the name line, a narrow row leaves out type, then length, then frames, then size so the names keep room"""
+		spots = {}
+		right = rect.right()
+		for key in [ 'size', 'frames', 'length', 'type' ]:
+			width = self.page.column_widths.get(key, 0)
+			if not width:
+				continue
+			if right - width - 12 - text_x < self.MIN_TEXT_WIDTH / 2:
+				break
+			spots[key] = (right - width, right)
+			right -= width + self.COLUMN_GAP
+		return spots
 
 	@staticmethod
 	def mark_rect(row_rect) -> QRectF:
@@ -206,15 +384,20 @@ class OutputDelegate(ListItemDelegate):
 		"""the buttons the row shows while the mouse is over it"""
 		if row >= len(self.page.items):
 			return []
-		status = self.page.item_status(self.page.items[row])
-		buttons = [ 'retry' ] if status in RETRY_STATUSES else []
+		item = self.page.items[row]
+		status = self.page.item_status(item)
+		buttons = []
+		if status in RETRY_STATUSES:
+			buttons.append('retry')
+		elif status in PLAY_STATUSES and self.page.can_run_alone(item):
+			buttons.append('play')
 		if status != 'running':
 			buttons.append('remove')
 		return buttons
 
 	def button_at(self, row_rect, pos, row : int) -> str:
 		for button in self.buttons(row):
-			rect = self.mark_rect(row_rect) if button == 'retry' else self.remove_rect(row_rect)
+			rect = self.remove_rect(row_rect) if button == 'remove' else self.mark_rect(row_rect)
 			if rect.contains(pos.x(), pos.y()):
 				return button
 		return ''
@@ -244,20 +427,6 @@ class OutputDelegate(ListItemDelegate):
 		while len(self.pixmaps) > self.CACHE_LIMIT:
 			self.pixmaps.popitem(last = False)
 		return pixmap
-
-	def size_text(self, path : str) -> str:
-		"""how long the target plays and how big it is, such as 0:42  ·  18.5 MB"""
-		try:
-			key = (path, os.path.getmtime(path))
-			if key not in self.sizes:
-				parts = [ format_size(os.path.getsize(path)) ]
-				seconds = video_seconds(path) if media_kind(path) == 'video' else 0.0
-				if seconds > 0:
-					parts.insert(0, format_length(seconds))
-				self.sizes[key] = '  ·  '.join(parts)
-			return self.sizes.get(key)
-		except OSError:
-			return ''
 
 	def draw_thumbnail(self, painter : QPainter, path : str, x : float, y : float, width : float) -> float:
 		height = self.THUMB_HEIGHT
@@ -302,17 +471,19 @@ class OutputDelegate(ListItemDelegate):
 		item = self.page.items[row]
 		painter.save()
 		painter.setRenderHints(QPainter.RenderHint.Antialiasing | QPainter.RenderHint.SmoothPixmapTransform)
-		rect = QRectF(option.rect).adjusted(12, 0, -8, 0)
+		rect = self.content_rect(option.rect)
 		status = self.page.item_status(item)
 		mark, _, light, dark = STATUS_LOOK.get(status, ('', '', None, None))
 		words = self.page.status_words(item)
 		buttons = self.buttons(row) if self.page.match_list.hover_row == row else []
-		if 'retry' in buttons:
-			# the mark turns into the retry button
+		run_button = 'retry' if 'retry' in buttons else 'play' if 'play' in buttons else ''
+		if run_button:
+			# the mark turns into the retry or play button
 			button_rect = self.mark_rect(option.rect)
-			if self.page.match_list.hover_button == 'retry':
+			if self.page.match_list.hover_button == run_button:
 				self.draw_button_back(painter, button_rect, themeColor())
-			FluentIcon.SYNC.render(painter, button_rect.adjusted(6, 6, -6, -6).toRect(), fill = themeColor().name())
+			icon = FluentIcon.SYNC if run_button == 'retry' else FluentIcon.PLAY_SOLID
+			icon.render(painter, button_rect.adjusted(6, 6, -6, -6).toRect(), fill = themeColor().name())
 		elif status == 'running':
 			self.draw_ring(painter, rect.x(), rect.y() + rect.height() / 2, item.get('progress', 0.0))
 			words = self.page.progress_words(item)
@@ -325,13 +496,10 @@ class OutputDelegate(ListItemDelegate):
 		x = rect.x() + 28
 		y = rect.y() + (rect.height() - self.THUMB_HEIGHT) / 2
 		made = item.get('status') == 'done' and os.path.isfile(item.get('output'))
-		# a narrow list leaves out the source thumbnails, then the target's, so the names keep room to show
 		sources = item.get('sources')
-		room = rect.right() - x - 8
-		show_sources = room - (self.THUMB_MAX_WIDTH + 6) - len(sources) * (self.THUMB_HEIGHT + 6) >= self.MIN_TEXT_WIDTH
-		show_target = room - (self.THUMB_MAX_WIDTH + 6) >= self.MIN_TEXT_WIDTH
+		show_target, show_sources = self.thumbnails_shown(item, rect)
 		if 'remove' in buttons:
-			# a red cross at the right end, the size and names keep clear of it
+			# a red cross in the room kept for it at the right end
 			red = QColor('#ff99a4' if isDarkTheme() else '#c42b1c')
 			button_rect = self.remove_rect(option.rect)
 			if self.page.match_list.hover_button == 'remove':
@@ -340,7 +508,6 @@ class OutputDelegate(ListItemDelegate):
 			cross = button_rect.adjusted(9, 9, -9, -9)
 			painter.drawLine(cross.topLeft(), cross.bottomRight())
 			painter.drawLine(cross.topRight(), cross.bottomLeft())
-			rect.setRight(button_rect.left() - 6)
 		# the target gets a wide box and each source a square one, so the names line up from row to row
 		if show_target:
 			x += self.draw_thumbnail(painter, item.get('output') if made else item.get('target'), x, y, self.THUMB_MAX_WIDTH) + 6
@@ -351,16 +518,17 @@ class OutputDelegate(ListItemDelegate):
 		name, detail = self.page.item_lines(item)
 		width = int(rect.right() - x)
 		middle = rect.y() + rect.height() / 2
-		# the target's length and size at the end of the name line, quiet, a hint of how long the output takes
-		size = self.size_text(item.get('target'))
+		# the target's type, length and size in columns at the end of the name line, quiet, under the names of the sort header
 		name_width = width
-		font = getFont(12)
-		size_width = QFontMetrics(font).horizontalAdvance(size)
-		if size and width - size_width - 12 >= self.MIN_TEXT_WIDTH / 2:
-			painter.setFont(font)
+		spots = self.column_spots(rect, x)
+		if spots:
+			texts = self.page.column_texts(item)
+			painter.setFont(getFont(12))
 			painter.setPen(QColor('#9a9a9a' if isDarkTheme() else '#707070'))
-			painter.drawText(QRectF(rect.right() - size_width, middle - 21, size_width, 21), Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignRight, size)
-			name_width -= size_width + 12
+			for key, (left, right) in spots.items():
+				align = Qt.AlignmentFlag.AlignLeft if key == 'type' else Qt.AlignmentFlag.AlignRight
+				painter.drawText(QRectF(left, middle - 21, right - left, 21), Qt.AlignmentFlag.AlignBottom | align, texts.get(key))
+			name_width = int(min(left for left, _ in spots.values()) - 12 - x)
 		font = getFont(13)
 		painter.setFont(font)
 		painter.setPen(QColor(255, 255, 255) if isDarkTheme() else QColor(0, 0, 0))
@@ -411,8 +579,10 @@ class BatchPage(SourceSelection, QWidget):
 		self.run_clock.timeout.connect(self.show_run_time)
 		# Skip ends the output that is running and the batch goes on with the next one
 		self.skipping = False
-		# the outputs Retry runs on their own, empty when the whole batch runs
-		self.retry_only : set = set()
+		# the outputs Run Selected, Retry and Play run on their own, empty when the whole batch runs
+		self.run_only : set = set()
+		# the selected outputs Run Selected runs once the nsfw check before it is done
+		self.selected_only : set = set()
 		# a retry that waits for the batch preview to stop
 		self.retry_waiting = False
 		# the outputs a run would make right now, items is the same list with the runs that already ended kept in it
@@ -436,6 +606,26 @@ class BatchPage(SourceSelection, QWidget):
 		self.timeline_target = ''
 		self.timeline_reader : Optional[VideoReader] = None
 		self.preview_frame_key : Optional[Tuple[str, int]] = None
+		# the output whose target or preview the preview shows
+		self.shown_key : Optional[Tuple] = None
+		# the column each type tab is sorted by and whether it is turned around, a tab left out keeps the planned order, also after a restart
+		stored_sorts = session.config.get('batch_sort') or {}
+		if isinstance(stored_sorts, list):
+			# from before the tabs had their own sort
+			stored_sorts = { 'all': stored_sorts }
+		columns = [ key for key, *_ in SortHeader.COLUMNS ]
+		self.tab_sorts : Dict[str, Tuple[str, bool]] = { tab: (sort[0], bool(sort[1])) for tab, sort in stored_sorts.items() if tab in dict(TABS) and isinstance(sort, list) and len(sort) == 2 and sort[0] in columns }
+		# the type tab the list shows, all of them unless one was picked
+		self.type_tab = session.config.get('batch_tab') if session.config.get('batch_tab') in dict(TABS) else 'all'
+		self.sort_column, self.sort_descending = self.tab_sort(self.type_tab)
+		# how wide the type, length and size columns of the rows are, 0 leaves one out
+		self.column_widths : Dict[str, int] = {}
+		self.tab_keys : List[str] = []
+		# the counts the tabs show, a run that changes them shows the tabs again
+		self.shown_counts : Dict[str, int] = {}
+		# the size and length of each target by its path, for the Size and Length columns and the total under the list
+		self.target_sizes : Dict[str, int] = {}
+		self.target_lengths : Dict[str, Tuple[float, int]] = {}
 		# typing and setting changes replan the outputs once they settle
 		self.refresh_timer = QTimer(self)
 		self.refresh_timer.setSingleShot(True)
@@ -563,8 +753,11 @@ class BatchPage(SourceSelection, QWidget):
 		matches_card = SimpleCardWidget(batch_tab)
 		matches_layout = QVBoxLayout(matches_card)
 		matches_layout.setContentsMargins(20, 14, 20, 16)
-		header = QHBoxLayout()
-		header.addWidget(StrongBodyLabel('Planned outputs', matches_card))
+		self.header_row = header = QHBoxLayout()
+		self.list_title = StrongBodyLabel('Planned outputs', matches_card)
+		# the buttons give up their text before the title is cut
+		self.list_title.setMinimumWidth(self.list_title.sizeHint().width())
+		header.addWidget(self.list_title)
 		# shortens rather than keep the list from narrowing for a wider preview
 		self.summary = elastic(CaptionLabel('', matches_card))
 		self.summary.setTextColor('#707070', '#9a9a9a')
@@ -585,8 +778,32 @@ class BatchPage(SourceSelection, QWidget):
 		self.remove_button.installEventFilter(ToolTipFilter(self.remove_button))
 		self.remove_button.clicked.connect(self.remove_selected)
 		header.addWidget(self.remove_button)
+		# each button has an icon only twin, shown instead when the names do not fit beside the title
+		self.header_buttons = []
+		for button, icon, handler in [ (add_files, FluentIcon.ADD, self.browse_target_files), (self.restore_button, FluentIcon.RETURN, self.restore_removed), (self.remove_button, FluentIcon.DELETE, self.remove_selected) ]:
+			# the names never hold the list wide, their twin takes over before they would be squeezed
+			button.setMinimumWidth(1)
+			twin = tool_button(icon, button.toolTip(), matches_card)
+			twin.clicked.connect(handler)
+			twin.hide()
+			header.addWidget(twin)
+			self.header_buttons.append((button, twin))
 		matches_layout.addLayout(header)
+		tabs_row = QHBoxLayout()
+		tabs_row.setContentsMargins(0, 4, 0, 2)
+		self.type_tabs = ListTabs(matches_card)
+		self.type_tabs.currentItemChanged.connect(self.on_type_tab_changed)
+		self.type_tabs.hide()
+		tabs_row.addWidget(self.type_tabs)
+		tabs_row.addStretch(1)
+		matches_layout.addLayout(tabs_row)
+		self.sort_header = SortHeader(self.sort_column, self.sort_descending, matches_card)
+		self.sort_header.sort_changed.connect(self.on_sort_changed)
+		matches_layout.addWidget(self.sort_header)
 		self.match_list = OutputList(matches_card)
+		self.match_list.resized.connect(self.place_sort_header)
+		self.match_list.resized.connect(self.fit_tab_texts)
+		self.match_list.resized.connect(self.fit_header_buttons)
 		self.match_list.files_dropped.connect(self.add_target_files)
 		self.match_list.setUniformItemSizes(True)
 		# the rows shorten their text to fit, a sideways scroll bar would only hide the end of the names
@@ -594,13 +811,22 @@ class BatchPage(SourceSelection, QWidget):
 		self.match_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
 		self.match_list.setItemDelegate(OutputDelegate(self))
 		self.match_list.itemDoubleClicked.connect(self.show_item_result)
-		self.match_list.retry_clicked.connect(self.retry_item)
+		self.match_list.run_clicked.connect(self.run_item)
 		self.match_list.remove_clicked.connect(self.remove_item)
+		self.match_list.menu_requested.connect(self.show_item_menu)
 		self.match_list.itemSelectionChanged.connect(self.on_selection_changed)
 		delete_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Delete), self.match_list)
 		delete_shortcut.setContext(Qt.ShortcutContext.WidgetShortcut)
 		delete_shortcut.activated.connect(self.remove_selected)
+		# Esc lets go of the selection, so Run Selected runs the whole list again
+		clear_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Escape), self.match_list)
+		clear_shortcut.setContext(Qt.ShortcutContext.WidgetShortcut)
+		clear_shortcut.activated.connect(self.match_list.clearSelection)
 		matches_layout.addWidget(self.match_list, 1)
+		# how many outputs the list has and how they went
+		self.list_status = elastic(CaptionLabel('', matches_card))
+		self.list_status.setTextColor('#707070', '#9a9a9a')
+		matches_layout.addWidget(self.list_status)
 		# dragging the grip between the list and the preview widens the preview
 		self.outputs_splitter = Splitter(Qt.Orientation.Horizontal, batch_tab)
 		self.outputs_splitter.setHandleWidth(12)
@@ -619,6 +845,8 @@ class BatchPage(SourceSelection, QWidget):
 		run_layout = QHBoxLayout(run_card)
 		run_layout.setContentsMargins(16, 12, 16, 12)
 		self.start_button = PrimaryPushButton(FluentIcon.PLAY, 'Run Batch', run_card)
+		self.start_button.setToolTip(START_TIPS.get(False))
+		self.start_button.installEventFilter(ToolTipFilter(self.start_button))
 		self.start_button.clicked.connect(self.start)
 		self.stop_button = PushButton(FluentIcon.CLOSE, 'Stop', run_card)
 		self.stop_button.setEnabled(False)
@@ -629,7 +857,7 @@ class BatchPage(SourceSelection, QWidget):
 		self.skip_button.setEnabled(False)
 		self.skip_button.clicked.connect(self.skip)
 		self.check_button = PushButton(FluentIcon.CERTIFICATE, 'NSFW Check', run_card)
-		self.check_button.setToolTip("Run FaceFusion's NSFW filter on every target without processing them. Run Batch skips the targets it flags.")
+		self.check_button.setToolTip("Run FaceFusion's NSFW filter on every target in the list without processing them, on a type tab only the targets of that type. Run Batch skips the targets it flags.")
 		self.check_button.installEventFilter(ToolTipFilter(self.check_button))
 		self.check_button.clicked.connect(self.check_targets)
 		run_layout.addWidget(self.start_button)
@@ -706,7 +934,7 @@ class BatchPage(SourceSelection, QWidget):
 		self.live_button.setChecked(self.session.config.get('batch_live_preview') is not False)
 		self.live_button.toggled.connect(self.on_live_toggled)
 		header.addWidget(self.live_button)
-		refresh = tool_button(FluentIcon.UPDATE, 'Make the preview now', card)
+		refresh = tool_button(FluentIcon.SYNC, 'Make the preview now', card)
 		refresh.clicked.connect(lambda: self.schedule_preview(True))
 		header.addWidget(refresh)
 		column.addLayout(header)
@@ -814,8 +1042,173 @@ class BatchPage(SourceSelection, QWidget):
 
 	# the outputs in the list
 
+	def selected_rows(self) -> List[int]:
+		# a shift+click range also selects the rows another tab hides
+		return sorted(row for row in { self.match_list.row(list_item) for list_item in self.match_list.selectedItems() if not list_item.isHidden() } if row < len(self.items))
+
+	def run_selection(self) -> List[int]:
+		"""the rows Run Selected makes, one selected row is only the one previewed so the whole list runs"""
+		rows = self.selected_rows()
+		return rows if len(rows) > 1 else []
+
+	@staticmethod
+	def item_type(item : Dict[str, Any]) -> str:
+		target = item.get('target')
+		if extension(target) in GIF_EXTENSIONS:
+			return 'gifs'
+		return 'videos' if media_kind(target) == 'video' else 'images'
+
+	def status_tab(self, item : Dict[str, Any]) -> str:
+		"""the status tab an output is on, one run again stays on the tab it came from until it has ended"""
+		status = self.item_status(item)
+		if status in [ '', 'running' ]:
+			return item.get('retried', '')
+		return TAB_STATUSES.get(status, '')
+
+	def in_tab(self, item : Dict[str, Any], tab : str) -> bool:
+		return tab == 'all' or tab == self.item_type(item) or tab == self.status_tab(item)
+
+	def shown_items(self) -> List[Dict[str, Any]]:
+		"""the outputs of the tab, all of them on All"""
+		return [ item for item in self.items if self.in_tab(item, self.type_tab) ]
+
+	def run_keys(self) -> set:
+		"""what the start button makes: the selected outputs, else those of the tab, empty for the whole list"""
+		rows = self.run_selection()
+		if rows:
+			return { self.run_key(self.items[row]) for row in rows }
+		if self.type_tab != 'all':
+			return { self.run_key(item) for item in self.shown_items() }
+		return set()
+
+	def can_start(self, busy : bool) -> bool:
+		"""whether the start button works, the outputs on the NSFW tab would only be refused again"""
+		return not busy and not self.running and self.type_tab != 'nsfw'
+
+	def refresh_start_button(self) -> None:
+		self.start_button.setEnabled(self.can_start(self.session.runner.is_running()))
+		self.start_button.setToolTip(START_TIPS.get(self.type_tab == 'nsfw'))
+		count = len(self.run_selection())
+		if count:
+			self.start_button.setText('Run Selected (%d)' % count)
+		elif self.type_tab in STATUS_TAB_RUNS:
+			self.start_button.setText(STATUS_TAB_RUNS.get(self.type_tab))
+		elif self.type_tab in dict(TYPE_TABS) and self.type_tab != 'all':
+			self.start_button.setText('Run %s Batch' % dict(TYPE_TABS).get(self.type_tab))
+		else:
+			self.start_button.setText('Run Batch')
+
+	def tab_counts(self) -> Dict[str, int]:
+		counts = { key: 0 for key, _ in TABS }
+		for item in self.items:
+			counts[self.item_type(item)] += 1
+			status_tab = self.status_tab(item)
+			if status_tab:
+				counts[status_tab] += 1
+		counts['all'] = len(self.items)
+		return counts
+
+	@staticmethod
+	def tabs_of(counts : Dict[str, int]) -> List[str]:
+		"""the tabs shown for these counts: the types once the list has more than one, and each status an output has"""
+		types = [ key for key, _ in TYPE_TABS if key != 'all' and counts.get(key) ]
+		keys = [ 'all' ] + (types if len(types) >= 2 else []) + [ key for key, _ in STATUS_TABS if counts.get(key) ]
+		return keys if len(keys) >= 2 else []
+
+	def refresh_type_tabs(self) -> None:
+		"""shows a tab per type of target once the list has more than one, and one per status the outputs have, each with how many outputs it has"""
+		counts = self.tab_counts()
+		self.shown_counts = counts
+		keys = self.tabs_of(counts)
+		if self.type_tab not in keys:
+			self.type_tab = 'all'
+		self.type_tabs.blockSignals(True)
+		if keys != self.tab_keys:
+			# the old tabs are only deleted later, hidden now so the new ones do not draw over them
+			for widget in self.type_tabs.items.values():
+				widget.hide()
+			self.type_tabs.clear()
+			for key in keys:
+				self.type_tabs.addItem(key, '')
+			self.tab_keys = keys
+		self.type_tabs.alert_keys = [ key for key in keys if key in dict(STATUS_TABS) ]
+		self.type_tabs.update()
+		self.fit_tab_texts()
+		if keys:
+			self.type_tabs.setCurrentItem(self.type_tab)
+		self.type_tabs.blockSignals(False)
+		self.type_tabs.setVisible(bool(keys))
+
+	def fit_tab_texts(self) -> None:
+		"""names each tab with how many outputs it has, or with only its name when the counts make the tabs wider than the list"""
+		keys = self.tab_keys
+		if not keys:
+			return
+		names = { key : dict(TABS).get(key) for key in keys }
+		texts = { key : '%s (%d)' % (names.get(key), self.shown_counts.get(key)) for key in keys }
+		# the tabs hold the list only as wide as the names need, so the counts never widen it
+		self.set_tab_texts(names)
+		self.type_tabs.setMinimumWidth(self.type_tabs.sizeHint().width())
+		self.set_tab_texts(texts)
+		if self.type_tabs.sizeHint().width() > self.match_list.width():
+			self.set_tab_texts(names)
+		# the highlight goes under the tab once the new texts are laid out
+		QTimer.singleShot(0, self.type_tabs._adjustIndicatorPos)
+
+	def fit_header_buttons(self) -> None:
+		"""the buttons over the list keep only their icons when their names do not fit beside the title"""
+		shown = [ pair for pair in self.header_buttons if pair[0] is not self.restore_button or self.removed_count ]
+		needed = self.list_title.sizeHint().width() + sum(self.header_row.spacing() + button.sizeHint().width() for button, _ in shown)
+		compact = needed > self.match_list.width()
+		for button, twin in self.header_buttons:
+			wanted = (button, twin) in shown
+			button.setVisible(wanted and not compact)
+			twin.setVisible(wanted and compact)
+			twin.setEnabled(button.isEnabled())
+
+	def set_tab_texts(self, texts : Dict[str, str]) -> None:
+		for key, text in texts.items():
+			self.type_tabs.setItemText(key, text)
+			self.type_tabs.widget(key).adjustSize()
+
+	def on_type_tab_changed(self, key : str) -> None:
+		self.type_tab = key
+		self.session.config.set('batch_tab', key)
+		self.use_tab_sort()
+		self.on_selection_changed()
+
+	def tab_sort(self, tab : str) -> Tuple[str, bool]:
+		column, descending = self.tab_sorts.get(tab, ('', False))
+		# images have no length or frames to sort by
+		if tab == 'images' and column in [ 'length', 'frames' ]:
+			return '', False
+		return column, descending
+
+	def use_tab_sort(self) -> None:
+		"""sorts the list the way its type tab was sorted last"""
+		self.sort_column, self.sort_descending = self.tab_sort(self.type_tab)
+		self.sort_header.set_sort(self.sort_column, self.sort_descending)
+		self.reorder()
+
+	def apply_type_tab(self) -> None:
+		"""hides the rows not on the tab, a hidden row lets go of its selection"""
+		self.match_list.blockSignals(True)
+		for row in range(self.match_list.count()):
+			hidden = not self.in_tab(self.items[row], self.type_tab)
+			list_item = self.match_list.item(row)
+			list_item.setHidden(hidden)
+			if hidden and list_item.isSelected():
+				list_item.setSelected(False)
+		self.match_list.blockSignals(False)
+
+	def first_shown_row(self) -> int:
+		return next((row for row in range(self.match_list.count()) if not self.match_list.item(row).isHidden()), 0)
+
 	def on_selection_changed(self) -> None:
+		self.refresh_start_button()
+		self.refresh_list_status()
 		self.sync_timeline()
+		self.follow_selection()
 		item = self.preview_item()
 		if item and (not self.preview_run or self.run_key(item) != self.run_key(self.preview_run)):
 			self.schedule_preview()
@@ -823,7 +1216,7 @@ class BatchPage(SourceSelection, QWidget):
 	def remove_selected(self) -> None:
 		if self.running:
 			return
-		rows = sorted({ self.match_list.row(list_item) for list_item in self.match_list.selectedItems() })
+		rows = self.selected_rows()
 		if not rows:
 			self.session.notify.emit('info', 'Nothing selected', 'Click an output in the list first, Ctrl+click or Shift+click for several.')
 			return
@@ -845,34 +1238,46 @@ class BatchPage(SourceSelection, QWidget):
 			return
 		# the batch goes on with the list it has, the plan after it leaves the output out
 		self.items.pop(row)
-		self.retry_only.discard(key)
+		self.run_only.discard(key)
 		if row < self.current:
 			self.current -= 1
 		self.refresh_list()
 
-	def retry_item(self, row : int) -> None:
-		"""the retry button of a skipped or failed output, it joins a running batch or runs on its own"""
-		if row >= len(self.items) or self.items[row].get('status') not in RETRY_STATUSES:
+	def can_run_alone(self, item : Dict[str, Any]) -> bool:
+		"""whether the play button of a row has something to do, an output the running batch makes anyway has none"""
+		if self.prechecking:
+			return False
+		return not (self.running and not item.get('status') and (not self.run_only or self.run_key(item) in self.run_only))
+
+	def run_item(self, row : int) -> None:
+		"""the retry or play button of an output, it joins a running batch or runs on its own"""
+		if row >= len(self.items):
 			return
 		item = self.items[row]
+		status = self.item_status(item)
+		if status not in RETRY_STATUSES and (status not in PLAY_STATUSES or not self.can_run_alone(item)):
+			return
 		folder = os.path.dirname(item.get('output'))
 		busy = not self.running and not self.retry_waiting and self.session.runner.is_running()
 		if busy and not self.preview_running:
-			self.session.notify.emit('warning', 'Busy', 'FaceFusion is already running: %s. Retry once it has finished.' % self.session.task)
+			self.session.notify.emit('warning', 'Busy', 'FaceFusion is already running: %s. Try again once it has finished.' % self.session.task)
 			return
 		if not self.running and not folder_is_writable(folder):
 			self.session.notify.emit('error', 'Cannot save to this folder', 'Windows does not allow saving to %s. Choose another output folder, such as Videos or Documents.' % folder)
 			return
+		if os.path.isfile(item.get('output')) and not self.confirm_replace([ item ]):
+			return
 		item.pop('reason', None)
 		item.pop('confirm', None)
+		item['retried'] = self.status_tab(item)
 		item['status'] = ''
 		if self.running or self.retry_waiting:
-			if self.retry_only:
-				self.retry_only.add(self.run_key(item))
+			if self.run_only:
+				self.run_only.add(self.run_key(item))
 			self.refresh_item(row)
 			return
 		# only this output runs, the other rows keep what they show
-		self.retry_only = { self.run_key(item) }
+		self.run_only = { self.run_key(item) }
 		if busy:
 			# the preview of the selected output gives way, the retry starts once it has ended
 			self.retry_waiting = True
@@ -929,6 +1334,31 @@ class BatchPage(SourceSelection, QWidget):
 		self.session.config.set('batch_live_preview', checked)
 		if checked:
 			self.schedule_preview()
+		elif not self.preview_running:
+			self.show_target()
+
+	def show_target(self) -> None:
+		"""with Auto off the selected output shows its target, the preview button makes the preview of it"""
+		item = self.preview_item()
+		if not item:
+			return
+		self.shown_key = self.run_key(item)
+		frame = self.scaled_frame(item)
+		if frame is None:
+			self.preview_label.setText('Could not read %s' % os.path.basename(item.get('target')))
+			return
+		self.preview_view.set_pixmap(to_pixmap(frame))
+		self.preview_view.set_faces([])
+		self.preview_frame = frame
+		self.preview_frame_key = (item.get('target'), self.preview_frame_index(item.get('target')))
+		self.preview_label.setText('%s  ·  target, Auto is off' % os.path.basename(item.get('target')))
+		self.schedule_face_scan()
+
+	def follow_selection(self) -> None:
+		"""with Auto off another selected output swaps the preview for its target"""
+		item = self.preview_item()
+		if item and not self.live_button.isChecked() and not self.preview_running and self.run_key(item) != self.shown_key:
+			self.show_target()
 
 	def schedule_preview(self, now : bool = False) -> None:
 		if now:
@@ -938,7 +1368,7 @@ class BatchPage(SourceSelection, QWidget):
 			self.preview_timer.start()
 
 	def preview_item(self) -> Optional[Dict[str, Any]]:
-		row = self.match_list.currentRow() if self.match_list.selectedItems() else 0
+		row = self.match_list.currentRow() if self.selected_rows() else self.first_shown_row()
 		return self.items[row] if 0 <= row < len(self.items) else None
 
 	def showEvent(self, event) -> None:
@@ -1079,6 +1509,7 @@ class BatchPage(SourceSelection, QWidget):
 			self.preview_view.set_faces([])
 			self.preview_frame_key = frame_key
 		self.preview_run = item
+		self.shown_key = self.run_key(item)
 		self.preview_frame = frame
 		self.preview_running = True
 		self.schedule_face_scan()
@@ -1325,17 +1756,23 @@ class BatchPage(SourceSelection, QWidget):
 		self.plan_items = self.plan()
 		finished = { self.run_key(item): item for item in self.items if item.get('status') in FINISHED } if keep_results else {}
 		self.items = [ finished.get(self.run_key(item), item) for item in self.plan_items ]
+		for order, item in enumerate(self.items):
+			item['order'] = order
+		self.target_sizes = {}
+		self.target_lengths = {}
+		self.sort_items()
 		self.pairs_count = len(self.items)
 		self.refresh_list()
 		faces = len({ item.get('source') for item in self.items if item.get('source') })
 		targets = len({ item.get('target') for item in self.items })
 		summary = '%d faces × %d targets = %d outputs' % (faces, targets, len(self.items)) if faces else '%d targets' % targets
 		self.summary.setText(summary + ('  ·  %d removed' % self.removed_count if self.removed_count else ''))
-		self.restore_button.setVisible(bool(self.removed_count))
 		self.remove_button.setEnabled(bool(self.items))
+		self.fit_header_buttons()
 		self.refresh_name_preview()
 		self.watch_output_folders()
 		self.sync_timeline()
+		self.follow_selection()
 
 	def refresh_name_preview(self) -> None:
 		"""what the next run would call its files, which moves on once a run made the files before"""
@@ -1371,10 +1808,9 @@ class BatchPage(SourceSelection, QWidget):
 		return 'skip' if result and result.get('blocked') else ''
 
 	def item_lines(self, item : Dict[str, Any]) -> Tuple[str, str]:
-		"""the output name, and what it is made from with why it failed"""
+		"""the output name, and the target it is made from with why it failed"""
 		reason = item.get('reason') if self.item_status(item) == 'failed' else ''
-		sources = ''.join('  +  ' + self.source_name(path) for path in item.get('sources'))
-		return item.get('name'), '←  %s%s' % (os.path.basename(item.get('target')), sources) + ('  ·  ' + reason if reason else '')
+		return item.get('name'), os.path.basename(item.get('target')) + ('  ·  ' + reason if reason else '')
 
 	def item_text(self, item : Dict[str, Any]) -> str:
 		name, detail = self.item_lines(item)
@@ -1389,11 +1825,17 @@ class BatchPage(SourceSelection, QWidget):
 		return 'Processing %d%%%s  ·  ' % (int(item.get('progress') * 100), '  ·  ' + speed if speed else '')
 
 	def flagged_words(self, target : str) -> str:
-		"""how much of a video the nsfw check flagged, empty when it gave no count"""
+		"""how much of a target the nsfw check flagged, empty when it gave no count"""
 		result = self.check_results.get(target)
-		if not result or result.get('kind') != 'video' or not result.get('checked'):
+		if not result:
 			return ''
-		return 'NSFW in %d of %d checked frames' % (len(result.get('flagged') or []), result.get('checked'))
+		# an image is blocked when two of facefusion's three detectors flag it
+		if result.get('kind') == 'image':
+			return 'NSFW %.0f%%  ·  %d of 3 detectors' % (result.get('rate'), result.get('votes')) if 'votes' in result else ''
+		if result.get('kind') != 'video' or not result.get('checked'):
+			return ''
+		# the percent first, a narrow list cuts off the end of the line
+		return 'NSFW %.0f%%  ·  %d of %d checked frames, limit 10%%' % (min(result.get('rate') or 0, 100), len(result.get('flagged') or []), result.get('checked'))
 
 	def status_words(self, item : Dict[str, Any]) -> str:
 		"""the words before the names, a flagged video says how much of it was flagged"""
@@ -1407,6 +1849,11 @@ class BatchPage(SourceSelection, QWidget):
 		return self.status_words(item) + self.item_text(item) + '\n' + item.get('output')
 
 	def refresh_list(self) -> None:
+		if self.type_tab != 'all' and self.type_tab not in self.tabs_of(self.tab_counts()):
+			# the last output of the tab's type or status is gone, All shows the list in its own order, the tab comes back once its type does
+			self.type_tab = 'all'
+			self.use_tab_sort()
+			return
 		# the rows are drawn from items, so only their number has to match
 		shown = self.items[:LIST_LIMIT]
 		while self.match_list.count() > len(shown):
@@ -1415,12 +1862,168 @@ class BatchPage(SourceSelection, QWidget):
 			self.match_list.addItem(QListWidgetItem())
 		for index, item in enumerate(shown):
 			self.match_list.item(index).setToolTip(self.item_tooltip(item))
+		self.refresh_type_tabs()
+		self.apply_type_tab()
+		self.refresh_columns()
+		self.place_sort_header()
+		self.refresh_start_button()
 		self.match_list.viewport().update()
+		self.refresh_list_status()
+
+	def column_texts(self, item : Dict[str, Any]) -> Dict[str, str]:
+		"""what the type, length, frames and size columns of a row show, such as MP4, 0:42, 1,260 and 18.5 MB"""
+		target = item.get('target')
+		seconds = self.target_length(target)
+		frames = self.target_frames(target)
+		size = self.target_size(target)
+		return { 'type': extension(target).lstrip('.').upper(), 'length': format_length(seconds) if seconds > 0 else '', 'frames': '{:,}'.format(frames) if frames else '', 'size': format_size(size) if size else '' }
+
+	def refresh_columns(self) -> None:
+		"""fits the columns to the texts of the tab's rows and the names over them, Length and Frames only once the tab has a video or gif"""
+		metrics = QFontMetrics(getFont(12))
+		texts = [ self.column_texts(item) for item in self.shown_items()[:LIST_LIMIT] ]
+		self.column_widths = {}
+		for key in [ 'type', 'length', 'frames', 'size' ]:
+			if key in [ 'length', 'frames' ] and not any(text.get(key) for text in texts):
+				self.column_widths[key] = 0
+			else:
+				# the sort arrow reaches into the gap beside the column, so sorting moves nothing
+				self.column_widths[key] = max([ self.sort_header.label_width(key, False) ] + [ metrics.horizontalAdvance(text.get(key)) for text in texts ])
+
+	def place_sort_header(self) -> None:
+		"""lines the column names up with the marks, the names and the columns of the rows"""
+		delegate = self.match_list.itemDelegate()
+		viewport = self.match_list.viewport()
+		offset = self.sort_header.mapFromGlobal(viewport.mapToGlobal(QPoint(0, 0))).x()
+		rect = delegate.content_rect(QRectF(offset, 0, viewport.width(), delegate.ROW_HEIGHT))
+		# the names start where those of the top row do, rows with as many sources line up with it
+		shown = self.shown_items()
+		text_x = delegate.text_x(shown[0] if shown else { 'sources': [] }, rect)
+		spots = { 'errors': (rect.x(), rect.x(), False), 'name': (text_x, text_x, False) }
+		columns = delegate.column_spots(rect, text_x)
+		for key, (left, right) in columns.items():
+			spots[key] = (left, right, key != 'type')
+		# the columns a narrow row leaves out keep their names to sort by, packed left of the shown ones while there is room after Name
+		labels = self.sort_header.labels
+		right = min([ right - self.sort_header.label_width(key, False) if key != 'type' else left for key, (left, right) in columns.items() ], default = rect.right() + delegate.COLUMN_GAP) - delegate.COLUMN_GAP
+		name_right = text_x + labels.get('name').sizeHint().width()
+		for key in [ 'size', 'frames', 'length', 'type' ]:
+			width = self.sort_header.label_width(key, False)
+			if self.column_widths.get(key) and key not in columns and right - width >= name_right + delegate.COLUMN_GAP:
+				spots[key] = (right - width, right, True)
+				right -= width + delegate.COLUMN_GAP
+		self.sort_header.place(spots)
 
 	def refresh_item(self, index : int) -> None:
+		if self.tab_counts() != self.shown_counts:
+			# the output moved to or off a status tab
+			self.refresh_list()
+			return
 		if index < min(len(self.items), LIST_LIMIT):
 			self.match_list.item(index).setToolTip(self.item_tooltip(self.items[index]))
 			self.match_list.viewport().update()
+		self.refresh_list_status()
+
+	def target_size(self, target : str) -> int:
+		if target not in self.target_sizes:
+			try:
+				self.target_sizes[target] = os.path.getsize(target)
+			except OSError:
+				self.target_sizes[target] = 0
+		return self.target_sizes.get(target)
+
+	def target_length(self, target : str) -> float:
+		"""how many seconds a video or gif target plays, opened once per target"""
+		if target not in self.target_lengths:
+			self.target_lengths[target] = video_length(target) if media_kind(target) == 'video' else (0.0, 0)
+		return self.target_lengths.get(target)[0]
+
+	def target_frames(self, target : str) -> int:
+		self.target_length(target)
+		return self.target_lengths.get(target)[1]
+
+	def refresh_list_status(self) -> None:
+		"""the line under the list: how many outputs, how many are selected, how they went and how big the targets are"""
+		if not self.items:
+			self.list_status.setText('')
+			return
+		# a type tab counts only its own outputs
+		items = self.shown_items()
+		statuses = [ self.item_status(item) for item in items ]
+		parts = [ '%d output%s' % (len(items), '' if len(items) == 1 else 's') + (' of %d' % len(self.items) if len(items) != len(self.items) else '') ]
+		selected = len(self.selected_rows())
+		if selected:
+			parts.append('%d selected' % selected)
+		for status, words in [ ('running', 'running'), ('done', 'done'), ('failed', 'failed'), ('blocked', 'NSFW skipped'), ('skip', 'NSFW, will be skipped'), ('skipped', 'skipped') ]:
+			count = statuses.count(status)
+			if count:
+				parts.append('%d %s' % (count, words))
+		waiting = statuses.count('')
+		if waiting and waiting != len(items):
+			parts.append('%d to run' % waiting)
+		errors = sum(1 for status in statuses if status in ERROR_RANK)
+		parts.append('%d error%s' % (errors, '' if errors == 1 else 's'))
+		parts.append('targets %s' % format_size(sum(self.target_size(target) for target in { item.get('target') for item in items })))
+		if len(self.items) > LIST_LIMIT:
+			parts.append('the first %d are shown' % LIST_LIMIT)
+		self.list_status.setText('  ·  '.join(parts))
+
+	def sort_items(self) -> None:
+		"""puts the outputs in the order of the sorted column, the batch runs them from the top down"""
+		self.items.sort(key = lambda item: item.get('order', 0))
+		column = self.sort_column
+		if not column:
+			return
+		# the names keep a to z within the same type, size or status
+		self.items.sort(key = lambda item: item.get('name').lower())
+		keys =\
+		{
+			'name': lambda item: item.get('name').lower(),
+			'type': lambda item: extension(item.get('target')),
+			'length': lambda item: self.target_length(item.get('target')),
+			'frames': lambda item: self.target_frames(item.get('target')),
+			'size': lambda item: self.target_size(item.get('target')),
+			'errors': lambda item: ERROR_RANK.get(self.item_status(item), 0)
+		}
+		self.items.sort(key = keys.get(column), reverse = self.sort_descending)
+
+	def on_sort_changed(self, column : str, descending : bool) -> None:
+		self.sort_column, self.sort_descending = column, descending
+		self.tab_sorts[self.type_tab] = (column, descending)
+		self.session.config.set('batch_sort', { tab: list(sort) for tab, sort in self.tab_sorts.items() })
+		self.reorder()
+
+	def reorder(self) -> None:
+		"""sorts the list again, the selected and the running outputs stay so as their rows move"""
+		selected = [ self.items[row] for row in self.selected_rows() ]
+		current_row = self.match_list.currentRow()
+		current = self.items[current_row] if 0 <= current_row < len(self.items) else None
+		running = self.items[self.current] if self.current >= 0 else None
+		self.sort_items()
+		rows = { id(item): row for row, item in enumerate(self.items) }
+		if running:
+			self.current = rows.get(id(running))
+		self.refresh_list()
+		self.match_list.blockSignals(True)
+		self.match_list.clearSelection()
+		# a row another tab hides lets go of its selection
+		for item in selected:
+			if rows.get(id(item)) < LIST_LIMIT and not self.match_list.item(rows.get(id(item))).isHidden():
+				self.match_list.item(rows.get(id(item))).setSelected(True)
+		if current and rows.get(id(current)) < LIST_LIMIT and not self.match_list.item(rows.get(id(current))).isHidden():
+			self.match_list.setCurrentRow(rows.get(id(current)), QItemSelectionModel.SelectionFlag.NoUpdate)
+		self.match_list.blockSignals(False)
+		self.match_list.refresh_hover()
+
+	def show_item_menu(self, row : int, position : QPoint) -> None:
+		if not 0 <= row < len(self.items):
+			return
+		target = os.path.normpath(self.items[row].get('target'))
+		menu = RoundMenu(parent = self)
+		menu.addAction(Action(FluentIcon.COPY, 'Copy target file name', triggered = lambda: QApplication.clipboard().setText(os.path.basename(target))))
+		# explorer opens the target's folder with the target picked
+		menu.addAction(Action(FluentIcon.FOLDER, 'Open Folder…', triggered = lambda: subprocess.Popen([ 'explorer', '/select,', target ])))
+		menu.exec(position)
 
 	def show_item_result(self, list_item) -> None:
 		index = self.match_list.row(list_item)
@@ -1458,28 +2061,32 @@ class BatchPage(SourceSelection, QWidget):
 	# running, one facefusion run per output so a refused target only fails its own output
 
 	def start(self) -> None:
+		"""Run Batch makes every output, Run Selected and a type tab only theirs and keep what the other rows show"""
+		selected = self.run_keys()
 		self.save()
-		self.refresh_matches()
-		if not self.pairs_count:
+		self.refresh_matches(bool(selected))
+		items = [ item for item in self.items if not selected or self.run_key(item) in selected ]
+		if not items:
 			self.session.notify.emit('warning', 'Nothing to do', 'No target files match the folder and filter, and no files were added to the list.')
 			return
 		if not self.output_dir():
 			self.session.notify.emit('warning', 'No output folder', 'Choose where the results go.')
 			return
-		if any(item.get('repeated') for item in self.items):
+		if any(item.get('repeated') for item in items):
 			self.session.notify.emit('warning', 'Same file name', 'Some outputs would get the same name and replace each other. Add {source} or {n} to the file name.')
 			return
 		# with Sub-Folders on every source has its own folder, each is checked and created here
-		for folder in sorted({ os.path.dirname(item.get('output')) for item in self.items }):
+		for folder in sorted({ os.path.dirname(item.get('output')) for item in items }):
 			if not folder_is_writable(folder):
 				self.session.notify.emit('error', 'Cannot save to this folder', 'Windows does not allow saving to %s. Choose another output folder, such as Videos or Documents.' % folder)
 				return
-		replacing = [ item for item in self.items if item.get('replaces') and self.item_status(item) != 'skip' ]
+		replacing = [ item for item in items if os.path.isfile(item.get('output')) and self.item_status(item) != 'skip' ]
 		if replacing and not self.confirm_replace(replacing):
 			return
+		self.selected_only = selected
 		self.start_clock()
 		# the nsfw check runs first, so the flagged rows show while the rest are made
-		unchecked = sorted({ item.get('target') for item in self.items } - set(self.check_results))
+		unchecked = sorted({ item.get('target') for item in items } - set(self.check_results))
 		if unchecked:
 			self.running = True
 			self.prechecking = True
@@ -1509,9 +2116,13 @@ class BatchPage(SourceSelection, QWidget):
 
 	def run_batch(self) -> None:
 		for item in self.items:
+			if self.selected_only and self.run_key(item) not in self.selected_only:
+				continue
+			item.pop('reason', None)
+			item['retried'] = self.status_tab(item)
 			# targets the nsfw check flagged would only be refused, so they are not run
 			item['status'] = 'blocked' if self.item_status(item) == 'skip' else ''
-		self.retry_only = set()
+		self.run_only = set(self.selected_only)
 		self.begin_run()
 
 	def start_clock(self) -> None:
@@ -1553,7 +2164,7 @@ class BatchPage(SourceSelection, QWidget):
 			self.session.runner.stop()
 
 	def queued(self) -> List[int]:
-		return [ index for index, item in enumerate(self.items) if not item.get('status') and (not self.retry_only or self.run_key(item) in self.retry_only) ]
+		return [ index for index, item in enumerate(self.items) if not item.get('status') and (not self.run_only or self.run_key(item) in self.run_only) ]
 
 	def run_next(self) -> None:
 		queued = self.queued()
@@ -1592,7 +2203,7 @@ class BatchPage(SourceSelection, QWidget):
 			self.finish()
 
 	def on_busy_changed(self, busy : bool, task : str) -> None:
-		self.start_button.setEnabled(not busy and not self.running)
+		self.start_button.setEnabled(self.can_start(busy))
 		self.check_button.setEnabled(not busy and not self.running)
 		self.stop_button.setEnabled(busy and self.running)
 		self.skip_button.setEnabled(busy and self.running and not self.confirming and not self.prechecking)
@@ -1655,13 +2266,18 @@ class BatchPage(SourceSelection, QWidget):
 				return
 			self.confirming = False
 		self.running = False
+		# a stopped run leaves its outputs to run again on All
+		for item in self.items:
+			item.pop('retried', None)
 		self.run_clock.stop()
 		took = self.run_time()
 		self.time_label.setText('Total ' + took)
 		self.on_busy_changed(self.session.runner.is_running(), self.session.task)
 		if self.preview_waiting:
 			QTimer.singleShot(0, self.run_preview)
-		counts = { status: sum(1 for item in self.items if item.get('status') == status) for status in [ 'done', 'skipped', 'blocked', 'failed' ] }
+		# a run of some outputs counts only those, the other rows keep what earlier runs made
+		ran = [ item for item in self.items if not self.run_only or self.run_key(item) in self.run_only ]
+		counts = { status: sum(1 for item in ran if item.get('status') == status) for status in [ 'done', 'skipped', 'blocked', 'failed' ] }
 		# the made files take their names, Saves As and the rows not run yet move on to the next free ones
 		self.refresh_matches(True)
 		parts = [ '%d done' % counts.get('done') ]
@@ -1687,16 +2303,23 @@ class BatchPage(SourceSelection, QWidget):
 
 	# nsfw check
 
+	def targets_word(self, targets : List[str]) -> str:
+		"""what to call these targets: images, videos or GIFs when they are all of one type, else targets, one of them without the s"""
+		types = { self.item_type({ 'target': target }) for target in targets }
+		word = { 'images': 'images', 'videos': 'videos', 'gifs': 'GIFs' }.get(types.pop()) if len(types) == 1 else 'targets'
+		return word[:-1] if len(targets) == 1 else word
+
 	def check_targets(self) -> None:
 		self.refresh_matches()
-		targets = sorted({ item.get('target') for item in self.items })
+		# a type tab checks only its own targets
+		targets = sorted({ item.get('target') for item in self.shown_items() })
 		if not targets:
 			self.session.notify.emit('warning', 'Nothing to check', 'No target files match the folder and filter, and no files were added to the list.')
 			return
 		self.confirming = False
 		self.progress.setValue(0)
 		self.progress.resume()
-		self.status_label.setText('Checking %d target%s with the NSFW filter…' % (len(targets), '' if len(targets) == 1 else 's'))
+		self.status_label.setText('Checking %d %s with the NSFW filter…' % (len(targets), self.targets_word(targets)))
 		self.session.run_content_check('batch', targets)
 
 	def on_content_checked(self, owner : str, results : list, exit_code : int) -> None:
@@ -1736,10 +2359,12 @@ class BatchPage(SourceSelection, QWidget):
 		self.progress.setValue(1000)
 		self.refresh_list()
 		flagged = [ result for result in results if result.get('blocked') ]
+		# images, videos or GIFs when the check was of one type, such as on a type tab
+		word = self.targets_word([ result.get('path') for result in results ])
 		if flagged:
 			skipped = sum(1 for item in self.items if self.item_status(item) == 'skip')
-			self.status_label.setText('⛔ %s in %d of %d targets. Run Batch skips those %d outputs. Double-click one to see what was flagged.' % (BLOCKED_TITLE, len(flagged), len(results), skipped))
-			show_blocked_bar(self.window(), "FaceFusion's NSFW filter flagged %d of the %d targets. Run Batch will skip them and make the rest." % (len(flagged), len(results)))
+			self.status_label.setText('⛔ %s in %d of %d %s. Run Batch skips those %d outputs. Double-click one to see what was flagged.' % (BLOCKED_TITLE, len(flagged), len(results), word, skipped))
+			show_blocked_bar(self.window(), "FaceFusion's NSFW filter flagged %d of the %d %s. Run Batch will skip them and make the rest." % (len(flagged), len(results), word))
 		else:
-			self.status_label.setText('✓ No NSFW content detected in the %d targets' % len(results))
-			self.session.notify.emit('success', 'No NSFW content detected', "FaceFusion's NSFW filter found nothing in the %d targets." % len(results))
+			self.status_label.setText('✓ No NSFW content detected in the %d %s' % (len(results), word))
+			self.session.notify.emit('success', 'No NSFW content detected', "FaceFusion's NSFW filter found nothing in the %d %s." % (len(results), word))

@@ -416,8 +416,9 @@ class ChoiceButton(TogglePushButton):
 		super().__init__(parent)
 		self.symbol = symbol
 		self.setText(text)
-		# any icon makes the button reserve room for one, a sign is painted over it below
-		self.setIcon(icon or FluentIcon.PIN)
+		# any icon makes the button reserve room for one, a sign is painted over it below, a button without either shows only its text
+		if icon or symbol:
+			self.setIcon(icon or FluentIcon.PIN)
 
 	def _drawIcon(self, icon, painter : QPainter, rect : QRectF, state = None) -> None:
 		if not self.symbol:

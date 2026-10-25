@@ -55,8 +55,11 @@ def check_image(target_path : str, preview_dir : str, index : int) -> dict:
 	if frame is None:
 		result['error'] = 'could not read the image'
 		return result
-	if content_analyser.analyse_frame(frame):
-		result.update({ 'blocked': True, 'rate': 100.0, 'flagged': [ 0 ], 'previews': [ save_preview(preview_dir, index, 'image', frame) ] })
+	# facefusion's own three detectors and vote, as detect_nsfw runs them, keeping how many flagged the image
+	votes = sum([ content_analyser.detect_with_nsfw_1(frame), content_analyser.detect_with_nsfw_2(frame), content_analyser.detect_with_nsfw_3(frame) ])
+	result.update({ 'votes': votes, 'rate': round(votes / 3 * 100, 1) })
+	if votes >= 2:
+		result.update({ 'blocked': True, 'flagged': [ 0 ], 'previews': [ save_preview(preview_dir, index, 'image', frame) ] })
 	return result
 
 

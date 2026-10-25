@@ -10,8 +10,8 @@ from ffstudio.widgets import ChoiceButton, DecimalBox, InfoButton, NumberBox, Ra
 
 AUTO_TEXT = 'Auto'
 LABEL_WIDTH = 210
-# options shown as a row of icon buttons instead of a drop down
-BUTTON_CHOICES = [ 'face_selector_gender' ]
+# options with a few short choices, shown as a row of buttons instead of a drop down
+BUTTON_CHOICES = [ 'face_selector_gender', 'face_selector_mode', 'workflow_strategy' ]
 # options facefusion only reads while a choice is ticked in another option, grayed out otherwise
 REQUIRED_CHOICES =\
 {
@@ -106,7 +106,7 @@ class ChoiceControl(OptionControl):
 
 
 class ButtonChoiceControl(OptionControl):
-	"""a row of buttons with an icon each, for short choices like the face selector gender"""
+	"""a row of buttons for short choices, the face selector gender ones with an icon each"""
 	ICONS = { 'auto': ('Auto', None, FluentIcon.PEOPLE), 'male': ('Male', 'male', None), 'female': ('Female', 'female', None) }
 
 	def __init__(self, option : Dict[str, Any], parent : Optional[QWidget] = None) -> None:
@@ -135,6 +135,8 @@ class ButtonChoiceControl(OptionControl):
 	def set_value(self, value : Any) -> None:
 		self.updating = True
 		matches = [ index for index, item in enumerate(self.items) if format_scalar(item) == format_scalar(value) ] if value not in (None, 'auto') else [ 0 ]
+		if not matches and self.option.get('default') in self.items:
+			matches = [ self.items.index(self.option.get('default')) ]
 		self.group.button(matches[0] if matches else 0).setChecked(True)
 		self.updating = False
 

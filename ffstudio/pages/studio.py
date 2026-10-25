@@ -502,7 +502,7 @@ class TargetCard(SimpleCardWidget):
 		self.live_button.setChecked(bool(self.page.session.config.get('live_preview')))
 		self.live_button.toggled.connect(self.page.on_live_toggled)
 		result_row.addWidget(self.live_button)
-		self.preview_button = tool_button(FluentIcon.UPDATE, 'Preview this frame now', self)
+		self.preview_button = tool_button(FluentIcon.SYNC, 'Preview this frame now', self)
 		self.preview_button.clicked.connect(self.page.preview_frame)
 		result_row.addWidget(self.preview_button)
 		self.open_result_button = tool_button(FluentIcon.VIEW, 'Open Preview', self)

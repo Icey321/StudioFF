@@ -3,7 +3,7 @@ import os
 import shutil
 import subprocess
 from functools import lru_cache
-from typing import Optional
+from typing import Optional, Tuple
 
 import cv2
 import numpy
@@ -204,12 +204,13 @@ def thumbnail(path : str, size : int = 96) -> QPixmap:
 	return to_pixmap(frame)
 
 
-def video_seconds(path : str) -> float:
-	"""how long a video plays, 0 when it cannot be read"""
+def video_length(path : str) -> Tuple[float, int]:
+	"""how many seconds a video plays and how many frames it has, 0 when it cannot be read"""
 	reader = VideoReader(path)
 	seconds = reader.frame_count / reader.fps if reader.fps > 0 else 0.0
+	frames = max(reader.frame_count, 0) if seconds > 0 else 0
 	reader.release()
-	return seconds
+	return seconds, frames
 
 
 def format_length(seconds : float) -> str:
