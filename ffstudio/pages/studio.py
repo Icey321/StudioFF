@@ -359,7 +359,7 @@ class TargetCard(SimpleCardWidget):
 		self.view_switch.setFixedWidth(170)
 		header.addWidget(self.view_switch)
 		header.addSpacing(6)
-		browse_button = tool_button(FluentIcon.FOLDER, 'Choose target image or video', self)
+		browse_button = tool_button(FluentIcon.ADD, 'Choose target image or video', self)
 		browse_button.clicked.connect(self.browse)
 		clear_button = tool_button(FluentIcon.DELETE, 'Clear target', self)
 		clear_button.clicked.connect(lambda: self.page.set_target(''))
@@ -867,6 +867,7 @@ class StudioPage(SourceSelection, QWidget):
 		self.target_card = TargetCard(self)
 		self.mapping_card = FaceMappingCard(self, self.find_people)
 		self.mapping_card.changed.connect(self.on_mapping_changed)
+		self.mapping_card.renamed.connect(self.save_mapping)
 		left.addWidget(self.source_card)
 		left.addWidget(self.target_card, 1)
 		left.addWidget(self.mapping_card)
@@ -1579,6 +1580,10 @@ class StudioPage(SourceSelection, QWidget):
 		self.mapping_card.set_people([ dict(person) for person in (stored or {}).get('people') or [] ], int((stored or {}).get('samples') or 0))
 
 	def on_mapping_changed(self) -> None:
+		self.save_mapping()
+		self.schedule_live_preview()
+
+	def save_mapping(self) -> None:
 		maps = dict(self.session.config.get('face_maps') or {})
 		if self.mapping_card.people:
 			maps[self.target_path] = { 'people': self.mapping_card.people, 'samples': self.mapping_card.samples }
@@ -1588,8 +1593,8 @@ class StudioPage(SourceSelection, QWidget):
 		# a target that is gone takes its mapping along
 		maps = { path: value for path, value in maps.items() if os.path.exists(path) }
 		self.session.config.set('face_maps', maps)
+		# redraws the face boxes, they carry the names
 		self.schedule_face_scan()
-		self.schedule_live_preview()
 
 	def people_file(self) -> Optional[str]:
 		path = os.path.join(people_dir(self.target_path), PEOPLE_FILE) if self.target_path and self.mapping_card.people else ''

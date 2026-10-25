@@ -120,6 +120,8 @@ def plan_passes(people : List[Dict[str, Any]], active_images : List[str], source
 
 class PersonRow(QWidget):
 	changed = Signal()
+	# a new name changes no run, so it does not refresh the preview
+	renamed = Signal()
 
 	def __init__(self, card : 'FaceMappingCard', index : int, person : Dict[str, Any]) -> None:
 		super().__init__(card)
@@ -193,7 +195,7 @@ class PersonRow(QWidget):
 		name = self.name_edit.text().strip()
 		if name != (self.person.get('name') or ''):
 			self.person['name'] = name
-			self.changed.emit()
+			self.renamed.emit()
 
 	def on_source_picked(self, index : int) -> None:
 		self.person['source'] = self.source_combo.itemData(index) or LEAVE
@@ -211,6 +213,7 @@ class FaceMappingCard(CollapsibleCard):
 	collapsed, the header still says who gets which source, so the preview keeps its room
 	"""
 	changed = Signal()
+	renamed = Signal()
 
 	def __init__(self, page : Any, find : Callable[[], None]) -> None:
 		super().__init__('Face mapping', icon = FluentIcon.PEOPLE, expanded = page.session.config.get('face_mapping_expanded', True), parent = page)
@@ -280,6 +283,7 @@ class FaceMappingCard(CollapsibleCard):
 		for index, person in enumerate(people):
 			row = PersonRow(self, index, person)
 			row.changed.connect(self.on_row_changed)
+			row.renamed.connect(self.on_row_renamed)
 			self.rows_layout.addWidget(row)
 			self.rows.append(row)
 		self.clear_button.setVisible(bool(people))
@@ -328,6 +332,10 @@ class FaceMappingCard(CollapsibleCard):
 	def on_row_changed(self) -> None:
 		self.refresh_text()
 		self.changed.emit()
+
+	def on_row_renamed(self) -> None:
+		self.refresh_text()
+		self.renamed.emit()
 
 	def clear(self) -> None:
 		self.set_people([], 0)

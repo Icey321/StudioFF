@@ -891,7 +891,7 @@ class SetupPage(QWidget):
 			self.keep_loaded_combo.addItem(text, userData = minutes)
 			if minutes == current:
 				self.keep_loaded_combo.setCurrentIndex(self.keep_loaded_combo.count() - 1)
-		self.keep_loaded_combo.setToolTip('After the first preview FaceFusion keeps its models loaded, so the next previews take about 2 s instead of 6 or more. They use graphics card memory while loaded. Start, Batch and Benchmark always free them first')
+		self.keep_loaded_combo.setToolTip('After the first preview FaceFusion keeps its models loaded, so the next previews take about 2 s instead of 6 or more. They use graphics card memory while loaded. Batch keeps them loaded from one output to the next, Start and Benchmark free them first')
 		self.keep_loaded_combo.installEventFilter(ToolTipFilter(self.keep_loaded_combo))
 		self.keep_loaded_combo.currentIndexChanged.connect(self.on_keep_loaded_changed)
 		layout.addLayout(form_row('Preview models', [ BodyLabel('Keep loaded after the last preview for', card), self.keep_loaded_combo ], card))
