@@ -6,7 +6,7 @@ from collections import OrderedDict
 from typing import Any, Dict, List, Optional, Tuple
 
 import cv2
-from PySide6.QtCore import QFileSystemWatcher, QItemSelectionModel, QRectF, QSize, Qt, QTimer
+from PySide6.QtCore import QFileSystemWatcher, QItemSelectionModel, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QKeySequence, QPainter, QPainterPath, QPixmap, QShortcut
 from PySide6.QtWidgets import QAbstractItemView, QFileDialog, QHBoxLayout, QListWidgetItem, QVBoxLayout, QWidget
 from qfluentwidgets import BodyLabel, CaptionLabel, ComboBox, FluentIcon, Flyout, FlyoutAnimationType, LineEdit, ListItemDelegate, ListWidget, MessageBox, PrimaryPushButton, ProgressBar, PushButton, SimpleCardWidget, Slider, StrongBodyLabel, SubtitleLabel, TogglePushButton, ToggleToolButton, ToolTipFilter, TransparentPushButton, getFont, isDarkTheme, themeColor
@@ -19,13 +19,14 @@ from ffstudio.output_name import AUTOMATIC_TEMPLATE, build_output, unknown_tags
 from ffstudio.pages.setup import SYSTEM_GROUPS, form_row, section_card
 from ffstudio.pages.studio import LIVE_IGNORED_GROUPS, NameTagsView, SettingsColumn, SourceCard, SourceSelection, StudioPage, elastic, estimated_progress, preview_step_floor, run_tag_values, tool_button
 from ffstudio.session import OptionStore, Session, explain_error, folder_is_writable
-from ffstudio.widgets import PreviewView, Splitter, add_edit_button, guard_wheel
+from ffstudio.widgets import PreviewView, Splitter, add_edit_button, collect_drop_paths, guard_wheel
 
 TARGET_FILTERS = [ ('*.*', 'All files'), ('*.mp4', 'MP4 videos'), ('*.jpg', 'JPG images'), ('*.png', 'PNG images'), ('*.mov', 'MOV videos'), ('*.webm', 'WebM videos') ]
 DEFAULT_TEMPLATE = '{target}_{source}'
 # the placeholders of the first batch file names, read as the tags that replaced them
 OLD_PLACEHOLDERS = { '{target_name}': '{target}', '{source_name}': '{source}', '{target_extension}': '', '{index}': '{n}' }
 LIST_LIMIT = 500
+TARGET_FILES_FILTER = 'Images, videos and GIFs (*.jpg *.jpeg *.png *.webp *.bmp *.tif *.tiff *.mp4 *.mov *.mkv *.avi *.webm *.m4v *.wmv *.gif);;All files (*)'
 # a mark, the words before the names, and the mark's color in the light and dark theme (none follows the theme color)
 STATUS_LOOK =\
 {
@@ -51,6 +52,56 @@ def upgrade_template(template : str) -> str:
 	for old, new in OLD_PLACEHOLDERS.items():
 		template = template.replace(old, new)
 	return template
+
+
+class OutputList(ListWidget):
+	"""the planned outputs, image and video files dropped on it are added as targets"""
+	files_dropped = Signal(list)
+
+	def __init__(self, parent : Optional[QWidget] = None) -> None:
+		super().__init__(parent)
+		self.drag_active = False
+		self.viewport().setAcceptDrops(True)
+
+	def dragEnterEvent(self, event) -> None:
+		if event.mimeData().hasUrls():
+			event.acceptProposedAction()
+			self.drag_active = True
+			self.viewport().update()
+
+	def dragMoveEvent(self, event) -> None:
+		if event.mimeData().hasUrls():
+			event.acceptProposedAction()
+
+	def dragLeaveEvent(self, event) -> None:
+		self.drag_active = False
+		self.viewport().update()
+
+	def dropEvent(self, event) -> None:
+		self.drag_active = False
+		self.viewport().update()
+		paths = collect_drop_paths(event)
+		if paths:
+			event.acceptProposedAction()
+			self.files_dropped.emit(paths)
+
+	def paintEvent(self, event) -> None:
+		super().paintEvent(event)
+		if self.count() and not self.drag_active:
+			return
+		painter = QPainter(self.viewport())
+		painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+		rect = QRectF(self.viewport().rect()).adjusted(4, 4, -4, -4)
+		if self.drag_active:
+			color = QColor(themeColor())
+			painter.setPen(color)
+			color.setAlpha(30)
+			painter.setBrush(color)
+			painter.drawRoundedRect(rect, 8, 8)
+		if not self.count():
+			painter.setPen(QColor('#9a9a9a') if isDarkTheme() else QColor('#707070'))
+			painter.setFont(getFont(13))
+			painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, 'Choose a target folder above,\nor drop image and video files here')
 
 
 class OutputDelegate(ListItemDelegate):
@@ -185,6 +236,8 @@ class BatchPage(SourceSelection, QWidget):
 		stored = session.config.get('batch') or {}
 		# runs the user took out of the list, they stay out until restored, also after a restart
 		self.removed : set = { (tuple(sources), target) for sources, target in stored.get('removed') or [] }
+		# targets dropped on the list or added with Add Files, planned with the files of the target folder
+		self.target_files : List[str] = [ path for path in stored.get('target_files') or [] if isinstance(path, str) ]
 		# the frame of each video target the preview shows, picked on the timeline under the preview, also after a restart
 		self.preview_frames : Dict[str, int] = { target: index for target, index in (stored.get('preview_frames') or {}).items() if isinstance(index, int) and index > 0 }
 		self.timeline_target = ''
@@ -321,6 +374,11 @@ class BatchPage(SourceSelection, QWidget):
 		self.summary.setTextColor('#707070', '#9a9a9a')
 		header.addWidget(self.summary)
 		header.addStretch(1)
+		add_files = TransparentPushButton(FluentIcon.ADD, 'Add Files', matches_card)
+		add_files.setToolTip('Add single image or video files as targets, next to the target folder. You can also drop files on the list.')
+		add_files.installEventFilter(ToolTipFilter(add_files))
+		add_files.clicked.connect(self.browse_target_files)
+		header.addWidget(add_files)
 		self.restore_button = TransparentPushButton(FluentIcon.RETURN, 'Restore removed', matches_card)
 		self.restore_button.setToolTip('Put the outputs you removed back into the list')
 		self.restore_button.installEventFilter(ToolTipFilter(self.restore_button))
@@ -332,7 +390,8 @@ class BatchPage(SourceSelection, QWidget):
 		self.remove_button.clicked.connect(self.remove_selected)
 		header.addWidget(self.remove_button)
 		matches_layout.addLayout(header)
-		self.match_list = ListWidget(matches_card)
+		self.match_list = OutputList(matches_card)
+		self.match_list.files_dropped.connect(self.add_target_files)
 		self.match_list.setUniformItemSizes(True)
 		# the rows shorten their text to fit, a sideways scroll bar would only hide the end of the names
 		self.match_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -557,9 +616,48 @@ class BatchPage(SourceSelection, QWidget):
 			self.session.notify.emit('info', 'Nothing selected', 'Click an output in the list first, Ctrl+click or Shift+click for several.')
 			return
 		self.removed.update(self.run_key(self.items[row]) for row in rows if row < len(self.items))
+		self.forget_removed_files()
 		self.match_list.clearSelection()
 		self.refresh_matches(True)
 		self.match_list.setCurrentRow(min(rows[0], self.match_list.count() - 1), QItemSelectionModel.SelectionFlag.ClearAndSelect)
+
+	def forget_removed_files(self) -> None:
+		"""an added file with all its outputs removed leaves the batch, rather than wait in the removed list"""
+		folder_targets = { os.path.normcase(os.path.normpath(path)) for path in self.folder_targets() }
+		runs = self.runs()
+		for target in list(self.target_files):
+			if os.path.normcase(target) in folder_targets:
+				continue
+			if all(self.run_key(run) in self.removed for run in runs if run.get('target') == target):
+				self.target_files.remove(target)
+				self.removed = { key for key in self.removed if key[1] != target }
+
+	def add_target_files(self, paths : List[str]) -> None:
+		if self.running:
+			self.session.notify.emit('info', 'Batch is running', 'Add files once the batch has finished or is stopped.')
+			return
+		folders = [ path for path in paths if os.path.isdir(path) ]
+		files = [ path for path in paths if os.path.isfile(path) and media_kind(path) in [ 'image', 'video' ] ]
+		rejected = [ path for path in paths if path not in folders and path not in files ]
+		if rejected:
+			self.session.notify.emit('warning', 'Skipped files', 'Targets must be images or videos: ' + ', '.join(os.path.basename(path) for path in rejected[:3]))
+		# a dropped folder becomes the target folder
+		if folders:
+			self.target_dir.setText(folders[0])
+		known = { os.path.normcase(path) for path in self.target_files }
+		for path in files:
+			if os.path.normcase(path) not in known:
+				self.target_files.append(path)
+				known.add(os.path.normcase(path))
+		# a file added again comes back with all its outputs
+		added = { os.path.normcase(path) for path in files }
+		self.removed = { key for key in self.removed if os.path.normcase(key[1] or '') not in added }
+		if files:
+			self.refresh_matches(True)
+
+	def browse_target_files(self) -> None:
+		paths, _ = QFileDialog.getOpenFileNames(self, 'Choose target images or videos', self.last_dir(), TARGET_FILES_FILTER)
+		self.add_target_files([ os.path.normpath(path) for path in paths ])
 
 	def restore_removed(self) -> None:
 		self.removed.clear()
@@ -857,6 +955,8 @@ class BatchPage(SourceSelection, QWidget):
 		folder = self.target_dir.text().strip()
 		if os.path.isdir(folder):
 			return folder
+		if self.target_files:
+			return os.path.dirname(self.target_files[-1])
 		return os.path.dirname(self.source_paths[0]) if self.source_paths else os.path.expanduser('~')
 
 	def browse(self, edit : LineEdit) -> None:
@@ -871,11 +971,20 @@ class BatchPage(SourceSelection, QWidget):
 		folder = self.target_dir.text().strip()
 		return os.path.join(folder, self.target_filter.currentData()) if folder else ''
 
-	def runs(self) -> List[Dict[str, Any]]:
-		"""one run per selected face and target, the selected audio goes into each of them"""
+	def folder_targets(self) -> List[str]:
 		pattern = self.target_pattern()
 		# All files also matches text files and the like, only images and videos can be targets
-		targets = [ path for path in sorted(glob.glob(pattern)) if media_kind(path) in [ 'image', 'video' ] ] if pattern else []
+		return [ path for path in sorted(glob.glob(pattern)) if media_kind(path) in [ 'image', 'video' ] ] if pattern else []
+
+	def targets(self) -> List[str]:
+		"""the files of the target folder, then the added files that still exist and are not in it"""
+		targets = self.folder_targets()
+		known = { os.path.normcase(os.path.normpath(path)) for path in targets }
+		return targets + [ path for path in self.target_files if os.path.normcase(path) not in known and os.path.isfile(path) ]
+
+	def runs(self) -> List[Dict[str, Any]]:
+		"""one run per selected face and target, the selected audio goes into each of them"""
+		targets = self.targets()
 		sources = self.active_sources()
 		images = [ path for path in sources if media_kind(path) == 'image' ]
 		audio = [ path for path in sources if media_kind(path) == 'audio' ]
@@ -949,7 +1058,7 @@ class BatchPage(SourceSelection, QWidget):
 		template = self.output_name_edit.text()
 		plan = self.plan_items
 		if not plan:
-			self.name_preview_label.setText('Choose a target folder to see the file names')
+			self.name_preview_label.setText('Choose a target folder or drop files on the list to see the file names')
 			self.name_preview_label.setToolTip('')
 			return
 		first = plan[0]
@@ -1019,6 +1128,7 @@ class BatchPage(SourceSelection, QWidget):
 		{
 			'target_dir': self.target_dir.text().strip(),
 			'target_pattern': self.target_filter.currentData(),
+			'target_files': self.target_files,
 			'output_dir': self.output_dir(),
 			'template': self.output_name_edit.text().strip(),
 			'subfolders': self.subfolders_button.isChecked(),
@@ -1033,7 +1143,7 @@ class BatchPage(SourceSelection, QWidget):
 		self.save()
 		self.refresh_matches()
 		if not self.pairs_count:
-			self.session.notify.emit('warning', 'Nothing to do', 'No target files match the folder and filter.')
+			self.session.notify.emit('warning', 'Nothing to do', 'No target files match the folder and filter, and no files were added to the list.')
 			return
 		if not self.output_dir():
 			self.session.notify.emit('warning', 'No output folder', 'Choose where the results go.')
@@ -1186,7 +1296,7 @@ class BatchPage(SourceSelection, QWidget):
 		self.refresh_matches()
 		targets = sorted({ item.get('target') for item in self.items })
 		if not targets:
-			self.session.notify.emit('warning', 'Nothing to check', 'No target files match the folder and filter.')
+			self.session.notify.emit('warning', 'Nothing to check', 'No target files match the folder and filter, and no files were added to the list.')
 			return
 		self.confirming = False
 		self.progress.setValue(0)
