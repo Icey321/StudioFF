@@ -2,8 +2,9 @@ import json
 import os
 from typing import Any, Dict, List, Optional
 
-from PySide6.QtCore import QObject, QProcess, QTimer, Signal
-from PySide6.QtWidgets import QHBoxLayout, QWidget
+from PySide6.QtCore import QObject, QProcess, QRectF, Qt, QTimer, Signal
+from PySide6.QtGui import QColor, QPainter
+from PySide6.QtWidgets import QHBoxLayout, QSizePolicy, QVBoxLayout, QWidget
 from qfluentwidgets import CaptionLabel, ToolTipFilter
 
 from ffstudio.config import APP_DIR
@@ -15,6 +16,9 @@ GIGABYTE = 1024 * 1024 * 1024
 # memory this full shows in orange, a run may slow down or fail
 WARN_SHARE = 0.9
 WARN_COLOR = '#e8890c'
+METER_HEIGHT = 3
+# share of full, and the meter color there
+METER_STOPS = [ (0.0, (46, 160, 67)), (0.5, (46, 160, 67)), (0.75, (232, 137, 12)), (1.0, (220, 38, 38)) ]
 RESTART_DELAY = 10000
 MAXIMUM_RESTARTS = 3
 
@@ -28,15 +32,52 @@ def describe_metrics(metrics : Dict[str, Any]) -> List[Dict[str, Any]]:
 	parts = []
 	for gpu in metrics.get('gpus') or []:
 		name = gpu.get('name') or 'Graphics card'
-		parts.append({ 'text': 'GPU %d%%' % gpu.get('load', 0), 'warn': False, 'tip': '%s\nBusy %d%% · %d °C' % (name, gpu.get('load', 0), gpu.get('temperature', 0)) })
+		parts.append({ 'text': 'GPU %d%%' % gpu.get('load', 0), 'warn': gpu.get('load', 0) >= 100 * WARN_SHARE, 'share': gpu.get('load', 0) / 100, 'tip': '%s\nBusy %d%% · %d °C' % (name, gpu.get('load', 0), gpu.get('temperature', 0)) })
 		used, total = gpu.get('used', 0), gpu.get('total', 0)
 		if total:
-			parts.append({ 'text': 'VRAM ' + format_gigabytes(used, total), 'warn': used >= total * WARN_SHARE, 'tip': '%s memory in use, by every program\nFaceFusion needs more of it for larger models and pixel boost' % name })
-	parts.append({ 'text': 'CPU %d%%' % round(metrics.get('cpu', 0)), 'warn': False, 'tip': 'Processor busy, all cores together' })
+			parts.append({ 'text': 'VRAM ' + format_gigabytes(used, total), 'warn': used >= total * WARN_SHARE, 'share': used / total, 'tip': '%s memory in use, by every program\nFaceFusion needs more of it for larger models and pixel boost' % name })
+	parts.append({ 'text': 'CPU %d%%' % round(metrics.get('cpu', 0)), 'warn': metrics.get('cpu', 0) >= 100 * WARN_SHARE, 'share': metrics.get('cpu', 0) / 100, 'tip': 'Processor busy, all cores together' })
 	used, total = metrics.get('ram_used', 0), metrics.get('ram_total', 0)
 	if total:
-		parts.append({ 'text': 'RAM ' + format_gigabytes(used, total), 'warn': used >= total * WARN_SHARE, 'tip': 'System memory in use, by every program' })
+		parts.append({ 'text': 'RAM ' + format_gigabytes(used, total), 'warn': used >= total * WARN_SHARE, 'share': used / total, 'tip': 'System memory in use, by every program' })
+	for part in parts:
+		part['share'] = min(max(part.get('share', 0), 0.0), 1.0)
 	return parts
+
+
+def meter_color(share : float) -> QColor:
+	"""green while there is room, fading through orange to red as it reaches full"""
+	for (start, start_color), (end, end_color) in zip(METER_STOPS, METER_STOPS[1:]):
+		if share <= end:
+			mix = max(share - start, 0.0) / (end - start)
+			return QColor(*[ round(a + (b - a) * mix) for a, b in zip(start_color, end_color) ])
+	return QColor(*METER_STOPS[-1][1])
+
+
+class UsageMeter(QWidget):
+	"""a thin bar under a title bar reading, filled to its share of 100%"""
+
+	def __init__(self, parent : Optional[QWidget] = None) -> None:
+		super().__init__(parent)
+		self.share = 0.0
+		self.setFixedHeight(METER_HEIGHT)
+		self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+	def set_share(self, share : float) -> None:
+		if share != self.share:
+			self.share = share
+			self.update()
+
+	def paintEvent(self, _ : Any) -> None:
+		painter = QPainter(self)
+		painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+		painter.setPen(Qt.PenStyle.NoPen)
+		radius = self.height() / 2
+		painter.setBrush(QColor(128, 128, 128, 60))
+		painter.drawRoundedRect(QRectF(self.rect()), radius, radius)
+		if self.share > 0:
+			painter.setBrush(meter_color(self.share))
+			painter.drawRoundedRect(QRectF(0, 0, max(self.width() * self.share, self.height()), self.height()), radius, radius)
 
 
 class SystemMonitor(QObject):
@@ -124,26 +165,40 @@ class MonitorBar(QWidget):
 		self.row = QHBoxLayout(self)
 		self.row.setContentsMargins(0, 0, 0, 0)
 		self.row.setSpacing(14)
+		self.readings : List[QWidget] = []
 		self.labels : List[CaptionLabel] = []
+		self.meters : List[UsageMeter] = []
 
 	def show_metrics(self, metrics : Dict[str, Any]) -> None:
 		parts = describe_metrics(metrics)
 		while len(self.labels) < len(parts):
-			label = CaptionLabel(self)
+			reading = QWidget(self)
+			column = QVBoxLayout(reading)
+			column.setContentsMargins(0, 0, 0, 0)
+			column.setSpacing(2)
+			label = CaptionLabel(reading)
 			label.installEventFilter(ToolTipFilter(label, 300))
-			self.row.addWidget(label)
+			meter = UsageMeter(reading)
+			column.addWidget(label)
+			column.addWidget(meter)
+			self.row.addWidget(reading)
+			self.readings.append(reading)
 			self.labels.append(label)
-		for label, part in zip(self.labels, parts):
+			self.meters.append(meter)
+		for reading, label, meter, part in zip(self.readings, self.labels, self.meters, parts):
 			label.setText(part.get('text'))
 			label.setToolTip(part.get('tip'))
 			if part.get('warn'):
 				label.setTextColor(WARN_COLOR, WARN_COLOR)
 			else:
 				label.setTextColor('#808080', '#9a9a9a')
-			label.show()
-		for label in self.labels[len(parts):]:
-			label.hide()
+			meter.set_share(part.get('share'))
+			reading.show()
+			# only ever widens, so the meter keeps its length as the numbers change
+			reading.setMinimumWidth(max(reading.minimumWidth(), reading.sizeHint().width()))
+		for reading in self.readings[len(parts):]:
+			reading.hide()
 
 	def clear(self) -> None:
-		for label in self.labels:
-			label.hide()
+		for reading in self.readings:
+			reading.hide()
