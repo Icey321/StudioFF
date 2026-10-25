@@ -33,7 +33,7 @@ FaceFusion itself is not included: install FaceFusion v4 separately, then point 
 - **Models**: download the lite or full model set, see what's installed, and delete models to free space.
 - **Benchmark**: runs FaceFusion's benchmark on your hardware and exports the results as a shareable image.
 - **Setup**: point the app at an existing FaceFusion v4 or install it from scratch, and check GitHub for FaceFusion updates. It shows whether your FaceFusion is the version StudioFF was tested with, and can switch to that version, to the latest one or back again.
-- **System monitor**: graphics card, processor and memory use in the title bar, read with FaceFusion's own libraries. It can be turned off in Setup.
+- **System monitor**: graphics card, processor and memory use in the title bar, read with FaceFusion's own libraries. A bar under each reading goes from green to orange to red as it fills. It can be turned off in Setup.
 - **Custom look**: Auto, Light or Dark theme, with your own accent color for each (one click puts back the standard purple).
 - **Fluent design**: Windows 11 style throughout, a splash screen with a loading bar, and settings remembered between runs.
 
