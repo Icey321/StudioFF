@@ -166,13 +166,13 @@ def scan(request : dict, model_keys : set) -> dict:
 	people_file = request.get('people_file')
 	people = numpy.load(people_file) if people_file and os.path.isfile(people_file) else None
 
-	reference_face = None
+	# the distances are measured in every mode, they show how far each face is from the one the reference selector would take
+	all_reference_faces = get_static_faces([ reference_frame ])
+	# the gender, race and age filters apply to the reference frame too
+	reference_faces = face_selector.sort_and_filter_faces(get_static_faces(source_frames), all_reference_faces)
+	reference_face = get_one_face(reference_faces, state_manager.get_item('reference_face_position'))
 	if mode == 'reference':
-		all_reference_faces = get_static_faces([ reference_frame ])
-		# the gender, race and age filters apply to the reference frame too
 		result['reference_faces'] = len(all_reference_faces)
-		reference_faces = face_selector.sort_and_filter_faces(get_static_faces(source_frames), all_reference_faces)
-		reference_face = get_one_face(reference_faces, state_manager.get_item('reference_face_position'))
 		result['reference_found'] = reference_face is not None
 		result['reference_distance'] = state_manager.get_item('reference_face_distance')
 

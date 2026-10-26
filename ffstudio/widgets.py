@@ -433,6 +433,54 @@ class ChoiceButton(TogglePushButton):
 		painter.drawPath(gender_path(rect.adjusted(1, 1, -1, -1), self.symbol))
 
 
+# each click on the Landmarks button moves to the next mode
+LANDMARK_MODES = [ 'off', '5', '68' ]
+
+
+def landmarks_mode(value) -> str:
+	"""the Landmarks mode from the config, it was on or off before it had a choice of points"""
+	if value is True:
+		return '68'
+	return value if value in LANDMARK_MODES else 'off'
+
+
+class IconCountButton(TogglePushButton):
+	"""a toggle button with an icon and an optional short text after it, as narrow as icon_width while it has no text"""
+
+	# no __init__ of its own, the fluent button constructor calls itself again with other arguments
+	icon_width = 0
+
+	def setText(self, text : str) -> None:
+		super().setText(text)
+		# the icon padding of a push button leaves a gap where the text would be
+		if not text and self.icon_width:
+			self.setFixedWidth(self.icon_width)
+		else:
+			self.setMinimumWidth(0)
+			self.setMaximumWidth(16777215)
+
+	def _drawIcon(self, icon, painter : QPainter, rect : QRectF, state = None) -> None:
+		if not self.text():
+			rect = QRectF((self.width() - rect.width()) / 2, rect.y(), rect.width(), rect.height())
+		super()._drawIcon(icon, painter, rect)
+
+
+def attach_landmarks_cycle(button, mode : str, on_change : Callable[[str], None], text : str = '') -> None:
+	"""makes a toggle button step through off, the 5 key points and all 68 points, lit while points are drawn and labelled with their number"""
+	def show(mode : str) -> None:
+		button.landmarks_mode = mode
+		button.setChecked(mode != 'off')
+		button.setText(text if mode == 'off' else ('%s %s' % (text, mode)).strip())
+
+	def step() -> None:
+		mode = LANDMARK_MODES[(LANDMARK_MODES.index(button.landmarks_mode) + 1) % len(LANDMARK_MODES)]
+		show(mode)
+		on_change(mode)
+
+	show(mode)
+	button.clicked.connect(step)
+
+
 def add_edit_button(edit : QLineEdit, icon : FluentIcon, tip : str) -> LineEditButton:
 	"""puts an icon button inside a fluent line edit at the far right, after its clear button"""
 	button = LineEditButton(icon, edit)

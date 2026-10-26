@@ -21,7 +21,7 @@ from ffstudio.pages.models import format_size
 from ffstudio.pages.setup import SYSTEM_GROUPS, form_row, section_card
 from ffstudio.pages.studio import LIVE_IGNORED_GROUPS, PREVIEW_MAX_SIDE, NameTagsView, SettingsColumn, SourceCard, SourceSelection, StudioPage, elastic, estimated_progress, preview_step_floor, run_tag_values, tool_button
 from ffstudio.session import OptionStore, Session, explain_error, folder_is_writable
-from ffstudio.widgets import PreviewView, Splitter, add_edit_button, collect_drop_paths, guard_wheel
+from ffstudio.widgets import IconCountButton, PreviewView, Splitter, add_edit_button, attach_landmarks_cycle, collect_drop_paths, guard_wheel, landmarks_mode
 
 TARGET_FILTERS = [ ('*.*', 'All files'), ('*.mp4', 'MP4 videos'), ('*.jpg', 'JPG images'), ('*.png', 'PNG images'), ('*.mov', 'MOV videos'), ('*.webm', 'WebM videos'), ('*.gif', 'GIF animations') ]
 DEFAULT_TEMPLATE = '{target}_{source}'
@@ -922,13 +922,17 @@ class BatchPage(SourceSelection, QWidget):
 		self.faces_button.setToolTip('Faces: show the faces FaceFusion detects in this frame with the current face settings.\nOutlined faces will be processed, dashed ones are skipped by the face selector.')
 		self.mask_button = ToggleToolButton(FluentIcon.PALETTE, card)
 		self.mask_button.setToolTip('Mask: shade the face mask FaceFusion would blend the new face through, with the current Face masker settings.')
-		self.landmarks_button = ToggleToolButton(FluentIcon.FINGERPRINT, card)
-		self.landmarks_button.setToolTip('Landmarks: dot the facial landmarks FaceFusion finds, like the Face Debugger does, without turning it on.\nGreen dots are the 68 points of the face aligner, orange when it only estimated them, blue the 5 points the face is aligned by.')
-		for button, key in [ (self.faces_button, 'batch_show_faces'), (self.mask_button, 'batch_show_mask'), (self.landmarks_button, 'batch_show_landmarks') ]:
+		self.landmarks_button = IconCountButton(FluentIcon.FINGERPRINT, '', card)
+		self.landmarks_button.icon_width = self.faces_button.sizeHint().width()
+		self.landmarks_button.setToolTip('Landmarks: dot the facial landmarks FaceFusion finds, like the Face Debugger does, without turning it on.\nEach click steps through the 5 key points, all 68 points and Off.\nGreen dots are the 68 points of the face aligner, orange when it only estimated them, blue the 5 points the face is aligned by.')
+		for button, key in [ (self.faces_button, 'batch_show_faces'), (self.mask_button, 'batch_show_mask') ]:
 			button.installEventFilter(ToolTipFilter(button))
 			button.setChecked(bool(self.session.config.get(key)))
 			button.toggled.connect(lambda checked, key = key: self.on_overlay_toggled(key, checked))
 			header.addWidget(button)
+		self.landmarks_button.installEventFilter(ToolTipFilter(self.landmarks_button))
+		attach_landmarks_cycle(self.landmarks_button, landmarks_mode(self.session.config.get('batch_show_landmarks')), lambda mode: self.on_overlay_toggled('batch_show_landmarks', mode))
+		header.addWidget(self.landmarks_button)
 		header.addSpacing(4)
 		self.live_button = TogglePushButton(FluentIcon.SYNC, 'Auto', card)
 		self.live_button.setToolTip('Make the preview again by itself when a setting, a source or the selected output changes')
@@ -1587,7 +1591,7 @@ class BatchPage(SourceSelection, QWidget):
 	def overlays_on(self) -> bool:
 		return self.faces_button.isChecked() or self.mask_button.isChecked() or self.landmarks_button.isChecked()
 
-	def on_overlay_toggled(self, key : str, checked : bool) -> None:
+	def on_overlay_toggled(self, key : str, checked) -> None:
 		self.session.config.set(key, checked)
 		self.faces_label.setVisible(self.overlays_on())
 		self.preview_view.set_faces([])
@@ -1632,7 +1636,7 @@ class BatchPage(SourceSelection, QWidget):
 		faces = (result.get('faces') or []) if self.faces_button.isChecked() else []
 		mask = read_mask(result.get('mask')) if self.mask_button.isChecked() else None
 		boxes = [ (face.get('box'), face_tag(index, face), bool(face.get('selected'))) for index, face in enumerate(faces) ]
-		self.preview_view.set_faces(boxes, (result.get('width') or 0, result.get('height') or 0), mask, face_landmarks(result) if self.landmarks_button.isChecked() else None)
+		self.preview_view.set_faces(boxes, (result.get('width') or 0, result.get('height') or 0), mask, face_landmarks(result, self.landmarks_button.landmarks_mode) if self.landmarks_button.isChecked() else None)
 		lines = []
 		problem = bool(result.get('error'))
 		if self.faces_button.isChecked() or problem:
@@ -1644,7 +1648,7 @@ class BatchPage(SourceSelection, QWidget):
 			lines.append(describe_mask(result, { dest: values.get(dest, schema.options.get(dest, {}).get('default')) for dest in [ 'face_mask_padding', 'face_mask_blur', 'face_mask_areas', 'face_mask_regions' ] } if schema else {}))
 			problem = problem or not result.get('masked')
 		if self.landmarks_button.isChecked() and not result.get('error'):
-			lines.append(describe_landmarks(result))
+			lines.append(describe_landmarks(result, self.landmarks_button.landmarks_mode))
 		self.faces_label.setText('\n'.join(line for line in lines if line))
 		self.faces_label.setTextColor('#b45309' if problem else '#707070', '#f0b35a' if problem else '#9a9a9a')
 

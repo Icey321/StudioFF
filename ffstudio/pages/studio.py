@@ -21,7 +21,7 @@ from ffstudio.option_panel import FavoritesPanel, OptionPanel
 from ffstudio.output_name import AUTOMATIC_TEMPLATE, NAME_EXAMPLES, NAME_TAGS, build_output, build_output_path, unknown_tags
 from ffstudio.presets import PresetBar
 from ffstudio.session import CONTENT_RESULT_PREFIX, Session, folder_is_writable
-from ffstudio.widgets import PreviewView, ProcessorArea, ProcessorButton, Splitter, Thumbnail, add_edit_button, collect_drop_paths, guard_wheel
+from ffstudio.widgets import PreviewView, ProcessorArea, ProcessorButton, Splitter, Thumbnail, add_edit_button, attach_landmarks_cycle, collect_drop_paths, guard_wheel, landmarks_mode
 
 STUDIO_GROUPS = [ 'face_selector', 'face_masker', 'face_detector', 'face_aligner', 'face_tracker', 'output_creation', 'frame_extraction', 'frame_distribution', 'voice_extractor', 'workflow' ]
 # settings that cannot change how a single preview frame looks
@@ -410,10 +410,9 @@ class TargetCard(SimpleCardWidget):
 		self.mask_button.toggled.connect(self.page.on_mask_toggled)
 		header.addWidget(self.mask_button)
 		self.landmarks_button = TogglePushButton(FluentIcon.FINGERPRINT, 'Landmarks', self)
-		self.landmarks_button.setToolTip('Dot the facial landmarks FaceFusion finds, like the Face Debugger does, without turning it on.\nGreen dots are the 68 points of the face aligner, orange when it was unsure and only estimated them,\nblue dots are the 5 points the face is aligned by.')
+		self.landmarks_button.setToolTip('Dot the facial landmarks FaceFusion finds, like the Face Debugger does, without turning it on.\nEach click steps through the 5 key points, all 68 points and Off.\nGreen dots are the 68 points of the face aligner, orange when it was unsure and only estimated them,\nblue dots are the 5 points the face is aligned by.')
 		self.landmarks_button.installEventFilter(ToolTipFilter(self.landmarks_button))
-		self.landmarks_button.setChecked(bool(self.page.session.config.get('show_landmarks')))
-		self.landmarks_button.toggled.connect(self.page.on_landmarks_toggled)
+		attach_landmarks_cycle(self.landmarks_button, landmarks_mode(self.page.session.config.get('show_landmarks')), self.page.on_landmarks_changed, 'Landmarks')
 		header.addWidget(self.landmarks_button)
 		header.addSpacing(6)
 		self.view_switch = SegmentedWidget(self)
@@ -1601,8 +1600,8 @@ class StudioPage(SourceSelection, QWidget):
 		self.session.config.set('show_mask', checked)
 		self.on_overlay_toggled()
 
-	def on_landmarks_toggled(self, checked : bool) -> None:
-		self.session.config.set('show_landmarks', checked)
+	def on_landmarks_changed(self, mode : str) -> None:
+		self.session.config.set('show_landmarks', mode)
 		self.on_overlay_toggled()
 
 	def overlays_on(self) -> bool:
@@ -1674,7 +1673,7 @@ class StudioPage(SourceSelection, QWidget):
 			else:
 				boxes.append((face.get('box'), face_tag(index, face), bool(face.get('selected')) and not mapped))
 		self.shown_faces = faces
-		card.preview.set_faces(boxes, (result.get('width') or 0, result.get('height') or 0), mask, face_landmarks(result) if card.landmarks_button.isChecked() else None)
+		card.preview.set_faces(boxes, (result.get('width') or 0, result.get('height') or 0), mask, face_landmarks(result, card.landmarks_button.landmarks_mode) if card.landmarks_button.isChecked() else None)
 		lines = []
 		problem = bool(result.get('error'))
 		if card.faces_button.isChecked() and mapped and not problem:
@@ -1692,7 +1691,7 @@ class StudioPage(SourceSelection, QWidget):
 			lines.append(describe_mask(result, values))
 			problem = problem or not result.get('masked')
 		if card.landmarks_button.isChecked() and not result.get('error'):
-			lines.append(describe_landmarks(result))
+			lines.append(describe_landmarks(result, card.landmarks_button.landmarks_mode))
 		card.faces_label.setText('\n'.join(line for line in lines if line))
 		card.faces_label.setTextColor('#b45309' if problem else '#707070', '#f0b35a' if problem else '#9a9a9a')
 

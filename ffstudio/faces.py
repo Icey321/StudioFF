@@ -255,22 +255,28 @@ def describe_mask(result : Dict[str, Any], values : Dict[str, Any]) -> str:
 
 def face_tag(index : int, face : Dict[str, Any]) -> str:
 	age = face.get('age') or [ 0, 0 ]
-	parts = [ '#%d' % (index + 1), '%d%%' % round((face.get('score') or 0) * 100), '%s %d-%d' % ((face.get('gender') or '?')[0].upper(), age[0], age[1]) ]
+	parts = [ '#%d' % (index + 1), '%d%%' % round((face.get('score') or 0) * 100) ]
+	# the distance comes right after the score, it is what decides which faces the reference selector takes
 	if face.get('distance') is not None:
-		parts.append('dist %.2f' % face.get('distance'))
+		parts.append('Dist %.2f' % face.get('distance'))
+	parts.append('%s %d-%d' % ((face.get('gender') or '?')[0].upper(), age[0], age[1]))
+	if face.get('race'):
+		parts.append(face.get('race').capitalize())
 	return '  '.join(parts)
 
 
-def face_landmarks(result : Dict[str, Any]) -> List[tuple]:
-	"""the landmarks of every detected face as PreviewView draws them"""
-	return [ (face.get('landmarks') or [], face.get('key_points') or [], bool(face.get('estimated'))) for face in result.get('faces') or [] ]
+def face_landmarks(result : Dict[str, Any], mode : str = '68') -> List[tuple]:
+	"""the landmarks of every detected face as PreviewView draws them, the 5 key points or all 68 by the Landmarks mode"""
+	return [ ((face.get('landmarks') or []) if mode == '68' else [], (face.get('key_points') or []) if mode == '5' else [], bool(face.get('estimated'))) for face in result.get('faces') or [] ]
 
 
-def describe_landmarks(result : Dict[str, Any]) -> str:
+def describe_landmarks(result : Dict[str, Any], mode : str = '68') -> str:
 	"""one line on the landmarks, and what to change when the aligner had to guess them"""
 	faces = result.get('faces') or []
 	if not faces:
 		return ''
+	if mode == '5':
+		return 'Landmarks: the 5 key points the face is aligned by, the eyes, the nose tip and the mouth corners.'
 	estimated = sum(1 for face in faces if face.get('estimated'))
 	if not estimated:
 		return 'Landmarks: the face aligner placed all 68 points.'
