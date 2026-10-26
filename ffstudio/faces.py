@@ -259,3 +259,20 @@ def face_tag(index : int, face : Dict[str, Any]) -> str:
 	if face.get('distance') is not None:
 		parts.append('dist %.2f' % face.get('distance'))
 	return '  '.join(parts)
+
+
+def face_landmarks(result : Dict[str, Any]) -> List[tuple]:
+	"""the landmarks of every detected face as PreviewView draws them"""
+	return [ (face.get('landmarks') or [], face.get('key_points') or [], bool(face.get('estimated'))) for face in result.get('faces') or [] ]
+
+
+def describe_landmarks(result : Dict[str, Any]) -> str:
+	"""one line on the landmarks, and what to change when the aligner had to guess them"""
+	faces = result.get('faces') or []
+	if not faces:
+		return ''
+	estimated = sum(1 for face in faces if face.get('estimated'))
+	if not estimated:
+		return 'Landmarks: the face aligner placed all 68 points.'
+	which = 'this face' if len(faces) == 1 else ('%d of the faces' % estimated if estimated < len(faces) else 'all faces')
+	return 'Landmarks: the face aligner was unsure on %s (orange), its points are estimated from the 5 the detector found. A lower Face aligner Score or another aligner Model may place them.' % which

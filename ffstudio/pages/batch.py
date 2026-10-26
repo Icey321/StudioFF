@@ -13,7 +13,7 @@ from PySide6.QtWidgets import QAbstractItemView, QApplication, QFileDialog, QHBo
 from qfluentwidgets import Action, BodyLabel, CaptionLabel, ComboBox, FluentIcon, Flyout, FlyoutAnimationType, LineEdit, ListItemDelegate, ListWidget, MessageBox, PrimaryPushButton, ProgressBar, PushButton, RoundMenu, SegmentedWidget, SimpleCardWidget, Slider, StrongBodyLabel, SubtitleLabel, TogglePushButton, ToggleToolButton, ToolTipFilter, TransparentPushButton, getFont, isDarkTheme, themeColor
 
 from ffstudio.config import APP_DIR, PREVIEW_DIR
-from ffstudio.faces import FACE_GROUPS, MASK_GROUPS, FaceProbe, describe_faces, describe_mask, face_tag, read_mask
+from ffstudio.faces import FACE_GROUPS, MASK_GROUPS, FaceProbe, describe_faces, describe_landmarks, describe_mask, face_landmarks, face_tag, read_mask
 from ffstudio.media import GIF_EXTENSIONS, VideoReader, extension, format_length, format_timecode, media_kind, read_frame, thumbnail, to_pixmap, video_length, write_image
 from ffstudio.nsfw import BLOCKED_TITLE, NsfwDialog, show_blocked_bar
 from ffstudio.output_name import AUTOMATIC_TEMPLATE, build_output, unknown_tags
@@ -903,7 +903,7 @@ class BatchPage(SourceSelection, QWidget):
 		copy_button.setToolTip('Make the processors and options here the same as on the Studio page. Later changes on either page stay on that page.')
 		copy_button.installEventFilter(ToolTipFilter(copy_button))
 		copy_button.clicked.connect(self.copy_studio_settings)
-		self.settings_column = SettingsColumn(self.store, self.splitter, (copy_button,), expansion_key = 'batch_groups_expanded')
+		self.settings_column = SettingsColumn(self.store, self.splitter, (copy_button,), expansion_key = 'batch_groups_expanded', preset_key = 'batch_preset')
 		return self.settings_column
 
 	def toggle_settings(self, shown : bool) -> None:
@@ -922,7 +922,9 @@ class BatchPage(SourceSelection, QWidget):
 		self.faces_button.setToolTip('Faces: show the faces FaceFusion detects in this frame with the current face settings.\nOutlined faces will be processed, dashed ones are skipped by the face selector.')
 		self.mask_button = ToggleToolButton(FluentIcon.PALETTE, card)
 		self.mask_button.setToolTip('Mask: shade the face mask FaceFusion would blend the new face through, with the current Face masker settings.')
-		for button, key in [ (self.faces_button, 'batch_show_faces'), (self.mask_button, 'batch_show_mask') ]:
+		self.landmarks_button = ToggleToolButton(FluentIcon.FINGERPRINT, card)
+		self.landmarks_button.setToolTip('Landmarks: dot the facial landmarks FaceFusion finds, like the Face Debugger does, without turning it on.\nGreen dots are the 68 points of the face aligner, orange when it only estimated them, blue the 5 points the face is aligned by.')
+		for button, key in [ (self.faces_button, 'batch_show_faces'), (self.mask_button, 'batch_show_mask'), (self.landmarks_button, 'batch_show_landmarks') ]:
 			button.installEventFilter(ToolTipFilter(button))
 			button.setChecked(bool(self.session.config.get(key)))
 			button.toggled.connect(lambda checked, key = key: self.on_overlay_toggled(key, checked))
@@ -1583,7 +1585,7 @@ class BatchPage(SourceSelection, QWidget):
 	# faces and mask over the preview, scanned on the same smaller frame the preview runs on
 
 	def overlays_on(self) -> bool:
-		return self.faces_button.isChecked() or self.mask_button.isChecked()
+		return self.faces_button.isChecked() or self.mask_button.isChecked() or self.landmarks_button.isChecked()
 
 	def on_overlay_toggled(self, key : str, checked : bool) -> None:
 		self.session.config.set(key, checked)
@@ -1630,7 +1632,7 @@ class BatchPage(SourceSelection, QWidget):
 		faces = (result.get('faces') or []) if self.faces_button.isChecked() else []
 		mask = read_mask(result.get('mask')) if self.mask_button.isChecked() else None
 		boxes = [ (face.get('box'), face_tag(index, face), bool(face.get('selected'))) for index, face in enumerate(faces) ]
-		self.preview_view.set_faces(boxes, (result.get('width') or 0, result.get('height') or 0), mask)
+		self.preview_view.set_faces(boxes, (result.get('width') or 0, result.get('height') or 0), mask, face_landmarks(result) if self.landmarks_button.isChecked() else None)
 		lines = []
 		problem = bool(result.get('error'))
 		if self.faces_button.isChecked() or problem:
@@ -1641,6 +1643,8 @@ class BatchPage(SourceSelection, QWidget):
 			schema = self.session.schema
 			lines.append(describe_mask(result, { dest: values.get(dest, schema.options.get(dest, {}).get('default')) for dest in [ 'face_mask_padding', 'face_mask_blur', 'face_mask_areas', 'face_mask_regions' ] } if schema else {}))
 			problem = problem or not result.get('masked')
+		if self.landmarks_button.isChecked() and not result.get('error'):
+			lines.append(describe_landmarks(result))
 		self.faces_label.setText('\n'.join(line for line in lines if line))
 		self.faces_label.setTextColor('#b45309' if problem else '#707070', '#f0b35a' if problem else '#9a9a9a')
 

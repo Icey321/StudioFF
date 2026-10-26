@@ -618,6 +618,8 @@ class PreviewView(QWidget):
 		# the face mask as a tinted image at frame size, plus its outline in frame pixels
 		self.mask_image = QImage()
 		self.mask_outline : List[QPolygonF] = []
+		# the facial landmarks per face in frame pixels: (68 points, 5 key points, estimated)
+		self.landmarks : List[tuple] = []
 		self.drag_active = False
 		# modifier keys held during the last click, so a click handler can tell ctrl / shift clicks apart
 		self.click_modifiers = Qt.KeyboardModifier.NoModifier
@@ -646,10 +648,11 @@ class PreviewView(QWidget):
 		self.badge = text
 		self.update()
 
-	def set_faces(self, faces : List[tuple], frame_size : Tuple[int, int] = (0, 0), mask = None) -> None:
-		"""boxes for the detected faces, and the face mask as a 0-255 array at frame size, both cleared by an empty call"""
+	def set_faces(self, faces : List[tuple], frame_size : Tuple[int, int] = (0, 0), mask = None, landmarks : Optional[List[tuple]] = None) -> None:
+		"""boxes for the detected faces, the face mask as a 0-255 array at frame size and the facial landmarks, all cleared by an empty call"""
 		self.faces = faces
 		self.faces_size = frame_size
+		self.landmarks = landmarks or []
 		self.mask_image = QImage()
 		self.mask_outline = []
 		if mask is not None and mask.any():
@@ -818,8 +821,23 @@ class PreviewView(QWidget):
 	def paint_overlays(self, painter : QPainter, image_rect : QRectF) -> None:
 		if not self.mask_image.isNull():
 			self.paint_mask(painter, image_rect)
+		if self.landmarks and self.faces_size[0]:
+			self.paint_landmarks(painter, image_rect)
 		if self.faces and self.faces_size[0]:
 			self.paint_faces(painter, image_rect)
+
+	def paint_landmarks(self, painter : QPainter, image_rect : QRectF) -> None:
+		# green like the Face Debugger, orange when the aligner was unsure and the 68 points are only estimated
+		scale = image_rect.width() / self.faces_size[0]
+		painter.save()
+		painter.setPen(QPen(QColor(0, 0, 0, 140), 0.8))
+		for points, key_points, estimated in self.landmarks:
+			color = QColor(255, 165, 0) if estimated else QColor(0, 230, 90)
+			for point_list, radius, fill in [ (points, 1.8, color), (key_points, 3.0, QColor(0, 220, 255)) ]:
+				painter.setBrush(fill)
+				for x, y in point_list:
+					painter.drawEllipse(QPointF(image_rect.x() + x * scale, image_rect.y() + y * scale), radius, radius)
+		painter.restore()
 
 	def paint_mask(self, painter : QPainter, image_rect : QRectF) -> None:
 		# the tint fades with the mask blur, the line marks where the mask is half strength

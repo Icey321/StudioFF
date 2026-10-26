@@ -14,11 +14,12 @@ from qfluentwidgets import Action, BodyLabel, CaptionLabel, FlowLayout, FluentIc
 
 from ffstudio.config import APP_DIR, PREVIEW_DIR
 from ffstudio.face_mapping import FACE_PROCESSORS, FRAME_PROCESSORS, LEAVE, PEOPLE_FILE, SELECTED, FaceMappingCard, box_overlap, is_kept, is_mapped, merge_people, people_dir, person_color, person_name, plan_passes
-from ffstudio.faces import FACE_GROUPS, MASK_GROUPS, FaceProbe, describe_faces, describe_mask, face_tag, read_mask
+from ffstudio.faces import FACE_GROUPS, MASK_GROUPS, FaceProbe, describe_faces, describe_landmarks, describe_mask, face_landmarks, face_tag, read_mask
 from ffstudio.media import GIF_EXTENSIONS, VideoReader, extension, format_timecode, media_kind, read_frame, read_image, thumbnail, to_pixmap, write_image
 from ffstudio.nsfw import BLOCKED_STATUS, NsfwDialog, describe_result, show_blocked_bar
 from ffstudio.option_panel import FavoritesPanel, OptionPanel
 from ffstudio.output_name import AUTOMATIC_TEMPLATE, NAME_EXAMPLES, NAME_TAGS, build_output, build_output_path, unknown_tags
+from ffstudio.presets import PresetBar
 from ffstudio.session import CONTENT_RESULT_PREFIX, Session, folder_is_writable
 from ffstudio.widgets import PreviewView, ProcessorArea, ProcessorButton, Splitter, Thumbnail, add_edit_button, collect_drop_paths, guard_wheel
 
@@ -408,6 +409,12 @@ class TargetCard(SimpleCardWidget):
 		self.mask_button.setChecked(bool(self.page.session.config.get('show_mask')))
 		self.mask_button.toggled.connect(self.page.on_mask_toggled)
 		header.addWidget(self.mask_button)
+		self.landmarks_button = TogglePushButton(FluentIcon.FINGERPRINT, 'Landmarks', self)
+		self.landmarks_button.setToolTip('Dot the facial landmarks FaceFusion finds, like the Face Debugger does, without turning it on.\nGreen dots are the 68 points of the face aligner, orange when it was unsure and only estimated them,\nblue dots are the 5 points the face is aligned by.')
+		self.landmarks_button.installEventFilter(ToolTipFilter(self.landmarks_button))
+		self.landmarks_button.setChecked(bool(self.page.session.config.get('show_landmarks')))
+		self.landmarks_button.toggled.connect(self.page.on_landmarks_toggled)
+		header.addWidget(self.landmarks_button)
 		header.addSpacing(6)
 		self.view_switch = SegmentedWidget(self)
 		self.view_switch.addItem('target', 'Target', lambda: self.pick_view('target'))
@@ -433,7 +440,7 @@ class TargetCard(SimpleCardWidget):
 		# what face detection found, and which setting to change when it found nothing usable
 		self.faces_label = CaptionLabel('', self)
 		self.faces_label.setWordWrap(True)
-		self.faces_label.setVisible(self.faces_button.isChecked() or self.mask_button.isChecked())
+		self.faces_label.setVisible(self.faces_button.isChecked() or self.mask_button.isChecked() or self.landmarks_button.isChecked())
 		layout.addWidget(self.faces_label)
 
 		self.timeline = QWidget(self)
@@ -703,7 +710,7 @@ class NameTagsView(FlyoutViewBase):
 class SettingsColumn(QWidget):
 	"""search, processors and option groups for one set of option values, the session's or a page's OptionStore"""
 
-	def __init__(self, store, parent : Optional[QWidget] = None, header_widgets : Tuple[QWidget, ...] = (), expansion_key : str = '') -> None:
+	def __init__(self, store, parent : Optional[QWidget] = None, header_widgets : Tuple[QWidget, ...] = (), expansion_key : str = '', preset_key : str = '') -> None:
 		super().__init__(parent)
 		self.store = store
 		column = QVBoxLayout(self)
@@ -718,6 +725,9 @@ class SettingsColumn(QWidget):
 		for widget in header_widgets:
 			search_row.addWidget(widget)
 		column.addLayout(search_row)
+		self.preset_bar = PresetBar(self, preset_key, self)
+		self.preset_bar.setContentsMargins(0, 0, 10, 0)
+		column.addWidget(self.preset_bar)
 		self.scroll = SingleDirectionScrollArea(self, Qt.Orientation.Vertical)
 		self.scroll.setWidgetResizable(True)
 		self.scroll.enableTransparentBackground()
@@ -959,7 +969,7 @@ class StudioPage(SourceSelection, QWidget):
 		self.mapping_card.installEventFilter(self)
 
 		# right column: search, processors + options
-		self.settings_column = SettingsColumn(session, self.splitter, expansion_key = 'studio_groups_expanded')
+		self.settings_column = SettingsColumn(session, self.splitter, expansion_key = 'studio_groups_expanded', preset_key = 'studio_preset')
 		self.settings_column.setMinimumWidth(340)
 		self.splitter.addWidget(self.settings_column)
 		self.splitter.setStretchFactor(0, 11)
@@ -1591,8 +1601,13 @@ class StudioPage(SourceSelection, QWidget):
 		self.session.config.set('show_mask', checked)
 		self.on_overlay_toggled()
 
+	def on_landmarks_toggled(self, checked : bool) -> None:
+		self.session.config.set('show_landmarks', checked)
+		self.on_overlay_toggled()
+
 	def overlays_on(self) -> bool:
-		return self.target_card.faces_button.isChecked() or self.target_card.mask_button.isChecked()
+		card = self.target_card
+		return card.faces_button.isChecked() or card.mask_button.isChecked() or card.landmarks_button.isChecked()
 
 	def on_overlay_toggled(self) -> None:
 		self.target_card.faces_label.setVisible(self.overlays_on())
@@ -1659,7 +1674,7 @@ class StudioPage(SourceSelection, QWidget):
 			else:
 				boxes.append((face.get('box'), face_tag(index, face), bool(face.get('selected')) and not mapped))
 		self.shown_faces = faces
-		card.preview.set_faces(boxes, (result.get('width') or 0, result.get('height') or 0), mask)
+		card.preview.set_faces(boxes, (result.get('width') or 0, result.get('height') or 0), mask, face_landmarks(result) if card.landmarks_button.isChecked() else None)
 		lines = []
 		problem = bool(result.get('error'))
 		if card.faces_button.isChecked() and mapped and not problem:
@@ -1676,7 +1691,9 @@ class StudioPage(SourceSelection, QWidget):
 			values = { dest: self.session.values.get(dest, schema.options.get(dest, {}).get('default')) for dest in [ 'face_mask_padding', 'face_mask_blur', 'face_mask_areas', 'face_mask_regions' ] } if schema else {}
 			lines.append(describe_mask(result, values))
 			problem = problem or not result.get('masked')
-		card.faces_label.setText('\n'.join(lines))
+		if card.landmarks_button.isChecked() and not result.get('error'):
+			lines.append(describe_landmarks(result))
+		card.faces_label.setText('\n'.join(line for line in lines if line))
 		card.faces_label.setTextColor('#b45309' if problem else '#707070', '#f0b35a' if problem else '#9a9a9a')
 
 	def show_face_menu(self, index : int, position : QPoint) -> None:

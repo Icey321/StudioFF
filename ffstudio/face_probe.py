@@ -185,7 +185,12 @@ def scan(request : dict, model_keys : set) -> dict:
 			'age': [ int(face.age.start), int(face.age.stop) ],
 			'race': face.race,
 			'selected': any(same_box(face, other) for other in selected),
-			'position': find_position(face, ordered)
+			'position': find_position(face, ordered),
+			# the points the Face Debugger draws: the 68 the aligner found and the 5 the faces are aligned by,
+			# estimated means the aligner scored below its threshold and the 68 were guessed from the 5 the detector found
+			'landmarks': [ [ round(float(value), 1) for value in point ] for point in face.landmark_set.get('68') ],
+			'key_points': [ [ round(float(value), 1) for value in point ] for point in face.landmark_set.get('5/68') ],
+			'estimated': bool(numpy.array_equal(face.landmark_set.get('68'), face.landmark_set.get('68/5')))
 		}
 		if people is not None and len(people):
 			# the person this face belongs to, the closest one within the Reference face Distance

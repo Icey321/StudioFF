@@ -87,6 +87,8 @@ class Session(QObject):
 	schema_loading = Signal(bool)
 	value_changed = Signal(str, object)
 	favorites_changed = Signal()
+	# a preset was saved or deleted, every page's preset list shows it
+	presets_changed = Signal()
 	busy_changed = Signal(bool, str)
 	notify = Signal(str, str, str)
 	# owner, one result per target, exit code
