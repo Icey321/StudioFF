@@ -132,7 +132,7 @@ class SetupPage(QWidget):
 		root.setSpacing(0)
 		header = QHBoxLayout()
 		header.setContentsMargins(24, 16, 34, 8)
-		header.addWidget(SubtitleLabel('Setup', self))
+		header.addWidget(SubtitleLabel('Settings', self))
 		header.addStretch(1)
 		root.addLayout(header)
 		# the search box spans the settings below it, as wide as the cards
@@ -613,7 +613,7 @@ class SetupPage(QWidget):
 		self.refresh_installed_build()
 		if result.get('requirements_changed'):
 			self.tested_status.set_status('warning', 'Switched. FaceFusion needs other packages now: click Install FaceFusion v4 above, it skips the download.')
-			self.session.notify.emit('warning', 'FaceFusion switched', 'Its requirements changed. Click Install FaceFusion v4 in Setup to update its packages.')
+			self.session.notify.emit('warning', 'FaceFusion switched', 'Its requirements changed. Click Install FaceFusion v4 in Settings to update its packages.')
 		else:
 			self.session.notify.emit('success', 'FaceFusion switched', 'Now on commit %s.' % result.get('commit', '')[:7])
 		# options can differ between commits
@@ -696,13 +696,17 @@ class SetupPage(QWidget):
 	# studioff updates
 
 	def create_studio_update_card(self, parent : QWidget) -> QWidget:
-		card, layout = section_card('StudioFF updates', 'Checks GitHub for a newer release of this app. It also checks quietly each time the app starts, and an orange dot on the Setup gear means one is out.', parent)
+		card, layout = section_card('StudioFF updates', 'Checks GitHub for a newer release of this app. An orange dot on the Settings gear means one is out.', parent)
 		self.studio_version_label = BodyLabel('v' + APP_VERSION, card)
 		self.studio_version_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
 		layout.addLayout(form_row('This app', [ self.studio_version_label ], card))
 		self.studio_release_label = BodyLabel('Not checked yet', card)
 		self.studio_release_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
 		layout.addLayout(form_row('Latest release', [ self.studio_release_label ], card))
+		self.startup_check_switch = SwitchButton(card)
+		self.startup_check_switch.setChecked(self.session.config.get('check_updates_at_startup') is not False)
+		self.startup_check_switch.checkedChanged.connect(self.on_startup_check_toggled)
+		layout.addLayout(form_row('Check at startup', [ BodyLabel('Look for a new StudioFF each time the app opens, and show an Update button beside the version at the top', card), self.startup_check_switch ], card))
 		buttons = QHBoxLayout()
 		buttons.addSpacing(138)
 		self.studio_install_button = PrimaryPushButton(FluentIcon.DOWNLOAD, 'Update StudioFF', card)
@@ -711,7 +715,7 @@ class SetupPage(QWidget):
 		self.studio_release = {}
 		buttons.addWidget(self.studio_install_button)
 		buttons.addSpacing(4)
-		self.studio_update_button = PushButton(FluentIcon.UPDATE, 'Check for Studio Updates', card)
+		self.studio_update_button = PushButton(FluentIcon.UPDATE, 'Check for StudioFF Updates', card)
 		self.studio_update_button.clicked.connect(lambda: self.check_studio_update())
 		self.studio_release_link = HyperlinkButton('https://github.com/%s/releases' % APP_REPOSITORY, 'Open Releases', card, FluentIcon.GITHUB)
 		self.studio_update_status = StatusLine(card)
@@ -732,6 +736,10 @@ class SetupPage(QWidget):
 		download_row.addWidget(self.studio_download_bar, 1)
 		layout.addLayout(download_row)
 		return card
+
+	def on_startup_check_toggled(self, checked : bool) -> None:
+		self.session.config.set('check_updates_at_startup', checked)
+		self.session.config.save()
 
 	def check_studio_update(self, quiet : bool = False) -> None:
 		"""quiet is the check at startup, it only fills in the card and the dot and stays silent when github cannot be reached"""

@@ -68,6 +68,8 @@ DEFAULT_CONFIG : Dict[str, Any] =\
 	'show_system_monitor': True,
 	# what the window's X button does: close, minimize or tray
 	'close_action': 'close',
+	# look for a newer studioff release when the app opens, and say so with an Update Now button
+	'check_updates_at_startup': True,
 	# how the window was left: maximized, and the normal size and position as [ x, y, width, height ]
 	'window_state': {},
 	'source_paths': [],

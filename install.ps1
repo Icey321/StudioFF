@@ -1,5 +1,5 @@
 # Creates the UI environment (.venv) and a Start menu + desktop shortcut.
-# FaceFusion v4 itself lives in its own environment; install it from the app's Setup page.
+# FaceFusion v4 itself lives in its own environment; install it from the app's Settings page.
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
 

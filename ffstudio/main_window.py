@@ -4,7 +4,7 @@ from typing import Dict, Optional
 from PySide6.QtCore import QRect, Qt, QTimer
 from PySide6.QtGui import QColor, QIcon
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
-from qfluentwidgets import CaptionLabel, DotInfoBadge, FluentIcon, FluentWindow, InfoBar, InfoBarPosition, NavigationItemPosition, Theme, isDarkTheme, setTheme, setThemeColor
+from qfluentwidgets import CaptionLabel, DotInfoBadge, FluentIcon, FluentWindow, InfoBar, InfoBarPosition, NavigationItemPosition, Theme, ToolTipFilter, TransparentPushButton, isDarkTheme, setTheme, setThemeColor
 
 from ffstudio import APP_NAME, APP_VERSION, splash
 from ffstudio.config import APP_DIR
@@ -52,7 +52,7 @@ class MainWindow(FluentWindow):
 		self.benchmark_page = BenchmarkPage(session, self)
 		splash.step('Building the Console page…')
 		self.console_page = ConsolePage(session, self)
-		splash.step('Building the Setup page…')
+		splash.step('Building the Settings page…')
 		self.setup_page = SetupPage(session, self)
 		splash.step('Opening the window…')
 
@@ -61,7 +61,7 @@ class MainWindow(FluentWindow):
 		self.addSubInterface(self.models_page, FluentIcon.CLOUD_DOWNLOAD, 'Models')
 		self.addSubInterface(self.benchmark_page, FluentIcon.SPEED_HIGH, 'Benchmark')
 		self.addSubInterface(self.console_page, FluentIcon.COMMAND_PROMPT, 'Console')
-		self.addSubInterface(self.setup_page, FluentIcon.SETTING, 'Setup', NavigationItemPosition.BOTTOM)
+		self.addSubInterface(self.setup_page, FluentIcon.SETTING, 'Settings', NavigationItemPosition.BOTTOM)
 		splash.step()
 
 		# just wide enough for the longest page name
@@ -72,6 +72,15 @@ class MainWindow(FluentWindow):
 		self.version_label.setTextColor('#808080', '#9a9a9a')
 		self.titleBar.hBoxLayout.insertSpacing(2, 8)
 		self.titleBar.hBoxLayout.insertWidget(3, self.version_label, 0, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+		# and after it, while a newer release is out, the button that installs it
+		self.update_button = TransparentPushButton(FluentIcon.DOWNLOAD, '', self.titleBar)
+		self.update_button.setFixedHeight(26)
+		self.update_button.setToolTip('Download the new StudioFF and install it, your settings and presets stay as they are')
+		self.update_button.installEventFilter(ToolTipFilter(self.update_button))
+		self.update_button.clicked.connect(self.update_studio_now)
+		self.update_button.hide()
+		self.titleBar.hBoxLayout.insertSpacing(4, 10)
+		self.titleBar.hBoxLayout.insertWidget(5, self.update_button, 0, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
 		# graphics card, processor and memory use, left of the window buttons
 		from ffstudio.monitor import MonitorBar, SystemMonitor
 		self.monitor_bar = MonitorBar(self.titleBar)
@@ -92,6 +101,7 @@ class MainWindow(FluentWindow):
 		self.update_dot.setToolTip('A StudioFF update is available')
 		self.update_dot.hide()
 		self.setup_page.studio_update_found.connect(self.update_dot.setVisible)
+		self.setup_page.studio_update_found.connect(self.show_update_button)
 		icon_path = os.path.join(APP_DIR, 'assets', 'icon.png')
 		if os.path.exists(icon_path):
 			self.setWindowIcon(QIcon(icon_path))
@@ -122,7 +132,8 @@ class MainWindow(FluentWindow):
 			self.show_notification('success', 'StudioFF updated', 'You are now on %s.' % update_result[1])
 		elif update_result:
 			self.show_notification('error', 'The update did not install', '%s. StudioFF stayed on v%s.' % (update_result[1][:1].upper() + update_result[1][1:].rstrip('.'), APP_VERSION))
-		self.setup_page.check_studio_update(quiet = True)
+		if self.session.config.get('check_updates_at_startup') is not False:
+			self.setup_page.check_studio_update(quiet = True)
 		if not self.session.is_configured():
 			self.switchTo(self.setup_page)
 			self.show_notification('info', 'Welcome', 'Point the app at your FaceFusion v4 folder, or install v4 from here.')
@@ -142,6 +153,17 @@ class MainWindow(FluentWindow):
 	def show_notification(self, level : str, title : str, content : str) -> None:
 		factory = { 'success': InfoBar.success, 'warning': InfoBar.warning, 'error': InfoBar.error }.get(level, InfoBar.info)
 		factory(title, content, orient = Qt.Orientation.Horizontal, isClosable = True, position = InfoBarPosition.TOP_RIGHT, duration = 8000 if level == 'error' else 4000, parent = self)
+
+	def show_update_button(self, newer : bool) -> None:
+		self.update_button.setText('Update to %s' % self.setup_page.studio_release.get('tag', '') if newer else '')
+		self.update_button.setVisible(newer)
+
+	def update_studio_now(self) -> None:
+		self.switchTo(self.setup_page)
+		page = self.setup_page
+		# a git checkout cannot take a release zip, its Setup card says how it updates instead
+		if not page.studio_install_button.isHidden() and page.studio_install_button.isEnabled():
+			page.install_studio_update()
 
 	def restore_window_state(self) -> None:
 		"""puts the window back the way it was closed, maximized or at its normal size and position"""

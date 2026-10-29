@@ -55,7 +55,7 @@ class ModelsPage(QWidget):
 		layout.setSpacing(12)
 		layout.addWidget(SubtitleLabel('Models', self))
 
-		card, form = section_card('Download models', 'FaceFusion downloads each model the first time it is used. Download them ahead of time to work offline or to avoid waiting mid-run. The download providers are set in Setup.', self)
+		card, form = section_card('Download models', 'FaceFusion downloads each model the first time it is used. Download them ahead of time to work offline or to avoid waiting mid-run. The download providers are set in Settings.', self)
 		self.scope_combo = ComboBox(card)
 		form.addLayout(form_row('Scope', [ self.scope_combo ], card))
 		buttons = QHBoxLayout()

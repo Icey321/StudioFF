@@ -1219,7 +1219,7 @@ class StudioPage(SourceSelection, QWidget):
 
 	def on_schema_changed(self) -> None:
 		schema = self.session.schema
-		self.version_label.setText(('FaceFusion %s' % schema.version) if schema else 'FaceFusion is not set up yet — open Setup')
+		self.version_label.setText(('FaceFusion %s' % schema.version) if schema else 'FaceFusion is not set up yet — open Settings')
 
 	def on_value_changed(self, dest : str, _ : object) -> None:
 		if self.session.schema and self.session.schema.options.get(dest, {}).get('group') not in LIVE_IGNORED_GROUPS and dest not in [ 'reference_frame_index', 'trim_frame_start', 'trim_frame_end' ]:
@@ -1298,7 +1298,7 @@ class StudioPage(SourceSelection, QWidget):
 
 	def find_problem(self) -> Optional[tuple]:
 		if not self.session.schema:
-			return 'error', 'FaceFusion not set up', 'Open Setup and point the app at your FaceFusion v4 folder.'
+			return 'error', 'FaceFusion not set up', 'Open Settings and point the app at your FaceFusion v4 folder.'
 		if not self.target_path:
 			return 'warning', 'No target', 'Choose a target image or video first.'
 		if not self.session.processors():
@@ -1671,8 +1671,9 @@ class StudioPage(SourceSelection, QWidget):
 			person = face.get('person')
 			if is_kept(people, person):
 				# with a mapping a face is processed when its person has a source, the face selector is set per pass
-				label = '%s → %s' % (person_name(people, person), self.source_label(people[person].get('source'))) if people[person].get('source') else person_name(people, person)
-				boxes.append((face.get('box'), label, bool(people[person].get('source')) if mapped else bool(face.get('selected')), person_color(person)))
+				# the detection info stays above the box, the person's name goes under it
+				name = '%s → %s' % (person_name(people, person), self.source_label(people[person].get('source'))) if people[person].get('source') else person_name(people, person)
+				boxes.append((face.get('box'), face_tag(index, face), bool(people[person].get('source')) if mapped else bool(face.get('selected')), person_color(person), name))
 			else:
 				boxes.append((face.get('box'), face_tag(index, face), bool(face.get('selected')) and not mapped))
 		self.shown_faces = faces
@@ -1765,7 +1766,7 @@ class StudioPage(SourceSelection, QWidget):
 			self.session.notify.emit('warning', 'No target', 'Choose a target image or video first.')
 			return
 		if not self.session.is_configured() or not self.session.schema:
-			self.session.notify.emit('error', 'FaceFusion not set up', 'Open Setup first, face detection runs in its environment.')
+			self.session.notify.emit('error', 'FaceFusion not set up', 'Open Settings first, face detection runs in its environment.')
 			return
 		start = end = None
 		if media_kind(self.target_path) == 'video':

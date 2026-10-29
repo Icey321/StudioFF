@@ -357,7 +357,7 @@ class BenchmarkPage(QWidget):
 		schema = self.session.schema
 		settings = self.settings()
 		if not schema:
-			self.session.notify.emit('error', 'FaceFusion not set up', 'Open Setup and point the app at your FaceFusion v4 folder.')
+			self.session.notify.emit('error', 'FaceFusion not set up', 'Open Settings and point the app at your FaceFusion v4 folder.')
 			return
 		if not settings.get('processors') or not settings.get('resolutions'):
 			self.session.notify.emit('warning', 'Nothing to test', 'Pick at least one processor and one resolution.')

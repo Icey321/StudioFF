@@ -911,22 +911,32 @@ class PreviewView(QWidget):
 		for face in self.faces:
 			box, tag, selected = face[:3]
 			person_color = face[3] if len(face) > 3 else None
+			# a face mapping person's name, shown under the box
+			name = face[4] if len(face) > 4 else ''
 			rect = self.face_rect(box, image_rect)
 			color = (person_color or themeColor()) if selected else (person_color or QColor(220, 220, 220))
 			painter.setPen(QPen(color, 2.5 if selected else 1.5, Qt.PenStyle.SolidLine if selected else Qt.PenStyle.DashLine))
 			painter.setBrush(Qt.BrushStyle.NoBrush)
 			painter.drawRoundedRect(rect, 4, 4)
-			# the tag sits above the box, or inside it when the box touches the top
-			tag_rect = QRectF(rect.x(), 0, metrics.horizontalAdvance(tag) + 12, metrics.height() + 4)
-			tag_rect.moveBottom(rect.top() - 2)
-			if tag_rect.top() < image_rect.top():
-				tag_rect.moveTop(rect.top() + 3)
-			tag_rect.moveLeft(min(max(tag_rect.left(), image_rect.left()), image_rect.right() - tag_rect.width()))
-			painter.setPen(Qt.PenStyle.NoPen)
-			painter.setBrush(color if selected else QColor(0, 0, 0, 170))
-			painter.drawRoundedRect(tag_rect, 3, 3)
-			painter.setPen(QColor(255, 255, 255))
-			painter.drawText(tag_rect, Qt.AlignmentFlag.AlignCenter, tag)
+			for text, below in [ (tag, False), (name, True) ]:
+				if not text:
+					continue
+				# the tag sits above the box and the name under it, each inside the box when the box touches that edge
+				tag_rect = QRectF(rect.x(), 0, metrics.horizontalAdvance(text) + 12, metrics.height() + 4)
+				if below:
+					tag_rect.moveTop(rect.bottom() + 2)
+					if tag_rect.bottom() > image_rect.bottom():
+						tag_rect.moveBottom(rect.bottom() - 3)
+				else:
+					tag_rect.moveBottom(rect.top() - 2)
+					if tag_rect.top() < image_rect.top():
+						tag_rect.moveTop(rect.top() + 3)
+				tag_rect.moveLeft(min(max(tag_rect.left(), image_rect.left()), image_rect.right() - tag_rect.width()))
+				painter.setPen(Qt.PenStyle.NoPen)
+				painter.setBrush(color if selected else QColor(0, 0, 0, 170))
+				painter.drawRoundedRect(tag_rect, 3, 3)
+				painter.setPen(QColor(255, 255, 255))
+				painter.drawText(tag_rect, Qt.AlignmentFlag.AlignCenter, text)
 
 	def paint_divider(self, painter : QPainter, image_rect : QRectF, split_x : float) -> None:
 		painter.setPen(QPen(QColor(255, 255, 255, 230), 2))

@@ -17,12 +17,12 @@ FaceFusion itself is not included: install FaceFusion v4 separately, then point 
 | Before | After |
 | --- | --- |
 | ![Before: target with mapped faces](docs/images/before.webp) | ![After: result with the faces swapped](docs/images/after.webp) |
-| **Batch** | **Setup** |
-| ![Batch: every source face against every target, with a live preview](docs/images/batch.webp) | ![Setup: FaceFusion location, install, updates and appearance](docs/images/setup.webp) |
+| **Batch** | **Settings** |
+| ![Batch: every source face against every target, with a live preview](docs/images/batch.webp) | ![Settings: FaceFusion location, install, updates and appearance](docs/images/setup.webp) |
 
 ## Features
 
-- **Studio**: swap faces in one target. Drop in source faces and a target image, video or GIF, turn on processors and drag them into order. The preview tries your settings on one frame (automatically with **Auto**), and **Start** runs the full job. Models stay loaded between previews, so after the first one each takes about 2 seconds. Setup's **Preview models** setting picks how long they stay loaded after the last preview (5 minutes by default), and Start and Benchmark free them first. Batch keeps them loaded from one output to the next, so each file after the first starts sooner.
+- **Studio**: swap faces in one target. Drop in source faces and a target image, video or GIF, turn on processors and drag them into order. The preview tries your settings on one frame (automatically with **Auto**), and **Start** runs the full job. Models stay loaded between previews, so after the first one each takes about 2 seconds. The Settings page's **Preview models** setting picks how long they stay loaded after the last preview (5 minutes by default), and Start and Benchmark free them first. Batch keeps them loaded from one output to the next, so each file after the first starts sooner.
 - **Batch**: every source face × every target in a folder, with its own settings (or copied from Studio in one click). Each planned output shows thumbnails and can be removed (removed outputs stay out after a restart until you restore them). A live preview tries the selected one, on the frame you pick for a video (remembered after a restart), and one failed target doesn't stop the rest. Copy Settings from Studio asks first when it would replace settings that differ.
 - **Face mapping**: give each person in the target their own source face. Two people can even swap faces with each other.
 - **GIF support**: GIF targets are converted for FaceFusion and saved back as looping GIFs (needs `ffmpeg`).
@@ -33,8 +33,8 @@ FaceFusion itself is not included: install FaceFusion v4 separately, then point 
 - **Mask**: shades the face mask FaceFusion will blend through, and redraws as you change mask settings.
 - **Models**: download the lite or full model set, see what's installed, and delete models to free space.
 - **Benchmark**: runs FaceFusion's benchmark on your hardware and exports the results as a shareable image.
-- **Setup**: point the app at an existing FaceFusion v4 or install it from scratch, and check GitHub for FaceFusion updates. It shows whether your FaceFusion is the version StudioFF was tested with, and can switch to that version, to the latest one or back again.
-- **System monitor**: graphics card, processor and memory use in the title bar, read with FaceFusion's own libraries. A bar under each reading goes from green to orange to red as it fills. It can be turned off in Setup.
+- **Settings**: point the app at an existing FaceFusion v4 or install it from scratch, and check GitHub for FaceFusion updates. It shows whether your FaceFusion is the version StudioFF was tested with, and can switch to that version, to the latest one or back again.
+- **System monitor**: graphics card, processor and memory use in the title bar, read with FaceFusion's own libraries. A bar under each reading goes from green to orange to red as it fills. It can be turned off in Settings.
 - **Custom look**: Auto, Light or Dark theme, with your own accent color for each (one click puts back the standard purple).
 - **Fluent design**: Windows 11 style throughout, a splash screen with a loading bar, and settings remembered between runs.
 
@@ -45,13 +45,13 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 ```
 
 This creates `.venv` for the UI (PySide6 + PySide6-Fluent-Widgets + OpenCV) and adds desktop and Start menu
-shortcuts. Then start **StudioFF** and open **Setup**:
+shortcuts. Then start **StudioFF** and open **Settings**:
 
 - **Already have FaceFusion v4?** Pick its folder and the `python.exe` of its environment, or press **Detect**, then press **Save and load options**.
-- **No FaceFusion v4 yet?** Use the **Install FaceFusion v4** button in the app's **Setup** page. Note that FaceFusion v4 requires **Python 3.13+**, so a
+- **No FaceFusion v4 yet?** Use the **Install FaceFusion v4** button in the app's **Settings** page. Note that FaceFusion v4 requires **Python 3.13+**, so a
   FaceFusion 3.x environment (Python 3.12) can't run it.
 
-FaceFusion also needs `ffmpeg`, `ffprobe` and `curl` on `PATH`. Setup checks for them.
+FaceFusion also needs `ffmpeg`, `ffprobe` and `curl` on `PATH`. Settings checks for them.
 
 ## Layout
 
@@ -70,7 +70,7 @@ FaceFusion also needs `ffmpeg`, `ffprobe` and `curl` on `PATH`. Setup checks for
 | `ffstudio/faces.py` | Talks to `face_probe.py` and words its results |
 | `ffstudio/system_monitor.py` | Runs inside the FaceFusion environment and stays running: graphics card, processor and memory use once a second |
 | `ffstudio/monitor.py` | Talks to `system_monitor.py` and shows its numbers in the title bar |
-| `ffstudio/pages/*` | Studio, Batch, Models, Benchmark, Console, Setup |
+| `ffstudio/pages/*` | Studio, Batch, Models, Benchmark, Console, Settings |
 
 App data (settings, cached schema, preview frames) lives in `%APPDATA%\StudioFF` (versions before v0.40 used `%APPDATA%\FaceFusionStudio`,
 which is moved over on the first start). The preview

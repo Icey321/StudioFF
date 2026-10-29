@@ -75,7 +75,7 @@ class PresetBar(QWidget):
 		row.setSpacing(4)
 		self.combo = ComboBox(self)
 		self.combo.setPlaceholderText('Presets')
-		self.combo.setToolTip('Load a saved set of processors and options. Setup\'s system settings stay as they are.')
+		self.combo.setToolTip('Load a saved set of processors and options. The system settings of the Settings page stay as they are.')
 		self.combo.installEventFilter(ToolTipFilter(self.combo))
 		self.combo.activated.connect(self.on_activated)
 		row.addWidget(self.combo, 1)
@@ -146,7 +146,7 @@ class PresetBar(QWidget):
 		if preset is None:
 			return
 		if not self.saved_anywhere():
-			box = MessageBox('Load "%s"?' % name, 'The processors and options you have now are not saved in a preset and are replaced by the ones of "%s". Setup\'s system settings stay as they are.' % name, self.window())
+			box = MessageBox('Load "%s"?' % name, 'The processors and options you have now are not saved in a preset and are replaced by the ones of "%s". The system settings of the Settings page stay as they are.' % name, self.window())
 			box.yesButton.setText('Load Preset')
 			box.cancelButton.setText('Cancel')
 			if not box.exec():
