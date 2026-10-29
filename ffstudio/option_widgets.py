@@ -466,7 +466,7 @@ class OptionRow(QFrame):
 	with on_favorite set it gets a star in front of the label that shows on hover, or always once the option is a favorite.
 	with short_label set the label loses its group words (Face selector gender becomes Gender, Reference face distance
 	becomes Distance) so most labels fit on one line, for rows inside their group's box.
-	with group_caption set those words also show in small capitals underneath, for the favorites box where groups mix
+	with group_caption set the name of the option's group shows in small capitals underneath, for the favorites box where groups mix
 	"""
 
 	def __init__(self, schema : Schema, option : Dict[str, Any], values : Dict[str, Any], on_change : Callable[[str, Any], None], parent : Optional[QWidget] = None, on_favorite : Optional[Callable[[str], None]] = None, context : str = '', info_icon : bool = False, short_label : bool = False, group_caption : bool = False) -> None:
@@ -483,8 +483,9 @@ class OptionRow(QFrame):
 		self.title = context + ' · ' + label if context and not label.lower().startswith(context.lower()) else label
 		caption = ''
 		if group_caption:
+			# the caption names the box the option sits in below, not the words cut off its name, Face mask types is in Face masker
 			self.title, caption = schema.split_label(option)
-			caption = caption or context
+			caption = context or caption
 		elif short_label:
 			self.title = schema.split_label(option)[0]
 		if self.partner and self.title.endswith(' start'):
@@ -574,7 +575,7 @@ class OptionRow(QFrame):
 		self.favorite = favorite
 		if self.star_button:
 			self.star_button.set_on(favorite)
-			self.star_button.setToolTip('Remove from Favorite Settings' if favorite else 'Add to Favorite Settings')
+			self.star_button.setToolTip('Remove from Favorite Options' if favorite else 'Add to Favorite Options')
 			self.star_button.setVisible(favorite or self.hovered)
 
 	def enterEvent(self, event) -> None:

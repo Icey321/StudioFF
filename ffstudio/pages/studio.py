@@ -717,7 +717,7 @@ class SettingsColumn(QWidget):
 		column.setContentsMargins(0, 0, 0, 0)
 		column.setSpacing(10)
 		self.search_edit = SearchLineEdit(self)
-		self.search_edit.setPlaceholderText('Search settings')
+		self.search_edit.setPlaceholderText('Search options')
 		self.search_edit.textChanged.connect(self.apply_filter)
 		search_row = QHBoxLayout()
 		search_row.setContentsMargins(0, 0, 10, 0)

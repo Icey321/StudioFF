@@ -214,7 +214,7 @@ class FavoritesPanel(OptionPanel):
 		schema = self.session.schema
 		if not schema:
 			return
-		card = CollapsibleCard('Favorite Settings', '', star_icon(), expanded = self.session.config.get('favorites_expanded', True), parent = self)
+		card = CollapsibleCard('Favorite Options', '', star_icon(), expanded = self.session.config.get('favorites_expanded', True), parent = self)
 		card.toggled.connect(lambda expanded: self.session.config.set('favorites_expanded', expanded))
 		rows = []
 		for dest in self.session.favorites():
@@ -251,7 +251,7 @@ class FavoritesPanel(OptionPanel):
 			row.setVisible(allowed)
 			hidden += not allowed
 		if not rows:
-			self.hidden_label.setText('Hover over any setting below and click its star to keep a copy of it here.')
+			self.hidden_label.setText('Hover over any option below and click its star to keep a copy of it here.')
 		else:
 			self.hidden_label.setText('%d hidden because %s processor is switched off.' % (hidden, 'its' if hidden == 1 else 'their') if hidden else '')
 		self.hidden_label.setVisible(bool(self.hidden_label.text()))
@@ -266,4 +266,4 @@ class FavoritesPanel(OptionPanel):
 			return
 		changed = len([ dest for dest in self.rows if not same_value(self.session.values.get(dest), schema.resolve(dest, self.session.values).get('default')) ])
 		count = len(set(self.rows.values()))
-		card.set_subtitle(('%d setting%s' % (count, '' if count == 1 else 's') + (' · %d changed' % changed if changed else '')) if count else 'none yet')
+		card.set_subtitle(('%d option%s' % (count, '' if count == 1 else 's') + (' · %d changed' % changed if changed else '')) if count else 'none yet')
