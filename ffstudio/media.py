@@ -50,6 +50,7 @@ def usable_path(path : str) -> str:
 	folder = os.path.join(CONVERTED_DIR, hashlib.sha1(('%s|%f' % (os.path.abspath(path), modified)).encode()).hexdigest()[:16])
 	copy_path = os.path.join(folder, os.path.splitext(os.path.basename(path))[0] + '.png')
 	if os.path.isfile(copy_path):
+		write_original_note(folder, path)
 		return copy_path
 	try:
 		from PIL import Image, ImageOps
@@ -65,7 +66,22 @@ def usable_path(path : str) -> str:
 		os.replace(copy_path + '.part', copy_path)
 	except (ImportError, OSError, ValueError):
 		return path
+	write_original_note(folder, path)
 	return copy_path
+
+
+# beside each png copy, the path of the avif or heic it was made from
+ORIGINAL_NOTE = 'original.txt'
+
+
+def write_original_note(folder : str, path : str) -> None:
+	note_path = os.path.join(folder, ORIGINAL_NOTE)
+	if not os.path.isfile(note_path):
+		try:
+			with open(note_path, 'w', encoding = 'utf-8') as note_file:
+				note_file.write(os.path.abspath(path))
+		except OSError:
+			pass
 
 
 def is_converted(path : str) -> bool:
@@ -73,6 +89,19 @@ def is_converted(path : str) -> bool:
 	from ffstudio.config import CONVERTED_DIR
 
 	return os.path.normcase(os.path.abspath(path)).startswith(os.path.normcase(os.path.abspath(CONVERTED_DIR)) + os.sep)
+
+
+def browse_dir(path : str) -> Optional[str]:
+	"""the folder a browse window should open in for this file: its own, or for a png copy the folder of the avif or heic.
+	None when that is unknown"""
+	if not is_converted(path):
+		return os.path.dirname(path)
+	try:
+		with open(os.path.join(os.path.dirname(path), ORIGINAL_NOTE), encoding = 'utf-8') as note_file:
+			folder = os.path.dirname(note_file.read().strip())
+	except OSError:
+		return None
+	return folder if os.path.isdir(folder) else None
 
 
 def read_image(path : str) -> Optional[numpy.ndarray]:

@@ -15,7 +15,7 @@ from qfluentwidgets import Action, BodyLabel, CaptionLabel, FlowLayout, FluentIc
 from ffstudio.config import APP_DIR, PREVIEW_DIR
 from ffstudio.face_mapping import FACE_PROCESSORS, FRAME_PROCESSORS, LEAVE, PEOPLE_FILE, SELECTED, FaceMappingCard, box_overlap, is_kept, is_mapped, merge_people, people_dir, person_color, person_name, plan_passes
 from ffstudio.faces import FACE_GROUPS, MASK_GROUPS, FaceProbe, describe_faces, describe_landmarks, describe_mask, face_landmarks, face_tag, read_mask
-from ffstudio.media import GIF_EXTENSIONS, VideoReader, extension, format_timecode, is_converted, media_kind, read_frame, read_image, thumbnail, to_pixmap, usable_path, write_image
+from ffstudio.media import GIF_EXTENSIONS, VideoReader, browse_dir, extension, format_timecode, media_kind, read_frame, read_image, thumbnail, to_pixmap, usable_path, write_image
 from ffstudio.nsfw import BLOCKED_STATUS, NsfwDialog, describe_result, show_blocked_bar
 from ffstudio.option_panel import FavoritesPanel, OptionPanel
 from ffstudio.output_name import AUTOMATIC_TEMPLATE, NAME_EXAMPLES, NAME_TAGS, build_output, build_output_path, unknown_tags
@@ -1120,8 +1120,9 @@ class StudioPage(SourceSelection, QWidget):
 
 	def last_dir(self) -> str:
 		for path in [ self.target_path ] + self.source_paths:
-			if path and not is_converted(path):
-				return os.path.dirname(path)
+			folder = browse_dir(path) if path else None
+			if folder:
+				return folder
 		return os.path.expanduser('~')
 
 	def on_sources_changed(self, change : str) -> None:

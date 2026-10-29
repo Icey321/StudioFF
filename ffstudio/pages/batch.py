@@ -14,7 +14,7 @@ from qfluentwidgets import Action, BodyLabel, CaptionLabel, ComboBox, FluentIcon
 
 from ffstudio.config import APP_DIR, PREVIEW_DIR
 from ffstudio.faces import FACE_GROUPS, MASK_GROUPS, FaceProbe, describe_faces, describe_landmarks, describe_mask, face_landmarks, face_tag, read_mask
-from ffstudio.media import GIF_EXTENSIONS, VideoReader, extension, format_length, format_timecode, is_converted, media_kind, read_frame, thumbnail, to_pixmap, usable_path, video_length, write_image
+from ffstudio.media import GIF_EXTENSIONS, VideoReader, browse_dir, extension, format_length, format_timecode, media_kind, read_frame, thumbnail, to_pixmap, usable_path, video_length, write_image
 from ffstudio.nsfw import BLOCKED_TITLE, NsfwDialog, show_blocked_bar
 from ffstudio.output_name import AUTOMATIC_TEMPLATE, build_output, unknown_tags
 from ffstudio.pages.models import format_size
@@ -948,6 +948,19 @@ class BatchPage(SourceSelection, QWidget):
 		self.preview_view.setAcceptDrops(False)
 		self.preview_view.setMinimumHeight(180)
 		column.addWidget(self.preview_view, 1)
+		# steps the preview through the outputs the tab shows, past the last one comes the first again
+		step_row = QHBoxLayout()
+		step_row.addStretch(1)
+		self.previous_button = tool_button(FluentIcon.PAGE_LEFT, 'Previous output', card)
+		self.previous_button.clicked.connect(lambda: self.step_preview(-1))
+		step_row.addWidget(self.previous_button)
+		self.step_label = CaptionLabel('', card)
+		self.step_label.setTextColor('#707070', '#9a9a9a')
+		step_row.addWidget(self.step_label)
+		self.next_button = tool_button(FluentIcon.PAGE_RIGHT, 'Next output', card)
+		self.next_button.clicked.connect(lambda: self.step_preview(1))
+		step_row.addWidget(self.next_button)
+		step_row.addStretch(1)
 		# a video target is previewed on the frame picked here, the batch itself still makes the whole video
 		self.timeline = QWidget(card)
 		timeline_row = QHBoxLayout(self.timeline)
@@ -991,6 +1004,8 @@ class BatchPage(SourceSelection, QWidget):
 		self.faces_label.setWordWrap(True)
 		self.faces_label.setVisible(self.overlays_on())
 		column.addWidget(self.faces_label)
+		# last, so the texts above wrapping onto more lines do not move the arrows
+		column.addLayout(step_row)
 		return card
 
 	def copy_studio_settings(self) -> None:
@@ -1215,6 +1230,7 @@ class BatchPage(SourceSelection, QWidget):
 		self.refresh_list_status()
 		self.sync_timeline()
 		self.follow_selection()
+		self.refresh_step_buttons()
 		item = self.preview_item()
 		if item and (not self.preview_run or self.run_key(item) != self.run_key(self.preview_run)):
 			self.schedule_preview()
@@ -1377,6 +1393,28 @@ class BatchPage(SourceSelection, QWidget):
 	def preview_item(self) -> Optional[Dict[str, Any]]:
 		row = self.match_list.currentRow() if self.selected_rows() else self.first_shown_row()
 		return self.items[row] if 0 <= row < len(self.items) else None
+
+	def shown_rows(self) -> List[int]:
+		return [ row for row in range(min(self.match_list.count(), len(self.items))) if not self.match_list.item(row).isHidden() ]
+
+	def step_preview(self, step : int) -> None:
+		"""selects the output before or after the previewed one, so the preview shows it"""
+		rows = self.shown_rows()
+		if not rows:
+			return
+		current = self.match_list.currentRow() if self.selected_rows() else self.first_shown_row()
+		position = rows.index(current) + step if current in rows else 0
+		row = rows[position % len(rows)]
+		self.match_list.setCurrentRow(row)
+		self.match_list.scrollToItem(self.match_list.item(row))
+
+	def refresh_step_buttons(self) -> None:
+		"""the buttons work once the tab shows two outputs, between them which one of how many the preview shows, such as 2 of 5"""
+		rows = self.shown_rows()
+		self.previous_button.setEnabled(len(rows) > 1)
+		self.next_button.setEnabled(len(rows) > 1)
+		current = self.match_list.currentRow() if self.selected_rows() else self.first_shown_row()
+		self.step_label.setText('%d of %d' % (rows.index(current) + 1, len(rows)) if current in rows else '')
 
 	def showEvent(self, event) -> None:
 		super().showEvent(event)
@@ -1680,8 +1718,9 @@ class BatchPage(SourceSelection, QWidget):
 		if os.path.isdir(folder):
 			return folder
 		for path in self.target_files[::-1] + self.source_paths:
-			if not is_converted(path):
-				return os.path.dirname(path)
+			folder = browse_dir(path)
+			if folder:
+				return folder
 		return os.path.expanduser('~')
 
 	def browse(self, edit : LineEdit) -> None:
@@ -1878,6 +1917,7 @@ class BatchPage(SourceSelection, QWidget):
 		self.refresh_columns()
 		self.place_sort_header()
 		self.refresh_start_button()
+		self.refresh_step_buttons()
 		self.match_list.viewport().update()
 		self.refresh_list_status()
 
@@ -2025,6 +2065,7 @@ class BatchPage(SourceSelection, QWidget):
 			self.match_list.setCurrentRow(rows.get(id(current)), QItemSelectionModel.SelectionFlag.NoUpdate)
 		self.match_list.blockSignals(False)
 		self.match_list.refresh_hover()
+		self.refresh_step_buttons()
 
 	def show_item_menu(self, row : int, position : QPoint) -> None:
 		if not 0 <= row < len(self.items):
