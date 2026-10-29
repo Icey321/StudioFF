@@ -17,11 +17,22 @@ from ffstudio import config
 from ffstudio.config import AppConfig, migrate_data_dir
 from ffstudio.environment import is_newer_version
 from ffstudio.face_mapping import SELECTED, pass_distance, plan_passes
-from ffstudio.media import VideoReader
+from ffstudio.media import VideoReader, format_seconds
 from ffstudio.output_name import build_output, build_output_path, clean_name, expand, unknown_tags
 from ffstudio.runner import PreviewWorker, ProcessRunner
 from ffstudio.schema import Schema, build_option_args
 from ffstudio.updater import APP_ROOT, RETIRED_FILES, download_release
+
+
+class FormatSecondsTest(unittest.TestCase):
+	def test_seconds_under_a_minute(self) -> None:
+		self.assertEqual(format_seconds(4.24), '4.2 s')
+		self.assertEqual(format_seconds(59.4), '59.4 s')
+
+	def test_minutes_from_a_minute_on(self) -> None:
+		self.assertEqual(format_seconds(59.96), '1:00')
+		self.assertEqual(format_seconds(84.2), '1:24')
+		self.assertEqual(format_seconds(3725), '1:02:05')
 
 
 class OutputNameTest(unittest.TestCase):

@@ -5,6 +5,7 @@ from PySide6.QtGui import QColor, QFont, QGuiApplication, QSyntaxHighlighter, QT
 from PySide6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
 from qfluentwidgets import CaptionLabel, FluentIcon, PlainTextEdit, PushButton, SubtitleLabel, isDarkTheme, qconfig
 
+from ffstudio.media import format_seconds
 from ffstudio.session import Session, is_error_line
 
 MAX_BLOCKS = 20000
@@ -147,4 +148,4 @@ class ConsolePage(QWidget):
 
 	def on_finished(self, exit_code : int, elapsed : float) -> None:
 		label = { 0: 'finished', -1: 'stopped' }.get(exit_code, 'failed with exit code %d' % exit_code)
-		self.append('— %s after %.1f s' % (label, elapsed))
+		self.append('— %s after %s' % (label, format_seconds(elapsed)))

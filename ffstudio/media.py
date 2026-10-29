@@ -433,6 +433,11 @@ def format_length(seconds : float) -> str:
 	return '%d:%02d' % (seconds // 60, seconds % 60)
 
 
+def format_seconds(seconds : float) -> str:
+	"""how long something took: 4.2 s under a minute, 1:24 from a minute on"""
+	return '%.1f s' % seconds if seconds < 59.95 else format_length(seconds)
+
+
 def format_timecode(frame_index : int, fps : float) -> str:
 	if fps <= 0:
 		return str(frame_index)

@@ -15,7 +15,7 @@ from qfluentwidgets import Action, BodyLabel, CaptionLabel, FlowLayout, FluentIc
 from ffstudio.config import APP_DIR, PREVIEW_DIR
 from ffstudio.face_mapping import FACE_PROCESSORS, FRAME_PROCESSORS, LEAVE, PEOPLE_FILE, SELECTED, FaceMappingCard, box_overlap, is_kept, is_mapped, merge_people, people_dir, person_color, person_name, plan_passes
 from ffstudio.faces import FACE_GROUPS, MASK_GROUPS, FaceProbe, describe_faces, describe_landmarks, describe_mask, face_landmarks, face_tag, faces_text_color, no_face, read_mask
-from ffstudio.media import VideoReader, animation_extension, browse_dir, is_animation, format_timecode, media_kind, read_frame, read_image, thumbnail, to_pixmap, usable_path, write_image
+from ffstudio.media import VideoReader, animation_extension, browse_dir, is_animation, format_length, format_seconds, format_timecode, media_kind, read_frame, read_image, thumbnail, to_pixmap, usable_path, write_image
 from ffstudio.nsfw import BLOCKED_STATUS, NsfwDialog, describe_result, show_blocked_bar
 from ffstudio.option_panel import FavoritesPanel, OptionPanel
 from ffstudio.output_name import AUTOMATIC_TEMPLATE, NAME_EXAMPLES, NAME_TAGS, build_output, build_output_path, unknown_tags
@@ -897,6 +897,19 @@ class StudioPage(SourceSelection, QWidget):
 		# a face mapping preview runs several steps on one clock, timed apart from single previews
 		self.preview_single_estimate = 'preview_seconds'
 		self.preview_steps = 1
+		# the time a Start run began, the clock counts up from it while it runs and leaves out the time it was paused
+		self.run_started = 0.0
+		self.run_clock = QTimer(self)
+		self.run_clock.setInterval(1000)
+		self.run_clock.timeout.connect(self.show_run_time)
+		# Pause freezes a Start run in place, Free Memory ends it so Resume makes it again from the start
+		self.paused = False
+		self.paused_at = 0.0
+		self.freeing = False
+		self.freed = False
+		# the Start run without face mapping as it was started, for Resume after Free Memory
+		self.whole_run : Optional[dict] = None
+		self.run_ratio = 0.0
 		# face detection on the shown frame, rerun shortly after the frame or a face setting changes
 		self.face_probe = FaceProbe(session, self)
 		self.face_probe.scanned.connect(self.on_faces_scanned)
@@ -1086,16 +1099,22 @@ class StudioPage(SourceSelection, QWidget):
 		layout.setSpacing(10)
 		self.start_button = PrimaryPushButton(FluentIcon.PLAY, 'Start', card)
 		self.start_button.setFixedWidth(130)
-		self.start_button.clicked.connect(self.start)
+		self.start_button.installEventFilter(ToolTipFilter(self.start_button))
+		# while a Start run goes the same button pauses and resumes it
+		self.start_button.clicked.connect(lambda: self.toggle_pause() if self.run_active() else self.start())
 		self.stop_button = PushButton(FluentIcon.CLOSE, 'Stop', card)
 		self.stop_button.clicked.connect(self.stop)
 		self.stop_button.setEnabled(False)
+		self.free_button = tool_button(FluentIcon.BROOM, 'Free Memory: end the paused run so its memory is free for other programs. Resume makes the result again from the start, a face mapping run only the step it was on.', card)
+		self.free_button.setEnabled(False)
+		self.free_button.clicked.connect(self.free_memory)
 		self.check_button = PushButton(FluentIcon.CERTIFICATE, 'NSFW Check', card)
 		self.check_button.setToolTip("Run FaceFusion's NSFW filter on the target (only the trimmed part of a video) without processing it, to find out before a long run whether it will be refused")
 		self.check_button.installEventFilter(ToolTipFilter(self.check_button))
 		self.check_button.clicked.connect(lambda: self.check_content(False))
 		layout.addWidget(self.start_button)
 		layout.addWidget(self.stop_button)
+		layout.addWidget(self.free_button)
 		layout.addWidget(self.check_button)
 		layout.addSpacing(10)
 
@@ -1114,6 +1133,13 @@ class StudioPage(SourceSelection, QWidget):
 		self.progress_bar.setValue(0)
 		status_layout.addWidget(self.progress_bar)
 		layout.addLayout(status_layout, 1)
+		layout.addSpacing(10)
+		self.time_label = BodyLabel('', card)
+		# wide enough for Total 1:23:45, so the button beside it stays put
+		self.time_label.setMinimumWidth(90)
+		self.time_label.setToolTip('How long the run has been going, and how long the last one took')
+		self.time_label.installEventFilter(ToolTipFilter(self.time_label))
+		layout.addWidget(self.time_label)
 		layout.addSpacing(10)
 		self.open_output_button = PushButton(FluentIcon.SHARE, 'Open Output Folder', card)
 		self.open_output_button.setToolTip('Open the folder the results are saved to in File Explorer')
@@ -1343,6 +1369,9 @@ class StudioPage(SourceSelection, QWidget):
 			self.live_timer.start()
 
 	def run_live_preview(self) -> None:
+		if self.freed:
+			# a run paused with its memory freed waits for Resume, a preview would take its place
+			return
 		if self.chain:
 			# between two passes nothing runs, the preview follows the last one
 			self.live_pending = True
@@ -1359,11 +1388,21 @@ class StudioPage(SourceSelection, QWidget):
 	def stop(self) -> None:
 		self.live_pending = False
 		self.live_timer.stop()
-		if self.chain and not self.session.runner.is_running():
-			self.end_chain()
+		# with its memory freed, or between two face mapping steps, nothing of the run is running, what runs may be someone else's
+		if self.freed or self.chain and not self.session.runner.is_running():
+			self.freed = False
+			self.whole_run = None
+			if self.chain:
+				self.end_chain()
+			self.end_clock()
 			self.status_label.setText('Stopped')
 			self.detail_label.setText('')
+			self.progress_bar.pause()
+			self.refresh_run_buttons()
+			if self.auto_check_pending:
+				QTimer.singleShot(0, self.auto_check_content)
 			return
+		self.end_pause()
 		self.session.runner.stop()
 
 	def start(self) -> None:
@@ -1376,6 +1415,7 @@ class StudioPage(SourceSelection, QWidget):
 		if not folder_is_writable(os.path.dirname(output_path)):
 			self.session.notify.emit('error', 'Cannot save to this folder', 'Windows does not allow saving to %s. Choose another output folder, such as Videos or Documents.' % os.path.dirname(output_path))
 			return
+		info = { 'target': self.target_path, 'trim_start': int(self.session.values.get('trim_frame_start') or 0) }
 		passes = self.mapping_passes()
 		if passes:
 			# a gif's passes run on the video facefusion gets of it, the last step turns the result back into a gif
@@ -1383,15 +1423,14 @@ class StudioPage(SourceSelection, QWidget):
 			if not target:
 				self.session.notify.emit('error', 'Face mapping', 'Could not turn %s into a video. Check that ffmpeg is installed.' % os.path.basename(self.target_path))
 				return
-			info = { 'target': self.target_path, 'trim_start': int(self.session.values.get('trim_frame_start') or 0) }
+			self.start_clock()
 			self.start_chain(passes, target, output_path, info, preview = False)
+			if not self.chain:
+				self.end_clock(False)
 			return
 		args = [ 'run' ]
 		if self.active_sources():
 			args += [ '-s' ] + self.active_sources()
-		self.pending_output = output_path
-		self.pending_info = { 'target': self.target_path, 'trim_start': int(self.session.values.get('trim_frame_start') or 0) }
-		self.preview_mode = False
 		task = 'Processing ' + os.path.basename(self.target_path)
 		if is_animation(self.target_path, output_path):
 			# facefusion has no gif or animated webp support, the helper converts to video and back around the run
@@ -1401,12 +1440,151 @@ class StudioPage(SourceSelection, QWidget):
 		else:
 			args += [ '-t', self.target_path, '-o', output_path ] + self.session.option_args()
 			script = 'facefusion.py'
+		self.whole_run = { 'task': task, 'args': args, 'script': script, 'output': output_path, 'info': info }
+		self.start_clock()
+		if not self.launch_whole_run():
+			self.whole_run = None
+			self.end_clock(False)
+
+	def launch_whole_run(self) -> bool:
+		run = self.whole_run
+		self.pending_output = run.get('output')
+		self.pending_info = run.get('info')
+		self.preview_mode = False
 		# a run that never started has no finish, the next one must not be taken for it
-		if not self.session.run_facefusion(task, args, script = script):
+		if not self.session.run_facefusion(run.get('task'), run.get('args'), script = run.get('script')):
 			self.pending_output = ''
+			return False
+		return True
+
+	# pause
+
+	def run_active(self) -> bool:
+		"""whether a Start run is going, paused or with its memory freed too, previews are not"""
+		return self.freed or bool(self.chain and not self.chain.get('preview')) or bool(self.pending_output and not self.preview_mode)
+
+	def refresh_start_button(self) -> None:
+		busy = self.session.runner.is_running()
+		# Free Memory needs a frozen run, between two face mapping steps nothing holds memory
+		self.free_button.setEnabled(self.paused and not self.freed and busy and bool(self.pending_output) and not self.preview_mode)
+		if self.run_active():
+			self.start_button.setEnabled(True)
+			self.start_button.setIcon(FluentIcon.PLAY if self.paused else FluentIcon.PAUSE)
+			self.start_button.setText('Resume' if self.paused else 'Pause')
+			self.start_button.setToolTip('Go on with the run where it was paused' if self.paused else 'Pause the run right where it is, it goes on from the same frame on Resume')
+			return
+		self.start_button.setIcon(FluentIcon.PLAY)
+		self.start_button.setText('Start')
+		self.start_button.setToolTip('')
+		self.start_button.setEnabled(not busy and not self.chain)
+
+	def refresh_run_buttons(self) -> None:
+		busy = self.session.runner.is_running()
+		self.refresh_start_button()
+		# a run paused with its memory freed comes first, nothing else starts until it is resumed or stopped
+		self.check_button.setEnabled(not busy and not self.freed)
+		self.target_card.preview_button.setEnabled(not busy and not self.freed)
+		# a preview, Studio's or Batch's, shows its progress on its own preview card and leaves the run bar as it was
+		run_bar = not self.session.task_is_preview
+		self.stop_button.setEnabled(busy and (run_bar or bool(self.pending_output)) or self.paused and self.run_active())
+
+	def toggle_pause(self) -> None:
+		if self.paused:
+			self.resume_run()
+		else:
+			self.pause_run()
+
+	def pause_run(self) -> None:
+		self.paused = True
+		self.paused_at = time.monotonic()
+		self.run_clock.stop()
+		self.progress_bar.pause()
+		# frozen, facefusion and its ffmpeg use no cpu or gpu, windows moves their memory to disk when other programs need it
+		if self.pending_output and self.session.runner.is_running() and not self.session.runner.freeze(True):
+			if not self.chain:
+				self.end_pause()
+				self.run_clock.start()
+				self.progress_bar.resume()
+				self.session.notify.emit('warning', 'Could not pause', 'Windows did not let FaceFusion be paused. Stop ends the run.')
+				self.refresh_run_buttons()
+				return
+			self.status_label.setText('Pausing after this step  ·  ' + self.session.task)
+		else:
+			self.show_paused()
+		self.refresh_run_buttons()
+
+	def show_paused(self) -> None:
+		self.detail_label.setText('')
+		if self.freed:
+			name = os.path.basename(self.pending_info.get('target') or '')
+			self.status_label.setText('Paused  ·  memory freed, Resume starts %s again' % ('this step of ' + name if self.chain else name))
+		elif self.pending_output and self.session.runner.is_running():
+			self.status_label.setText('Paused  ·  ' + self.session.task + (' at %d%%' % int(self.run_ratio * 100) if self.run_ratio else ''))
+		else:
+			self.status_label.setText('Paused  ·  Resume starts the next step')
+
+	def end_pause(self) -> None:
+		"""the clock leaves out the time the run was paused"""
+		if self.paused:
+			self.paused = False
+			self.run_started += time.monotonic() - self.paused_at
+
+	def resume_run(self) -> None:
+		if self.freed and self.session.runner.is_running():
+			self.session.notify.emit('warning', 'Busy', 'FaceFusion is running "%s". Resume once it is done.' % self.session.task)
+			return
+		self.end_pause()
+		self.run_clock.start()
+		self.show_run_time()
+		self.progress_bar.resume()
+		if self.freed:
+			self.freed = False
+			if self.chain:
+				self.run_chain_step()
+			elif not self.launch_whole_run():
+				self.whole_run = None
+				self.end_clock()
+				self.status_label.setText('Stopped')
+		elif self.pending_output and self.session.runner.is_running():
+			self.session.runner.freeze(False)
+			self.status_label.setText(self.session.task)
+		elif self.chain:
+			# paused between two face mapping steps, the next one starts now
+			self.run_chain_step()
+		self.refresh_run_buttons()
+
+	def free_memory(self) -> None:
+		"""ends the frozen run and lets go of its memory, Resume makes it again from the start"""
+		if not self.paused or self.freed or not self.pending_output or not self.session.runner.is_running():
+			return
+		self.freeing = True
+		self.session.runner.stop()
+
+	def start_clock(self) -> None:
+		self.run_started = time.monotonic()
+		self.run_clock.start()
+		self.show_run_time()
+
+	def run_seconds(self) -> float:
+		return (self.paused_at if self.paused else time.monotonic()) - self.run_started
+
+	def show_run_time(self) -> None:
+		self.time_label.setText('⏱ ' + format_length(self.run_seconds()))
+
+	def end_clock(self, show_total : bool = True) -> None:
+		"""stops the clock of a Start run, it then says how long the run took"""
+		if not self.run_started:
+			return
+		self.end_pause()
+		self.run_clock.stop()
+		self.time_label.setText('Total ' + format_length(self.run_seconds()) if show_total else '')
+		self.run_started = 0.0
 
 	def preview_frame(self) -> None:
 		if not self.validate():
+			return
+		if self.freed:
+			self.session.notify.emit('warning', 'Paused', 'Resume or stop the paused run first.')
 			return
 		frame = self.session.run_frame(self.target_path, self.target_card.current_frame_index(), self.target_card.current_frame())
 		if frame is None:
@@ -1448,15 +1626,12 @@ class StudioPage(SourceSelection, QWidget):
 			self.pending_output = ''
 
 	def on_busy_changed(self, busy : bool, task : str) -> None:
-		self.start_button.setEnabled(not busy and not self.chain)
-		self.check_button.setEnabled(not busy)
-		self.target_card.preview_button.setEnabled(not busy)
-		# a preview, Studio's or Batch's, shows its progress on its own preview card and leaves the run bar as it was
+		self.refresh_run_buttons()
 		run_bar = not self.session.task_is_preview
-		self.stop_button.setEnabled(busy and (run_bar or bool(self.pending_output)))
 		if busy and run_bar:
 			self.status_label.setText(task)
 			self.detail_label.setText('Starting…')
+			self.run_ratio = 0.0
 			self.progress_bar.setValue(0)
 			self.progress_bar.resume()
 		if busy and self.preview_mode and self.pending_output:
@@ -1505,6 +1680,7 @@ class StudioPage(SourceSelection, QWidget):
 			return
 		self.status_label.setText('%s · %s' % (self.session.task, title) if title else self.session.task)
 		self.detail_label.setText('%d%%  %s' % (round(ratio * 100), status))
+		self.run_ratio = ratio
 		if not self.preview_clock.isActive():
 			self.progress_bar.setValue(int(ratio * 1000))
 
@@ -1519,6 +1695,16 @@ class StudioPage(SourceSelection, QWidget):
 			self.tick_preview_progress()
 
 	def on_finished(self, exit_code : int, elapsed : float) -> None:
+		if self.freeing:
+			# Free Memory: the run is gone, Resume makes it, or the step it was on, again
+			self.freeing = False
+			self.pending_output = ''
+			self.freed = True
+			self.run_ratio = 0.0
+			self.progress_bar.setValue(0)
+			self.show_paused()
+			self.refresh_run_buttons()
+			return
 		if not self.pending_output:
 			return
 		output_path, self.pending_output = self.pending_output, ''
@@ -1532,8 +1718,8 @@ class StudioPage(SourceSelection, QWidget):
 				QTimer.singleShot(0, self.run_chain_step)
 				return
 			kind = chain.get('steps')[chain.get('index')].get('kind')
-			# the whole face mapping run took this long, not only its last step
-			elapsed = time.monotonic() - chain.get('started')
+			# the whole face mapping run took this long, not only its last step, a Start run without the time it was paused
+			elapsed = time.monotonic() - chain.get('started') if self.preview_mode else self.run_seconds()
 			self.end_chain()
 			if self.preview_mode and self.target_card.progress_bar.isVisible():
 				self.end_preview_progress()
@@ -1544,6 +1730,11 @@ class StudioPage(SourceSelection, QWidget):
 				self.status_label.setText(status if self.session.run_error() else 'Could not combine the passes (exit code %d)' % exit_code)
 				self.session.notify.emit('error', 'Could not combine the passes', message)
 				return
+		elif not self.preview_mode:
+			elapsed = self.run_seconds() if self.run_started else elapsed
+			self.whole_run = None
+			self.end_clock()
+			self.refresh_run_buttons()
 		if exit_code == 0 and os.path.exists(output_path):
 			if self.preview_mode:
 				# timed like the bar, a face mapping preview from its first step rather than from finding the people
@@ -1554,7 +1745,8 @@ class StudioPage(SourceSelection, QWidget):
 			if not self.preview_mode:
 				self.progress_bar.setValue(1000)
 				self.status_label.setText('Done — ' + os.path.basename(output_path))
-				self.detail_label.setText('%.1f s' % elapsed)
+				# the clock beside the bar says how long it took
+				self.detail_label.setText('')
 			elif self.status_label.text() == BLOCKED_STATUS:
 				# an earlier frame was refused, this one went through. what is left is the whole target's own check
 				self.status_label.setText(self.target_blocked_status or 'Ready')
@@ -1564,10 +1756,10 @@ class StudioPage(SourceSelection, QWidget):
 					self.blocked_target = ''
 					self.progress_bar.setValue(0)
 					self.progress_bar.resume()
-			self.target_card.set_result(output_path, ('preview of frame #%d' % self.pending_info.get('frame_index', 0) if self.preview_mode else 'done') + ' in %.1f s' % elapsed)
+			self.target_card.set_result(output_path, ('preview of frame #%d' % self.pending_info.get('frame_index', 0) if self.preview_mode else 'done') + ' in ' + format_seconds(elapsed))
 			self.show_view('result')
 			if not self.preview_mode:
-				self.session.notify.emit('success', 'Finished', 'Saved %s in %.1f s' % (os.path.basename(output_path), elapsed))
+				self.session.notify.emit('success', 'Finished', 'Saved %s in %s' % (os.path.basename(output_path), format_seconds(elapsed)))
 				if self.session.config.get('open_output_when_done'):
 					self.open_path(output_path)
 		elif exit_code == -1:
@@ -1844,13 +2036,18 @@ class StudioPage(SourceSelection, QWidget):
 		# a gif or animated webp result: the gif or the webp's video copy, whose size the result is cropped to
 		animation = self.target_path if not preview and is_animation(self.target_path, output_path) else ''
 		self.chain = { 'id': self.chain_id, 'passes': passes, 'located': [], 'steps': [], 'index': 0, 'target': target, 'output': output_path, 'info': info, 'preview': preview, 'video': video, 'animation': animation, 'started': time.monotonic() }
-		self.start_button.setEnabled(False)
+		self.pending_info = info
+		self.refresh_run_buttons()
 		self.locate_next()
 
 	def end_chain(self) -> None:
+		preview = self.chain.get('preview')
 		self.chain = None
 		shutil.rmtree(PASSES_DIR, ignore_errors = True)
-		self.start_button.setEnabled(not self.session.runner.is_running())
+		if not preview:
+			self.freed = False
+			self.end_clock()
+		self.refresh_run_buttons()
 		if self.auto_check_pending:
 			QTimer.singleShot(0, self.auto_check_content)
 
@@ -1982,6 +2179,11 @@ class StudioPage(SourceSelection, QWidget):
 		chain = self.chain
 		if not chain:
 			return
+		if self.paused:
+			# paused between two steps, Resume starts the next one
+			self.show_paused()
+			self.refresh_run_buttons()
+			return
 		step = chain.get('steps')[chain.get('index')]
 		self.pending_output = step.get('output')
 		self.pending_info = chain.get('info')
@@ -2052,7 +2254,7 @@ class StudioPage(SourceSelection, QWidget):
 		self.auto_check_pending = False
 		if not self.target_path or self.target_path in self.checked_targets or not self.session.is_configured():
 			return
-		if self.session.runner.is_running() or self.chain:
+		if self.session.runner.is_running() or self.chain or self.freed:
 			self.auto_check_pending = True
 			return
 		self.checked_targets.add(self.target_path)

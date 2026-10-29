@@ -14,7 +14,7 @@ from qfluentwidgets import Action, BodyLabel, CaptionLabel, ComboBox, FluentIcon
 
 from ffstudio.config import APP_DIR, PREVIEW_DIR
 from ffstudio.faces import FACE_GROUPS, MASK_GROUPS, FaceProbe, describe_faces, describe_landmarks, describe_mask, face_landmarks, face_tag, faces_text_color, no_face, read_mask
-from ffstudio.media import VideoReader, animation_extension, browse_dir, extension, is_animation, format_length, format_timecode, media_kind, read_frame, thumbnail, to_pixmap, usable_path, video_length, write_image
+from ffstudio.media import VideoReader, animation_extension, browse_dir, extension, is_animation, format_length, format_seconds, format_timecode, media_kind, read_frame, thumbnail, to_pixmap, usable_path, video_length, write_image
 from ffstudio.nsfw import BLOCKED_TITLE, NsfwDialog, show_blocked_bar
 from ffstudio.output_name import AUTOMATIC_TEMPLATE, build_output, unknown_tags
 from ffstudio.pages.models import format_size
@@ -1629,9 +1629,9 @@ class BatchPage(SourceSelection, QWidget):
 			if result and result.get('blocked'):
 				# one clean frame says nothing about the rest, Run Batch checks the whole video
 				flagged = self.flagged_words(self.preview_run.get('target'))
-				self.preview_label.setText('%s  ·  %.1f s  ·  This frame is OK, but Run Batch skips this %s: %s' % (name, elapsed, 'video' if result.get('kind') == 'video' else 'target', flagged or BLOCKED_TITLE))
+				self.preview_label.setText('%s  ·  %s  ·  This frame is OK, but Run Batch skips this %s: %s' % (name, format_seconds(elapsed),'video' if result.get('kind') == 'video' else 'target', flagged or BLOCKED_TITLE))
 			else:
-				self.preview_label.setText('%s  ·  %.1f s  ·  drag the divider to compare' % (name, elapsed))
+				self.preview_label.setText('%s  ·  %s  ·  drag the divider to compare' % (name, format_seconds(elapsed)))
 		elif exit_code == -1:
 			self.preview_label.setText('Preview stopped')
 		elif self.session.nsfw_block_message(True):
