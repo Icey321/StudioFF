@@ -14,10 +14,11 @@ from ffstudio.environment import CREATE_NO_WINDOW
 IMAGE_EXTENSIONS = { '.bmp', '.jpeg', '.jpg', '.png', '.tif', '.tiff', '.webp' }
 # gif is not a facefusion format, studio converts it to video around the run (see gif_run.py)
 GIF_EXTENSIONS = { '.gif' }
-VIDEO_EXTENSIONS = { '.avi', '.m4v', '.mkv', '.mov', '.mp4', '.mpeg', '.mxf', '.webm', '.wmv' } | GIF_EXTENSIONS
+VIDEO_EXTENSIONS = { '.avi', '.m4v', '.mkv', '.mov', '.mp4', '.mpeg', '.mpg', '.mxf', '.webm', '.wmv' } | GIF_EXTENSIONS
 AUDIO_EXTENSIONS = { '.aac', '.flac', '.m4a', '.mp3', '.ogg', '.opus', '.wav' }
-# images neither facefusion nor opencv read, studio uses a png copy of them made with pillow (see usable_path)
-CONVERTED_EXTENSIONS = { '.avif', '.heic', '.heif' }
+# files facefusion turns away by their extension, studio uses a copy of them in the converted folder (see usable_path):
+# avif and heic as a png made with pillow, jfif (a jpeg by another name) as a jpg, flash video rewrapped into mkv by ffmpeg
+CONVERTED_EXTENSIONS = { '.avif': '.png', '.heic': '.png', '.heif': '.png', '.jfif': '.jpg', '.flv': '.mkv', '.f4v': '.mkv' }
 
 
 def extension(path : str) -> str:
@@ -36,9 +37,12 @@ def media_kind(path : str) -> Optional[str]:
 
 
 def usable_path(path : str) -> str:
-	"""the path itself, or for an avif or heic a png copy with the same name in the converted folder, made once and kept.
-	the copy is what studio shows and runs, so the result is a png named after the avif. the path itself when it cannot be made"""
-	if extension(path) not in CONVERTED_EXTENSIONS:
+	"""the path itself, or for an avif, heic, jfif or flash video a copy with the same name in the converted folder, made once
+	and kept. the copy is what studio shows and runs, so the result is a png named after the avif, an mkv named after the flv.
+	the path itself when it cannot be made"""
+	# an animated webp runs as a video, studio turns the result back into a webp (see gif_run.py)
+	copy_extension = '.mp4' if is_animated_webp(path) else CONVERTED_EXTENSIONS.get(extension(path))
+	if not copy_extension:
 		return path
 	from ffstudio.config import CONVERTED_DIR
 
@@ -48,10 +52,31 @@ def usable_path(path : str) -> str:
 		return path
 	# a folder per file and version, so two photo.avif files in different folders do not meet
 	folder = os.path.join(CONVERTED_DIR, hashlib.sha1(('%s|%f' % (os.path.abspath(path), modified)).encode()).hexdigest()[:16])
-	copy_path = os.path.join(folder, os.path.splitext(os.path.basename(path))[0] + '.png')
+	copy_path = os.path.join(folder, os.path.splitext(os.path.basename(path))[0] + copy_extension)
 	if os.path.isfile(copy_path):
 		write_original_note(folder, path)
 		return copy_path
+	os.makedirs(folder, exist_ok = True)
+	if copy_extension == '.jpg':
+		try:
+			shutil.copyfile(path, copy_path + '.part')
+			os.replace(copy_path + '.part', copy_path)
+		except OSError:
+			return path
+	elif copy_extension == '.mkv':
+		if not rewrap_video(path, copy_path):
+			return path
+	elif copy_extension == '.mp4':
+		if not animation_to_video(path, copy_path):
+			return path
+	else:
+		if not convert_image(path, copy_path):
+			return path
+	write_original_note(folder, path)
+	return copy_path
+
+
+def convert_image(path : str, copy_path : str) -> bool:
 	try:
 		from PIL import Image, ImageOps
 		# heic is read by the pillow-heif plugin, avif by pillow itself
@@ -61,16 +86,132 @@ def usable_path(path : str) -> str:
 		with Image.open(path) as image:
 			# phones store the turn of a photo apart from its pixels
 			image = ImageOps.exif_transpose(image)
-			os.makedirs(folder, exist_ok = True)
 			image.convert('RGBA' if 'A' in image.getbands() else 'RGB').save(copy_path + '.part', 'PNG')
 		os.replace(copy_path + '.part', copy_path)
 	except (ImportError, OSError, ValueError):
+		return False
+	return True
+
+
+def is_animated_webp(path : str) -> bool:
+	if extension(path) != '.webp':
+		return False
+	try:
+		return frame_count(path, os.path.getmtime(path)) > 1
+	except OSError:
+		return False
+
+
+@lru_cache(maxsize = 64)
+def frame_count(path : str, modified : float) -> int:
+	try:
+		from PIL import Image
+
+		with Image.open(path) as image:
+			return getattr(image, 'n_frames', 1)
+	except (ImportError, OSError, ValueError):
+		return 1
+
+
+def animation_to_video(path : str, video_path : str) -> bool:
+	"""the animated webp as a lossless h264 video, which facefusion and ffmpeg can read (ffmpeg 7.0 cannot decode animated
+	webp, pillow can). frames shown longer than others are repeated, so the timing holds at one frame rate"""
+	ffmpeg = shutil.which('ffmpeg')
+	if not ffmpeg:
+		return False
+	try:
+		from math import gcd
+
+		from PIL import Image, ImageSequence
+
+		with Image.open(path) as image:
+			durations = []
+			for frame in ImageSequence.Iterator(image):
+				# pillow only reads a frame's duration once the frame is loaded
+				frame.load()
+				durations.append(max(10, int(frame.info.get('duration') or 100)))
+			step = 0
+			for duration in durations:
+				step = gcd(step, duration)
+			# beyond 50 frames a second the repeats only make the video bigger
+			step = max(step, 20)
+			width, height = image.size
+			temp_path = video_path + '.part.mp4'
+			# yuv444 at qp 0 is lossless and, unlike yuv420, takes odd sizes
+			process = subprocess.Popen([ ffmpeg, '-hide_banner', '-loglevel', 'error', '-y', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-s', '%dx%d' % (width, height), '-r', '1000/%d' % step, '-i', '-', '-c:v', 'libx264', '-qp', '0', '-pix_fmt', 'yuv444p', temp_path ], stdin = subprocess.PIPE, stdout = subprocess.DEVNULL, stderr = subprocess.DEVNULL, creationflags = CREATE_NO_WINDOW)
+			try:
+				for frame, duration in zip(ImageSequence.Iterator(image), durations):
+					rgba = frame.convert('RGBA')
+					# see-through parts become white, a video has no transparency
+					canvas = Image.new('RGBA', rgba.size, (255, 255, 255, 255))
+					canvas.alpha_composite(rgba)
+					data = canvas.convert('RGB').tobytes()
+					for _ in range(max(1, round(duration / step))):
+						process.stdin.write(data)
+			finally:
+				process.stdin.close()
+				code = process.wait()
+		if code or not os.path.isfile(temp_path):
+			return False
+		os.replace(temp_path, video_path)
+	except (ImportError, OSError, ValueError):
+		return False
+	return True
+
+
+def original_path(path : str) -> str:
+	"""the file a copy in the converted folder was made from, the path itself for any other file"""
+	if not is_converted(path):
 		return path
-	write_original_note(folder, path)
-	return copy_path
+	try:
+		with open(os.path.join(os.path.dirname(path), ORIGINAL_NOTE), encoding = 'utf-8') as note_file:
+			return note_file.read().strip() or path
+	except OSError:
+		return path
 
 
-# beside each png copy, the path of the avif or heic it was made from
+def is_animation(target : str, output : str = '') -> bool:
+	"""whether the run goes through gif_run.py: a gif target, or a video turned into a gif or an animated webp, such as the
+	video copy of an animated webp"""
+	if extension(target) in GIF_EXTENSIONS:
+		return True
+	return media_kind(target) == 'video' and (extension(output) if output else animation_extension(target)) in [ '.gif', '.webp' ]
+
+
+def animation_extension(target : str) -> str:
+	"""the extension a target's result gets: .webp for the video copy of an animated webp, otherwise the target's own"""
+	if media_kind(target) == 'video' and extension(original_path(target)) == '.webp':
+		return '.webp'
+	return extension(target)
+
+
+def rewrap_video(path : str, copy_path : str) -> bool:
+	"""the flash video's streams moved into an mkv as they are, which takes seconds. old flash codecs that mkv cannot hold
+	are encoded again at near lossless quality instead"""
+	ffmpeg = shutil.which('ffmpeg')
+	if not ffmpeg:
+		return False
+	temp_path = copy_path + '.part.mkv'
+	streams = [ '-map', '0:v:0', '-map', '0:a?' ]
+	for codecs in [ [ '-c', 'copy' ], [ '-c:v', 'libx264', '-crf', '10', '-preset', 'fast', '-c:a', 'aac', '-b:a', '256k' ] ]:
+		try:
+			code = subprocess.run([ ffmpeg, '-hide_banner', '-loglevel', 'error', '-y', '-i', path ] + streams + codecs + [ temp_path ], capture_output = True, creationflags = CREATE_NO_WINDOW).returncode
+		except (OSError, subprocess.SubprocessError):
+			return False
+		if not code and os.path.isfile(temp_path) and read_frame(temp_path) is not None:
+			try:
+				os.replace(temp_path, copy_path)
+			except OSError:
+				return False
+			return True
+	try:
+		os.remove(temp_path)
+	except OSError:
+		pass
+	return False
+
+
+# beside each copy, the path of the file it was made from
 ORIGINAL_NOTE = 'original.txt'
 
 
@@ -85,14 +226,14 @@ def write_original_note(folder : str, path : str) -> None:
 
 
 def is_converted(path : str) -> bool:
-	"""a png copy usable_path made, its folder is no place to browse from"""
+	"""a copy usable_path made, its folder is no place to browse from"""
 	from ffstudio.config import CONVERTED_DIR
 
 	return os.path.normcase(os.path.abspath(path)).startswith(os.path.normcase(os.path.abspath(CONVERTED_DIR)) + os.sep)
 
 
 def browse_dir(path : str) -> Optional[str]:
-	"""the folder a browse window should open in for this file: its own, or for a png copy the folder of the avif or heic.
+	"""the folder a browse window should open in for this file: its own, or for a copy the folder of the file it was made from.
 	None when that is unknown"""
 	if not is_converted(path):
 		return os.path.dirname(path)

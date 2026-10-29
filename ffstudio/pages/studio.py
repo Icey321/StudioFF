@@ -15,7 +15,7 @@ from qfluentwidgets import Action, BodyLabel, CaptionLabel, FlowLayout, FluentIc
 from ffstudio.config import APP_DIR, PREVIEW_DIR
 from ffstudio.face_mapping import FACE_PROCESSORS, FRAME_PROCESSORS, LEAVE, PEOPLE_FILE, SELECTED, FaceMappingCard, box_overlap, is_kept, is_mapped, merge_people, people_dir, person_color, person_name, plan_passes
 from ffstudio.faces import FACE_GROUPS, MASK_GROUPS, FaceProbe, describe_faces, describe_landmarks, describe_mask, face_landmarks, face_tag, faces_text_color, no_face, read_mask
-from ffstudio.media import GIF_EXTENSIONS, VideoReader, browse_dir, extension, format_timecode, media_kind, read_frame, read_image, thumbnail, to_pixmap, usable_path, write_image
+from ffstudio.media import VideoReader, animation_extension, browse_dir, is_animation, format_timecode, media_kind, read_frame, read_image, thumbnail, to_pixmap, usable_path, write_image
 from ffstudio.nsfw import BLOCKED_STATUS, NsfwDialog, describe_result, show_blocked_bar
 from ffstudio.option_panel import FavoritesPanel, OptionPanel
 from ffstudio.output_name import AUTOMATIC_TEMPLATE, NAME_EXAMPLES, NAME_TAGS, build_output, build_output_path, unknown_tags
@@ -30,7 +30,7 @@ LIVE_IGNORED_GROUPS = [ 'paths', 'output_creation', 'frame_extraction', 'frame_d
 PREVIEW_MAX_SIDE = 1080
 # the outputs of the passes of a face mapping run before the last one
 PASSES_DIR = os.path.join(PREVIEW_DIR, 'passes')
-SOURCE_FILTERS = [ 'Images and audio (*.jpg *.jpeg *.png *.webp *.avif *.heic *.heif *.bmp *.tif *.tiff *.mp3 *.wav *.flac *.m4a *.aac *.ogg *.opus)', 'All files (*)' ]
+SOURCE_FILTERS = [ 'Images and audio (*.jpg *.jpeg *.jfif *.png *.webp *.avif *.heic *.heif *.bmp *.tif *.tiff *.mp3 *.wav *.flac *.m4a *.aac *.ogg *.opus)', 'All files (*)' ]
 
 
 def elastic(label : CaptionLabel) -> CaptionLabel:
@@ -562,7 +562,7 @@ class TargetCard(SimpleCardWidget):
 		self.result_label.setText(text or self.result_text)
 
 	def browse(self) -> None:
-		path, _ = QFileDialog.getOpenFileName(self, 'Choose target image or video', self.page.last_dir(), 'Images, videos and GIFs (*.jpg *.jpeg *.png *.webp *.avif *.heic *.heif *.bmp *.tif *.tiff *.mp4 *.mov *.mkv *.avi *.webm *.m4v *.wmv *.gif);;All files (*)')
+		path, _ = QFileDialog.getOpenFileName(self, 'Choose target image or video', self.page.last_dir(), 'Images, videos and GIFs (*.jpg *.jpeg *.jfif *.png *.webp *.avif *.heic *.heif *.bmp *.tif *.tiff *.mp4 *.mov *.mkv *.avi *.webm *.m4v *.wmv *.mpg *.mpeg *.flv *.f4v *.gif);;All files (*)')
 		if path:
 			self.page.set_target(os.path.normpath(path))
 
@@ -1259,7 +1259,7 @@ class StudioPage(SourceSelection, QWidget):
 	def output_extension(self) -> str:
 		if media_kind(self.target_path) == 'image' and any(media_kind(path) == 'audio' for path in self.active_sources()):
 			return '.mp4'
-		return os.path.splitext(self.target_path)[1] or '.mp4'
+		return animation_extension(self.target_path) or '.mp4'
 
 	def build_output(self) -> Tuple[str, bool]:
 		"""the output path and whether it replaces a file, inside <source name>\\Images, Videos or GIF when Sub-Folders is on"""
@@ -1378,8 +1378,8 @@ class StudioPage(SourceSelection, QWidget):
 			return
 		passes = self.mapping_passes()
 		if passes:
-			if extension(self.target_path) in GIF_EXTENSIONS:
-				self.session.notify.emit('warning', 'Face mapping', 'Face mapping does not work on GIF targets yet. Clear the mapping to run as usual.')
+			if is_animation(self.target_path, output_path):
+				self.session.notify.emit('warning', 'Face mapping', 'Face mapping does not work on GIF or animated WebP targets yet. Clear the mapping to run as usual.')
 				return
 			info = { 'target': self.target_path, 'trim_start': int(self.session.values.get('trim_frame_start') or 0) }
 			self.start_chain(passes, self.target_path, output_path, info, preview = False)
@@ -1391,8 +1391,8 @@ class StudioPage(SourceSelection, QWidget):
 		self.pending_info = { 'target': self.target_path, 'trim_start': int(self.session.values.get('trim_frame_start') or 0) }
 		self.preview_mode = False
 		task = 'Processing ' + os.path.basename(self.target_path)
-		if extension(self.target_path) in GIF_EXTENSIONS:
-			# facefusion has no gif support, the helper converts to video and back around the run
+		if is_animation(self.target_path, output_path):
+			# facefusion has no gif or animated webp support, the helper converts to video and back around the run
 			work_dir = os.path.join(PREVIEW_DIR, 'gif')
 			args = [ self.target_path, output_path, work_dir, '--' ] + args + self.session.option_args()
 			script = os.path.join(APP_DIR, 'gif_run.py')

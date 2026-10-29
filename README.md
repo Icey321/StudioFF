@@ -27,6 +27,8 @@ FaceFusion itself is not included: install FaceFusion v4 separately, then point 
 - **Face mapping**: give each person in the target their own source face. Two people can even swap faces with each other.
 - **GIF support**: GIF targets are converted for FaceFusion and saved back as looping GIFs (needs `ffmpeg`).
 - **AVIF and HEIC support**: AVIF and HEIC (iPhone) images work as sources and targets. StudioFF uses a PNG copy of each one, so the result is a PNG.
+- **More file types**: JFIF images run as a JPG copy. FLV and F4V (Flash) videos are moved into an MKV copy, so the result is an MKV. MPG and MPEG videos work as they are.
+- **Animated WebP support**: animated WebP targets run as a lossless video copy and are saved back as looping animated WebPs. Transparent parts turn white.
 - **Output names**: build file names from tags like `{source}`, `{target}`, `{date}` and `{n}`, with an optional sub-folder per source.
 - **Favorite Options and search**: star any option to pin it to Favorite Options, or filter all options with *Search options*. Open or closed option groups stay that way.
 - **Faces**: shows the faces FaceFusion detects in the current frame and which ones will be processed. If none will be, it says why.
@@ -63,7 +65,7 @@ FaceFusion also needs `ffmpeg`, `ffprobe` and `curl` on `PATH`. Settings checks 
 | `ffstudio/runner.py` | `QProcess` wrapper that parses FaceFusion's progress bar output |
 | `ffstudio/session.py` | Shared state: config, schema, option values, runner |
 | `ffstudio/benchmark_report.py` | Draws the exported benchmark image (hardware, settings, results) |
-| `ffstudio/gif_run.py` | Runs inside the FaceFusion environment: GIF → video → FaceFusion → GIF |
+| `ffstudio/gif_run.py` | Runs inside the FaceFusion environment: GIF → video → FaceFusion → GIF, or a video copy → FaceFusion → animated WebP |
 | `ffstudio/content_check.py` | Runs inside the FaceFusion environment: FaceFusion's NSFW filter on targets, without processing |
 | `ffstudio/nsfw.py` | NSFW messages, the red bar and the flagged-frames window |
 | `ffstudio/face_probe.py` | Runs inside the FaceFusion environment and stays running: the faces found in a frame, which would be processed, and their face mask |
@@ -86,4 +88,4 @@ No other AI tools were used.
 
 ## License
 
-Released into the public domain under [The Unlicense](UNLICENSE). FaceFusion has its own license.
+Released under the [MIT License](LICENSE). FaceFusion has its own license (OpenRAIL-AS).

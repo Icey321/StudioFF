@@ -12,7 +12,7 @@ LEGACY_DATA_DIR = os.path.join(APPDATA_DIR, 'FaceFusionStudio')
 CONFIG_FILE = os.path.join(DATA_DIR, 'config.json')
 SCHEMA_FILE = os.path.join(DATA_DIR, 'schema.json')
 PREVIEW_DIR = os.path.join(DATA_DIR, 'preview')
-# png copies of avif and heic images, see media.usable_path
+# copies of avif, heic, jfif and flash video files, see media.usable_path
 CONVERTED_DIR = os.path.join(DATA_DIR, 'converted')
 
 

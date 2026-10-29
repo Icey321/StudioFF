@@ -14,7 +14,7 @@ from qfluentwidgets import Action, BodyLabel, CaptionLabel, ComboBox, FluentIcon
 
 from ffstudio.config import APP_DIR, PREVIEW_DIR
 from ffstudio.faces import FACE_GROUPS, MASK_GROUPS, FaceProbe, describe_faces, describe_landmarks, describe_mask, face_landmarks, face_tag, faces_text_color, no_face, read_mask
-from ffstudio.media import GIF_EXTENSIONS, VideoReader, browse_dir, extension, format_length, format_timecode, media_kind, read_frame, thumbnail, to_pixmap, usable_path, video_length, write_image
+from ffstudio.media import VideoReader, animation_extension, browse_dir, extension, is_animation, format_length, format_timecode, media_kind, read_frame, thumbnail, to_pixmap, usable_path, video_length, write_image
 from ffstudio.nsfw import BLOCKED_TITLE, NsfwDialog, show_blocked_bar
 from ffstudio.output_name import AUTOMATIC_TEMPLATE, build_output, unknown_tags
 from ffstudio.pages.models import format_size
@@ -28,7 +28,7 @@ DEFAULT_TEMPLATE = '{target}_{source}'
 # the placeholders of the first batch file names, read as the tags that replaced them
 OLD_PLACEHOLDERS = { '{target_name}': '{target}', '{source_name}': '{source}', '{target_extension}': '', '{index}': '{n}' }
 LIST_LIMIT = 500
-TARGET_FILES_FILTER = 'Images, videos and GIFs (*.jpg *.jpeg *.png *.webp *.avif *.heic *.heif *.bmp *.tif *.tiff *.mp4 *.mov *.mkv *.avi *.webm *.m4v *.wmv *.gif);;All files (*)'
+TARGET_FILES_FILTER = 'Images, videos and GIFs (*.jpg *.jpeg *.jfif *.png *.webp *.avif *.heic *.heif *.bmp *.tif *.tiff *.mp4 *.mov *.mkv *.avi *.webm *.m4v *.wmv *.mpg *.mpeg *.flv *.f4v *.gif);;All files (*)'
 # a mark, the words before the names, and the mark's color in the light and dark theme (none follows the theme color)
 STATUS_LOOK =\
 {
@@ -1086,7 +1086,7 @@ class BatchPage(SourceSelection, QWidget):
 	@staticmethod
 	def item_type(item : Dict[str, Any]) -> str:
 		target = item.get('target')
-		if extension(target) in GIF_EXTENSIONS:
+		if is_animation(target):
 			return 'gifs'
 		return 'videos' if media_kind(target) == 'video' else 'images'
 
@@ -1795,7 +1795,7 @@ class BatchPage(SourceSelection, QWidget):
 		target = run.get('target') or ''
 		if media_kind(target) == 'image' and any(media_kind(path) == 'audio' for path in run.get('sources')):
 			return '.mp4'
-		return os.path.splitext(target)[1].lower() or '.mp4'
+		return animation_extension(target) or '.mp4'
 
 	@staticmethod
 	def run_key(item : Dict[str, Any]) -> Tuple:
@@ -2324,8 +2324,8 @@ class BatchPage(SourceSelection, QWidget):
 		values = self.run_values()
 		values.update({ 'reference_frame_index': 0, 'trim_frame_start': None, 'trim_frame_end': None })
 		script = 'facefusion.py'
-		if extension(item.get('target')) in GIF_EXTENSIONS:
-			# facefusion has no gif support, the helper converts to video and back around the run
+		if is_animation(item.get('target'), item.get('output')):
+			# facefusion has no gif or animated webp support, the helper converts to video and back around the run
 			args = [ item.get('target'), item.get('output'), os.path.join(PREVIEW_DIR, 'gif'), '--' ] + args + self.session.option_args(values)
 			script = os.path.join(APP_DIR, 'gif_run.py')
 		else:
