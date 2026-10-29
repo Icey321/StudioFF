@@ -13,6 +13,8 @@ from qfluentwidgets import CaptionLabel, CompactDoubleSpinBox, CompactSpinBox, F
 from qfluentwidgets.components.widgets.line_edit import LineEditButton
 from qfluentwidgets.components.widgets.spin_box import CompactSpinBoxBase, SpinIcon
 
+from ffstudio.drive import describe_drive, drive_text
+
 
 class WheelGuard(QObject):
 	"""lets the mouse wheel change a control only after it was clicked, otherwise the wheel scrolls the page"""
@@ -965,6 +967,39 @@ class PreviewView(QWidget):
 		painter.setPen(QPen(QColor(255, 255, 255), 2, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
 		painter.setBrush(Qt.BrushStyle.NoBrush)
 		painter.drawPolyline(QPolygonF([ center + QPointF(-4, 0), center + QPointF(-1, 3), center + QPointF(4, -3) ]))
+
+
+class DriveLabel(CaptionLabel):
+	"""free and total space of the drive an output folder is on, orange once it is getting full"""
+
+	def __init__(self, folder : Callable[[], str], parent : Optional[QWidget] = None) -> None:
+		super().__init__(parent)
+		self.folder = folder
+		self.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+		self.installEventFilter(ToolTipFilter(self, 300))
+		# files saved by a run or by other programs change it, so it is read again now and then
+		self.timer = QTimer(self)
+		self.timer.setInterval(5000)
+		self.timer.timeout.connect(self.refresh)
+
+	def refresh(self) -> None:
+		folder = self.folder()
+		drive = describe_drive(folder) if folder else None
+		self.setText(drive_text(folder) if drive else '')
+		self.setToolTip('Space left on the drive the results are saved to' + ('\nGetting full, a long video may not fit. Free some space or choose an output folder on another drive.' if drive and drive.get('warn') else '') if drive else '')
+		if drive and drive.get('warn'):
+			self.setTextColor('#b45309', '#f0b35a')
+		else:
+			self.setTextColor('#707070', '#9a9a9a')
+
+	def showEvent(self, event) -> None:
+		super().showEvent(event)
+		self.refresh()
+		self.timer.start()
+
+	def hideEvent(self, event) -> None:
+		super().hideEvent(event)
+		self.timer.stop()
 
 
 class NameEdit(QLineEdit):

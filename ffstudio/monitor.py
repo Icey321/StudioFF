@@ -1,6 +1,6 @@
 import json
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from PySide6.QtCore import QObject, QProcess, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QPainter
@@ -8,6 +8,7 @@ from PySide6.QtWidgets import QHBoxLayout, QSizePolicy, QVBoxLayout, QWidget
 from qfluentwidgets import CaptionLabel, ToolTipFilter
 
 from ffstudio.config import APP_DIR
+from ffstudio.drive import format_size, output_drives
 from ffstudio.environment import create_process_environment, kill_process_tree
 from ffstudio.session import Session
 
@@ -42,6 +43,17 @@ def describe_metrics(metrics : Dict[str, Any]) -> List[Dict[str, Any]]:
 		parts.append({ 'text': 'RAM ' + format_gigabytes(used, total), 'warn': used >= total * WARN_SHARE, 'share': used / total, 'tip': 'System memory in use, by every program' })
 	for part in parts:
 		part['share'] = min(max(part.get('share', 0), 0.0), 1.0)
+	return parts
+
+
+def describe_drives(folders : List[str]) -> List[Dict[str, Any]]:
+	"""the title bar parts for the drives the output folders are on, the meter fills as the drive fills"""
+	parts = []
+	for drive in output_drives(folders):
+		tip = 'Drive %s  %s free of %s\nAn output folder is on this drive' % (drive.get('drive'), format_size(drive.get('free')), format_size(drive.get('total')))
+		if drive.get('warn'):
+			tip += '\nGetting full, a long video may not fit'
+		parts.append({ 'text': '%s %s free' % (drive.get('drive'), format_size(drive.get('free'))), 'warn': drive.get('warn'), 'share': drive.get('share'), 'tip': tip })
 	return parts
 
 
@@ -168,9 +180,11 @@ class MonitorBar(QWidget):
 		self.readings : List[QWidget] = []
 		self.labels : List[CaptionLabel] = []
 		self.meters : List[UsageMeter] = []
+		# the output folders of the pages, their drives show after the memory
+		self.drive_folders : Callable[[], List[str]] = lambda: []
 
 	def show_metrics(self, metrics : Dict[str, Any]) -> None:
-		parts = describe_metrics(metrics)
+		parts = describe_metrics(metrics) + describe_drives(self.drive_folders())
 		while len(self.labels) < len(parts):
 			reading = QWidget(self)
 			column = QVBoxLayout(reading)

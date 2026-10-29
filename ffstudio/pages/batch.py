@@ -21,7 +21,7 @@ from ffstudio.pages.models import format_size
 from ffstudio.pages.setup import SYSTEM_GROUPS, form_row, section_card
 from ffstudio.pages.studio import LIVE_IGNORED_GROUPS, PREVIEW_MAX_SIDE, NameTagsView, SettingsColumn, SourceCard, SourceSelection, StudioPage, elastic, estimated_progress, preview_step_floor, run_tag_values, tool_button
 from ffstudio.session import OptionStore, Session, explain_error, folder_is_writable
-from ffstudio.widgets import IconCountButton, PreviewView, Splitter, add_edit_button, attach_landmarks_cycle, collect_drop_paths, guard_wheel, landmarks_mode
+from ffstudio.widgets import DriveLabel, IconCountButton, PreviewView, Splitter, add_edit_button, attach_landmarks_cycle, collect_drop_paths, guard_wheel, landmarks_mode
 
 TARGET_FILTERS = [ ('*.*', 'All files'), ('*.mp4', 'MP4 videos'), ('*.jpg', 'JPG images'), ('*.png', 'PNG images'), ('*.mov', 'MOV videos'), ('*.webm', 'WebM videos'), ('*.gif', 'GIF animations') ]
 DEFAULT_TEMPLATE = '{target}_{source}'
@@ -744,7 +744,10 @@ class BatchPage(SourceSelection, QWidget):
 		self.name_preview_label = elastic(CaptionLabel('', card))
 		self.name_preview_label.setTextColor('#707070', '#9a9a9a')
 		self.name_preview_label.installEventFilter(ToolTipFilter(self.name_preview_label))
-		form.addLayout(form_row('', [ self.name_preview_label ], card))
+		# the space left where the results go, so a long batch does not fill the drive halfway
+		self.drive_label = DriveLabel(self.output_dir, card)
+		self.output_dir_edit.textChanged.connect(lambda _: self.drive_label.refresh())
+		form.addLayout(form_row('', [ self.name_preview_label, self.drive_label ], card))
 		batch_layout.addWidget(card)
 
 		for edit in [ self.target_dir, self.output_dir_edit, self.output_name_edit ]:
@@ -899,7 +902,7 @@ class BatchPage(SourceSelection, QWidget):
 		self.clock.start()
 
 	def create_settings_column(self) -> QWidget:
-		copy_button = PushButton(FluentIcon.COPY, 'Copy Settings from Studio', self)
+		copy_button = PushButton(FluentIcon.COPY, 'Copy Options from Studio', self)
 		copy_button.setToolTip('Make the processors and options here the same as on the Studio page. Later changes on either page stay on that page.')
 		copy_button.installEventFilter(ToolTipFilter(copy_button))
 		copy_button.clicked.connect(self.copy_studio_settings)
@@ -1017,13 +1020,13 @@ class BatchPage(SourceSelection, QWidget):
 			self.session.notify.emit('info', 'Already the same', 'Batch already uses the same processors and options as Studio.')
 			return
 		difference = ('Batch has %d option%s set differently from Studio.' % (len(changed), '' if len(changed) == 1 else 's')) if changed else 'Batch runs the processors in another order than Studio.'
-		box = MessageBox('Replace the Batch settings?', difference + ' Copying makes Batch use the processors and options of the Studio page, and the Batch settings you have now are lost.', self.window())
-		box.yesButton.setText('Copy Settings')
+		box = MessageBox('Replace the Batch options?', difference + ' Copying makes Batch use the processors and options of the Studio page, and the Batch options you have now are lost.', self.window())
+		box.yesButton.setText('Copy Options')
 		box.cancelButton.setText('Cancel')
 		if not box.exec():
 			return
 		self.store.copy_from(self.session.values, order)
-		self.session.notify.emit('success', 'Settings copied from Studio', 'Batch now uses the same processors and options as Studio. Later changes on either page stay on that page.')
+		self.session.notify.emit('success', 'Options copied from Studio', 'Batch now uses the same processors and options as Studio. Later changes on either page stay on that page.')
 
 	def copy_studio_sources(self) -> None:
 		config = self.session.config
@@ -1647,9 +1650,9 @@ class BatchPage(SourceSelection, QWidget):
 	def scan_faces(self) -> None:
 		if not self.overlays_on() or not self.isVisible():
 			return
-		item = self.preview_run
+		item = self.shown_item()
 		if not item:
-			self.faces_label.setText('Make a preview first, the faces and the mask are drawn over it.')
+			self.faces_label.setText('Select an output first, the faces and the mask are drawn over its frame.')
 			return
 		if not self.session.is_configured() or not self.session.schema:
 			self.faces_label.setText('Set up FaceFusion first, face detection runs in its environment.')
@@ -1662,6 +1665,14 @@ class BatchPage(SourceSelection, QWidget):
 		args = self.session.option_args(self.run_values(), FACE_GROUPS + (MASK_GROUPS if mask else []))
 		self.face_probe.scan(frame, None, sources, args, tag = self.faces_tag(item), mask = mask)
 
+	def shown_item(self) -> Optional[Dict[str, Any]]:
+		"""the output whose target or preview the preview shows, with Auto off that is its target before any preview is made"""
+		if self.shown_key is None:
+			return None
+		if self.preview_run and self.run_key(self.preview_run) == self.shown_key:
+			return self.preview_run
+		return next((item for item in self.items if self.run_key(item) == self.shown_key), None)
+
 	def faces_tag(self, item : Dict[str, Any]) -> Tuple:
 		return 'batch', self.run_key(item), self.preview_frame_index(item.get('target'))
 
@@ -1670,7 +1681,8 @@ class BatchPage(SourceSelection, QWidget):
 			self.faces_label.setText('Loading the face models…')
 
 	def on_faces_scanned(self, result : dict) -> None:
-		if not self.overlays_on() or not self.preview_run or result.get('tag') != self.faces_tag(self.preview_run):
+		item = self.shown_item()
+		if not self.overlays_on() or not item or result.get('tag') != self.faces_tag(item):
 			return
 		faces = (result.get('faces') or []) if self.faces_button.isChecked() else []
 		mask = read_mask(result.get('mask')) if self.mask_button.isChecked() else None

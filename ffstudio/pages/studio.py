@@ -21,7 +21,7 @@ from ffstudio.option_panel import FavoritesPanel, OptionPanel
 from ffstudio.output_name import AUTOMATIC_TEMPLATE, NAME_EXAMPLES, NAME_TAGS, build_output, build_output_path, unknown_tags
 from ffstudio.presets import PresetBar
 from ffstudio.session import CONTENT_RESULT_PREFIX, Session, folder_is_writable
-from ffstudio.widgets import PreviewView, ProcessorArea, ProcessorButton, Splitter, Thumbnail, add_edit_button, attach_landmarks_cycle, collect_drop_paths, guard_wheel, landmarks_mode
+from ffstudio.widgets import DriveLabel, PreviewView, ProcessorArea, ProcessorButton, Splitter, Thumbnail, add_edit_button, attach_landmarks_cycle, collect_drop_paths, guard_wheel, landmarks_mode
 
 STUDIO_GROUPS = [ 'face_selector', 'face_masker', 'face_detector', 'face_aligner', 'face_tracker', 'output_creation', 'frame_extraction', 'frame_distribution', 'voice_extractor', 'workflow' ]
 # settings that cannot change how a single preview frame looks
@@ -1070,7 +1070,14 @@ class StudioPage(SourceSelection, QWidget):
 		self.name_preview_label = elastic(CaptionLabel('', card))
 		self.name_preview_label.setTextColor('#707070', '#9a9a9a')
 		self.name_preview_label.installEventFilter(ToolTipFilter(self.name_preview_label))
-		column.addWidget(self.name_preview_label)
+		names_row = QHBoxLayout()
+		names_row.setSpacing(12)
+		names_row.addWidget(self.name_preview_label, 1)
+		# the space left where the results go, so a long video does not fill the drive halfway
+		self.drive_label = DriveLabel(self.output_dir, card)
+		self.output_dir_edit.textChanged.connect(lambda _: self.drive_label.refresh())
+		names_row.addWidget(self.drive_label)
+		column.addLayout(names_row)
 		return card
 
 	def create_run_bar(self) -> QWidget:
