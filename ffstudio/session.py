@@ -12,7 +12,7 @@ from PySide6.QtCore import QObject, Signal
 
 from ffstudio.config import APP_DIR, DATA_DIR, PREVIEW_DIR, SCHEMA_FILE, AppConfig
 from ffstudio.environment import create_process_environment, is_facefusion_root, probe_python_version, version_tuple
-from ffstudio.media import media_kind, read_facefusion_frame
+from ffstudio.media import GIF_EXTENSIONS, extension, gif_as_video, media_kind, read_facefusion_frame
 from ffstudio.runner import PreviewWorker, ProcessRunner
 from ffstudio.schema import Schema, build_option_args, schema_is_stale
 
@@ -139,6 +139,14 @@ class Session(QObject):
 
 	def is_configured(self) -> bool:
 		return is_facefusion_root(self.facefusion_root) and os.path.isfile(self.python_path)
+
+	def facefusion_video(self, path : str) -> str:
+		"""the video facefusion runs on for a gif (made once and kept, see gif_run.py), the path itself for any other file,
+		empty when the gif cannot be turned into one"""
+		if extension(path) not in GIF_EXTENSIONS:
+			return path
+		ffmpeg = shutil.which('ffmpeg', path = create_process_environment(self.python_path).value('PATH'))
+		return (gif_as_video(ffmpeg, path, GIF_VIDEO_DIR) or '') if ffmpeg else ''
 
 	def run_frame(self, path : str, frame_index : int, shown_frame : Optional[Any]) -> Optional[Any]:
 		"""the frame a preview runs on: a video or gif frame as facefusion itself reads it in a whole run, so the preview's

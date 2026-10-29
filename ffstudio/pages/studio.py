@@ -1378,11 +1378,13 @@ class StudioPage(SourceSelection, QWidget):
 			return
 		passes = self.mapping_passes()
 		if passes:
-			if is_animation(self.target_path, output_path):
-				self.session.notify.emit('warning', 'Face mapping', 'Face mapping does not work on GIF or animated WebP targets yet. Clear the mapping to run as usual.')
+			# a gif's passes run on the video facefusion gets of it, the last step turns the result back into a gif
+			target = self.session.facefusion_video(self.target_path)
+			if not target:
+				self.session.notify.emit('error', 'Face mapping', 'Could not turn %s into a video. Check that ffmpeg is installed.' % os.path.basename(self.target_path))
 				return
 			info = { 'target': self.target_path, 'trim_start': int(self.session.values.get('trim_frame_start') or 0) }
-			self.start_chain(passes, self.target_path, output_path, info, preview = False)
+			self.start_chain(passes, target, output_path, info, preview = False)
 			return
 		args = [ 'run' ]
 		if self.active_sources():
@@ -1786,10 +1788,15 @@ class StudioPage(SourceSelection, QWidget):
 			# a later pass works on the trimmed output, so the reference frames have to be inside the trim
 			start = self.session.values.get('trim_frame_start')
 			end = self.session.values.get('trim_frame_end')
+		# a gif is searched in the video its runs work on, so the reference frames are the ones the runs see
+		path = self.session.facefusion_video(self.target_path)
+		if not path:
+			self.session.notify.emit('error', 'Find people', 'Could not turn %s into a video. Check that ffmpeg is installed.' % os.path.basename(self.target_path))
+			return
 		crops = people_dir(self.target_path)
 		shutil.rmtree(crops, ignore_errors = True)
 		self.mapping_card.set_finding(0, 0)
-		self.face_probe.find_people(self.target_path, start, end, self.session.option_args(groups = FACE_GROUPS), crops, tag = self.target_path)
+		self.face_probe.find_people(path, start, end, self.session.option_args(groups = FACE_GROUPS), crops, tag = self.target_path)
 
 	def turn_mapping_on(self) -> None:
 		if not self.mapping_card.active():
@@ -1834,7 +1841,9 @@ class StudioPage(SourceSelection, QWidget):
 		shutil.rmtree(PASSES_DIR, ignore_errors = True)
 		os.makedirs(PASSES_DIR, exist_ok = True)
 		self.chain_id += 1
-		self.chain = { 'id': self.chain_id, 'passes': passes, 'located': [], 'steps': [], 'index': 0, 'target': target, 'output': output_path, 'info': info, 'preview': preview, 'video': video, 'started': time.monotonic() }
+		# a gif or animated webp result: the gif or the webp's video copy, whose size the result is cropped to
+		animation = self.target_path if not preview and is_animation(self.target_path, output_path) else ''
+		self.chain = { 'id': self.chain_id, 'passes': passes, 'located': [], 'steps': [], 'index': 0, 'target': target, 'output': output_path, 'info': info, 'preview': preview, 'video': video, 'animation': animation, 'started': time.monotonic() }
 		self.start_button.setEnabled(False)
 		self.locate_next()
 
@@ -1926,6 +1935,9 @@ class StudioPage(SourceSelection, QWidget):
 			self.target_card.set_result(output_path, 'preview of frame #%d, no mapped face in it' % info.get('frame_index', 0))
 			self.show_view('result')
 			return
+		if chain.get('animation'):
+			# the steps make a video, the last one turns it into the gif or animated webp
+			output_path = os.path.join(PASSES_DIR, 'animation.mp4')
 		if len(passes) == 1:
 			chain['steps'] = [ { 'kind': 'pass', 'item': passes[0], 'output': output_path, 'all': True } ]
 		else:
@@ -1941,6 +1953,8 @@ class StudioPage(SourceSelection, QWidget):
 			else:
 				steps.append({ 'kind': 'compose', 'output': output_path })
 			chain['steps'] = steps
+		if chain.get('animation'):
+			chain['steps'].append({ 'kind': 'animate', 'output': chain.get('output') })
 		self.run_chain_step()
 
 	def chain_task(self, step : dict) -> str:
@@ -1956,6 +1970,8 @@ class StudioPage(SourceSelection, QWidget):
 			what = 'reading the frames'
 		elif kind == 'compose':
 			what = 'combining %d passes' % count
+		elif kind == 'animate':
+			what = 'converting to ' + ('animated WebP' if step.get('output').lower().endswith('.webp') else 'GIF')
 		else:
 			what = ' → '.join(name.replace('_', ' ') for name in step.get('processors'))
 		if chain.get('preview'):
@@ -1979,6 +1995,10 @@ class StudioPage(SourceSelection, QWidget):
 				settings.update({ 'image_quality': 100, 'video_encoder': 'libx264', 'video_quality': 100, 'audio_encoder': 'flac', 'audio_volume': 100 })
 			args = [ os.path.join(APP_DIR, 'compose_passes.py'), base, step.get('output'), json.dumps(settings), '--' ] + outputs
 			started = self.session.run_python(self.chain_task(step), args, self.session.facefusion_root, preview = chain.get('preview'))
+		elif step.get('kind') == 'animate':
+			video = chain.get('steps')[chain.get('index') - 1].get('output')
+			args = [ os.path.join(APP_DIR, 'gif_run.py'), '--finish', video, step.get('output'), chain.get('animation') ]
+			started = self.session.run_python(self.chain_task(step), args, self.session.facefusion_root)
 		else:
 			started = self.launch_step(step)
 		# nothing will finish this step, so the chain must not wait for it

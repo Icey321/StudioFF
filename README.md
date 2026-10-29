@@ -24,7 +24,7 @@ FaceFusion itself is not included: install FaceFusion v4 separately, then point 
 
 - **Studio**: swap faces in one target. Drop in source faces and a target image, video or GIF, turn on processors and drag them into order. The preview tries your settings on one frame (automatically with **Auto**), and **Start** runs the full job. Models stay loaded between previews, so after the first one each takes about 2 seconds. The Settings page's **Preview models** setting picks how long they stay loaded after the last preview (5 minutes by default), and Start and Benchmark free them first. Batch keeps them loaded from one output to the next, so each file after the first starts sooner.
 - **Batch**: every source face × every target in a folder, with its own options (or copied from Studio in one click). Each planned output shows thumbnails and can be removed (removed outputs stay out after a restart until you restore them). A live preview tries the selected one, on the frame you pick for a video (remembered after a restart), and one failed target doesn't stop the rest. While a batch runs, Run Batch turns into **Pause**: the output being made freezes in place and goes on from the same frame on **Resume**, and the broom button beside Skip frees its memory instead, so Resume makes that one output again from the start. Copy Options from Studio asks first when it would replace options that differ.
-- **Face mapping**: give each person in the target their own source face. Two people can even swap faces with each other.
+- **Face mapping**: give each person in the target their own source face. Two people can even swap faces with each other. Works on images, videos, GIFs and animated WebPs.
 - **GIF support**: GIF targets are converted for FaceFusion and saved back as looping GIFs (needs `ffmpeg`).
 - **AVIF and HEIC support**: AVIF and HEIC (iPhone) images work as sources and targets. StudioFF uses a PNG copy of each one, so the result is a PNG.
 - **More file types**: JFIF images run as a JPG copy. FLV and F4V (Flash) videos are moved into an MKV copy, so the result is an MKV. MPG and MPEG videos work as they are.
@@ -65,7 +65,7 @@ FaceFusion also needs `ffmpeg`, `ffprobe` and `curl` on `PATH`. Settings checks 
 | `ffstudio/runner.py` | `QProcess` wrapper that parses FaceFusion's progress bar output |
 | `ffstudio/session.py` | Shared state: config, schema, option values, runner |
 | `ffstudio/benchmark_report.py` | Draws the exported benchmark image (hardware, settings, results) |
-| `ffstudio/gif_run.py` | Runs inside the FaceFusion environment: GIF → video → FaceFusion → GIF, or a video copy → FaceFusion → animated WebP |
+| `ffstudio/gif_run.py` | Runs inside the FaceFusion environment: GIF → video → FaceFusion → GIF, or a video copy → FaceFusion → animated WebP; `--finish` does only the last step after face mapping's passes |
 | `ffstudio/content_check.py` | Runs inside the FaceFusion environment: FaceFusion's NSFW filter on targets, without processing |
 | `ffstudio/nsfw.py` | NSFW messages, the red bar and the flagged-frames window |
 | `ffstudio/face_probe.py` | Runs inside the FaceFusion environment and stays running: the faces found in a frame, which would be processed, and their face mask |

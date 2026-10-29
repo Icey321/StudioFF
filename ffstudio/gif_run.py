@@ -7,6 +7,7 @@ A video target (such as the copy studio makes of an animated WebP) is run as it 
 and turned into a looping GIF or animated WebP, whichever the output path names.
 
 usage: python gif_run.py <target_gif_or_video> <output_gif_or_webp> <work_dir> -- <facefusion run args without -t / -o>
+       python gif_run.py --finish <video> <output_gif_or_webp> <target_gif_or_video>   (face mapping's last step)
 preview_worker.py imports run_gif to make the same run on the models it keeps loaded
 """
 import os
@@ -28,6 +29,8 @@ def gif_to_video_args(gif_path : str, video_path : str) -> List[str]:
 
 
 def main() -> int:
+	if sys.argv[1:2] == [ '--finish' ]:
+		return finish(sys.argv[2:])
 	return run_gif(sys.argv[1:], lambda args: subprocess.call([ sys.executable, 'facefusion.py' ] + args))
 
 
@@ -55,21 +58,36 @@ def run_gif(argv : List[str], run_facefusion : Callable[[List[str]], int]) -> in
 		if exit_code or not os.path.isfile(temp_output):
 			return exit_code or 1
 
-		webp_output = output_path.lower().endswith('.webp')
-		print('Converting result to ' + ('animated WebP' if webp_output else 'GIF'), flush = True)
-		width, height = probe_size(ffmpeg, target_path)
-		# facefusion may round the size down, so never crop wider or taller than the frame
-		crop = 'crop=min(iw\\,%d):min(ih\\,%d):0:0,' % (width, height) if width and height else ''
-		if webp_output:
-			encode_args = [ '-vf', crop + 'null', '-c:v', 'libwebp_anim', '-quality', '90', '-loop', '0' ]
-		else:
-			encode_args = [ '-filter_complex', '[0:v]' + crop + 'split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=sierra2_4a', '-loop', '0' ]
-		if run_ffmpeg(ffmpeg, [ '-i', temp_output ] + encode_args + [ output_path ]):
-			print('Could not write ' + output_path, flush = True)
-			return 1
-		return 0
+		return video_to_animation(ffmpeg, temp_output, output_path, target_path)
 	finally:
 		shutil.rmtree(work_dir, ignore_errors = True)
+
+
+def video_to_animation(ffmpeg : str, video_path : str, output_path : str, target_path : str) -> int:
+	"""turns facefusion's video back into a looping gif or animated webp, cropped to the size of the target"""
+	webp_output = output_path.lower().endswith('.webp')
+	print('Converting result to ' + ('animated WebP' if webp_output else 'GIF'), flush = True)
+	width, height = probe_size(ffmpeg, target_path)
+	# facefusion may round the size down, so never crop wider or taller than the frame
+	crop = 'crop=min(iw\\,%d):min(ih\\,%d):0:0,' % (width, height) if width and height else ''
+	if webp_output:
+		encode_args = [ '-vf', crop + 'null', '-c:v', 'libwebp_anim', '-quality', '90', '-loop', '0' ]
+	else:
+		encode_args = [ '-filter_complex', '[0:v]' + crop + 'split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=sierra2_4a', '-loop', '0' ]
+	if run_ffmpeg(ffmpeg, [ '-i', video_path ] + encode_args + [ output_path ]):
+		print('Could not write ' + output_path, flush = True)
+		return 1
+	return 0
+
+
+def finish(argv : List[str]) -> int:
+	"""--finish <video> <output_gif_or_webp> <target>: only the last step, for a face mapping that ran its passes on the video"""
+	ffmpeg = shutil.which('ffmpeg')
+	if not ffmpeg:
+		print('ffmpeg was not found on PATH, it is needed to convert GIF files', flush = True)
+		return 1
+	video_path, output_path, target_path = argv
+	return video_to_animation(ffmpeg, video_path, output_path, target_path)
 
 
 def probe_size(ffmpeg : str, path : str):
