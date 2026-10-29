@@ -13,7 +13,7 @@ from PySide6.QtWidgets import QAbstractItemView, QApplication, QFileDialog, QHBo
 from qfluentwidgets import Action, BodyLabel, CaptionLabel, ComboBox, FluentIcon, Flyout, FlyoutAnimationType, LineEdit, ListItemDelegate, ListWidget, MessageBox, PrimaryPushButton, ProgressBar, PushButton, RoundMenu, SegmentedWidget, SimpleCardWidget, Slider, StrongBodyLabel, SubtitleLabel, TogglePushButton, ToggleToolButton, ToolTipFilter, TransparentPushButton, getFont, isDarkTheme, themeColor
 
 from ffstudio.config import APP_DIR, PREVIEW_DIR
-from ffstudio.faces import FACE_GROUPS, MASK_GROUPS, FaceProbe, describe_faces, describe_landmarks, describe_mask, face_landmarks, face_tag, read_mask
+from ffstudio.faces import FACE_GROUPS, MASK_GROUPS, FaceProbe, describe_faces, describe_landmarks, describe_mask, face_landmarks, face_tag, faces_text_color, no_face, read_mask
 from ffstudio.media import GIF_EXTENSIONS, VideoReader, browse_dir, extension, format_length, format_timecode, media_kind, read_frame, thumbnail, to_pixmap, usable_path, video_length, write_image
 from ffstudio.nsfw import BLOCKED_TITLE, NsfwDialog, show_blocked_bar
 from ffstudio.output_name import AUTOMATIC_TEMPLATE, build_output, unknown_tags
@@ -1011,10 +1011,9 @@ class BatchPage(SourceSelection, QWidget):
 		self.preview_label.setTextColor('#707070', '#9a9a9a')
 		self.preview_label.setWordWrap(True)
 		column.addWidget(self.preview_label)
-		# what face detection found, and which setting to change when it found nothing usable
+		# what face detection found, and which setting to change when it found nothing usable, checked with the overlays off too
 		self.faces_label = CaptionLabel('', card)
 		self.faces_label.setWordWrap(True)
-		self.faces_label.setVisible(self.overlays_on())
 		column.addWidget(self.faces_label)
 		# last, so the texts above wrapping onto more lines do not move the arrows
 		column.addLayout(step_row)
@@ -1649,28 +1648,22 @@ class BatchPage(SourceSelection, QWidget):
 
 	# faces and mask over the preview, scanned on the same smaller frame the preview runs on
 
-	def overlays_on(self) -> bool:
-		return self.faces_button.isChecked() or self.mask_button.isChecked() or self.landmarks_button.isChecked()
-
 	def on_overlay_toggled(self, key : str, checked) -> None:
 		self.session.config.set(key, checked)
-		self.faces_label.setVisible(self.overlays_on())
 		self.preview_view.set_faces([])
-		if self.overlays_on():
-			self.schedule_face_scan()
-		else:
-			self.faces_timer.stop()
-			self.face_probe.stop()
+		self.schedule_face_scan()
 
 	def schedule_face_scan(self) -> None:
-		if self.overlays_on() and self.isVisible():
+		# the faces are looked for with the overlays off too, so a frame without a face is always pointed out
+		if self.isVisible():
 			self.faces_timer.start()
 
 	def scan_faces(self) -> None:
-		if not self.overlays_on() or not self.isVisible():
+		if not self.isVisible():
 			return
 		item = self.shown_item()
 		if not item:
+			self.preview_view.set_warning(False)
 			self.faces_label.setText('Select an output first, the faces and the mask are drawn over its frame.')
 			return
 		if not self.session.is_configured() or not self.session.schema:
@@ -1696,22 +1689,20 @@ class BatchPage(SourceSelection, QWidget):
 		return 'batch', self.run_key(item), self.preview_frame_index(item.get('target'))
 
 	def on_faces_loading(self, loading : bool) -> None:
-		if loading and self.overlays_on():
+		if loading:
 			self.faces_label.setText('Loading the face models…')
+			self.faces_label.setTextColor('#707070', '#9a9a9a')
 
 	def on_faces_scanned(self, result : dict) -> None:
 		item = self.shown_item()
-		if not self.overlays_on() or not item or result.get('tag') != self.faces_tag(item):
+		if not item or result.get('tag') != self.faces_tag(item):
 			return
 		faces = (result.get('faces') or []) if self.faces_button.isChecked() else []
 		mask = read_mask(result.get('mask')) if self.mask_button.isChecked() else None
 		boxes = [ (face.get('box'), face_tag(index, face), bool(face.get('selected'))) for index, face in enumerate(faces) ]
 		self.preview_view.set_faces(boxes, (result.get('width') or 0, result.get('height') or 0), mask, face_landmarks(result, self.landmarks_button.landmarks_mode) if self.landmarks_button.isChecked() else None)
-		lines = []
-		problem = bool(result.get('error'))
-		if self.faces_button.isChecked() or problem:
-			lines.append(describe_faces(result, 0))
-			problem = problem or not any(face.get('selected') for face in result.get('faces') or [])
+		lines = [ describe_faces(result, 0) ]
+		problem = bool(result.get('error')) or not any(face.get('selected') for face in result.get('faces') or [])
 		if self.mask_button.isChecked() and not result.get('error'):
 			values = self.run_values()
 			schema = self.session.schema
@@ -1720,7 +1711,8 @@ class BatchPage(SourceSelection, QWidget):
 		if self.landmarks_button.isChecked() and not result.get('error'):
 			lines.append(describe_landmarks(result, self.landmarks_button.landmarks_mode))
 		self.faces_label.setText('\n'.join(line for line in lines if line))
-		self.faces_label.setTextColor('#b45309' if problem else '#707070', '#f0b35a' if problem else '#9a9a9a')
+		self.faces_label.setTextColor(*faces_text_color(result, problem))
+		self.preview_view.set_warning(no_face(result))
 
 	def on_clock(self) -> None:
 		template = self.output_name_edit.text() or AUTOMATIC_TEMPLATE

@@ -225,6 +225,18 @@ def describe_faces(result : Dict[str, Any], reference_index : Optional[int] = No
 	return found + ', but none will be processed: the face selector Gender, Race or Age filter skips them.'
 
 
+def no_face(result : Dict[str, Any]) -> bool:
+	"""face detection ran fine and found nothing, the preview gets a red border and the line under it turns red"""
+	return not result.get('error') and not result.get('faces')
+
+
+def faces_text_color(result : Dict[str, Any], problem : bool) -> tuple:
+	"""the light and dark theme color of the line under the preview: red with no face found, orange for other problems"""
+	if no_face(result):
+		return '#dc2626', '#f87171'
+	return ('#b45309', '#f0b35a') if problem else ('#707070', '#9a9a9a')
+
+
 def read_mask(path : Optional[str]) -> Optional[numpy.ndarray]:
 	if not path or not os.path.isfile(path):
 		return None

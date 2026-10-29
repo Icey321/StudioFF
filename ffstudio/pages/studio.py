@@ -14,7 +14,7 @@ from qfluentwidgets import Action, BodyLabel, CaptionLabel, FlowLayout, FluentIc
 
 from ffstudio.config import APP_DIR, PREVIEW_DIR
 from ffstudio.face_mapping import FACE_PROCESSORS, FRAME_PROCESSORS, LEAVE, PEOPLE_FILE, SELECTED, FaceMappingCard, box_overlap, is_kept, is_mapped, merge_people, people_dir, person_color, person_name, plan_passes
-from ffstudio.faces import FACE_GROUPS, MASK_GROUPS, FaceProbe, describe_faces, describe_landmarks, describe_mask, face_landmarks, face_tag, read_mask
+from ffstudio.faces import FACE_GROUPS, MASK_GROUPS, FaceProbe, describe_faces, describe_landmarks, describe_mask, face_landmarks, face_tag, faces_text_color, no_face, read_mask
 from ffstudio.media import GIF_EXTENSIONS, VideoReader, browse_dir, extension, format_timecode, media_kind, read_frame, read_image, thumbnail, to_pixmap, usable_path, write_image
 from ffstudio.nsfw import BLOCKED_STATUS, NsfwDialog, describe_result, show_blocked_bar
 from ffstudio.option_panel import FavoritesPanel, OptionPanel
@@ -437,10 +437,9 @@ class TargetCard(SimpleCardWidget):
 		self.preview.clicked.connect(self.on_preview_clicked)
 		self.preview.face_menu_requested.connect(self.page.show_face_menu)
 		layout.addWidget(self.preview, 1)
-		# what face detection found, and which setting to change when it found nothing usable
+		# what face detection found, and which setting to change when it found nothing usable, checked with the overlays off too
 		self.faces_label = CaptionLabel('', self)
 		self.faces_label.setWordWrap(True)
-		self.faces_label.setVisible(self.faces_button.isChecked() or self.mask_button.isChecked() or self.landmarks_button.isChecked())
 		layout.addWidget(self.faces_label)
 
 		self.timeline = QWidget(self)
@@ -1171,6 +1170,7 @@ class StudioPage(SourceSelection, QWidget):
 		self.target_card.view_switch.setCurrentItem(view)
 		if view == 'result':
 			self.target_card.preview.set_faces([])
+			self.target_card.preview.set_warning(False)
 			self.refresh_result()
 		else:
 			self.release_result_reader()
@@ -1614,31 +1614,34 @@ class StudioPage(SourceSelection, QWidget):
 		self.session.config.set('show_landmarks', mode)
 		self.on_overlay_toggled()
 
-	def overlays_on(self) -> bool:
-		card = self.target_card
-		return card.faces_button.isChecked() or card.mask_button.isChecked() or card.landmarks_button.isChecked()
-
 	def on_overlay_toggled(self) -> None:
-		self.target_card.faces_label.setVisible(self.overlays_on())
 		self.target_card.preview.set_faces([])
 		self.shown_faces = []
-		if self.overlays_on():
-			self.schedule_face_scan()
-		elif not self.chain and not self.face_probe.is_finding_people():
+		self.schedule_face_scan()
+
+	def schedule_face_scan(self) -> None:
+		# the faces are looked for with the overlays off too, so a frame without a face is always pointed out
+		if self.isVisible():
+			self.faces_timer.start()
+
+	def showEvent(self, event) -> None:
+		super().showEvent(event)
+		self.schedule_face_scan()
+
+	def hideEvent(self, event) -> None:
+		super().hideEvent(event)
+		if not self.chain and not self.face_probe.is_finding_people():
 			# the probe holds its models in memory, let them go while nobody looks
 			self.faces_timer.stop()
 			self.face_probe.stop()
 
-	def schedule_face_scan(self) -> None:
-		if self.overlays_on():
-			self.faces_timer.start()
-
 	def scan_faces(self) -> None:
 		card = self.target_card
-		if not self.overlays_on() or self.view != 'target' or self.chain:
+		if not self.isVisible() or self.view != 'target' or self.chain:
 			return
 		if not self.target_path:
 			card.preview.set_faces([])
+			card.preview.set_warning(False)
 			card.faces_label.setText('Choose a target to see the faces FaceFusion finds in it.')
 			return
 		if not self.session.is_configured() or not self.session.schema:
@@ -1658,8 +1661,9 @@ class StudioPage(SourceSelection, QWidget):
 		self.face_probe.scan(frame, reference, sources, args, tag = (self.target_path, frame_index), mask = mask, people_file = self.people_file())
 
 	def on_faces_loading(self, loading : bool) -> None:
-		if loading and self.overlays_on():
+		if loading:
 			self.target_card.faces_label.setText('Loading the face models…')
+			self.target_card.faces_label.setTextColor('#707070', '#9a9a9a')
 
 	def on_faces_scanned(self, result : dict) -> None:
 		tag = result.get('tag')
@@ -1667,7 +1671,7 @@ class StudioPage(SourceSelection, QWidget):
 			self.on_pass_located(tag, result)
 			return
 		card = self.target_card
-		if not self.overlays_on() or tag != (self.target_path, card.current_frame_index()) or self.view != 'target':
+		if tag != (self.target_path, card.current_frame_index()) or self.view != 'target':
 			return
 		faces = (result.get('faces') or []) if card.faces_button.isChecked() else []
 		mask = read_mask(result.get('mask')) if card.mask_button.isChecked() else None
@@ -1687,12 +1691,13 @@ class StudioPage(SourceSelection, QWidget):
 		card.preview.set_faces(boxes, (result.get('width') or 0, result.get('height') or 0), mask, face_landmarks(result, card.landmarks_button.landmarks_mode) if card.landmarks_button.isChecked() else None)
 		lines = []
 		problem = bool(result.get('error'))
-		if card.faces_button.isChecked() and mapped and not problem:
+		if mapped and not problem and result.get('faces'):
+			faces = result.get('faces')
 			found = '1 face detected' if len(faces) == 1 else '%d faces detected' % len(faces)
 			named = [ face for face in faces if is_kept(people, face.get('person')) ]
 			swapped = [ face for face in named if people[face.get('person')].get('source') ]
 			lines.append('%s, %d of them mapped. Face mapping runs one pass per mapped person, the face selector is set for each pass.' % (found, len(swapped)) + ('' if len(named) == len(faces) else ' Faces without a name are left as they are, look for people again with the refresh button if someone is missing.'))
-		elif card.faces_button.isChecked() or problem:
+		else:
 			reference_index = int(self.session.values.get('reference_frame_index') or 0) if card.reader else None
 			lines.append(describe_faces(result, reference_index))
 			problem = problem or not any(face.get('selected') for face in result.get('faces') or [])
@@ -1704,7 +1709,8 @@ class StudioPage(SourceSelection, QWidget):
 		if card.landmarks_button.isChecked() and not result.get('error'):
 			lines.append(describe_landmarks(result, card.landmarks_button.landmarks_mode))
 		card.faces_label.setText('\n'.join(line for line in lines if line))
-		card.faces_label.setTextColor('#b45309' if problem else '#707070', '#f0b35a' if problem else '#9a9a9a')
+		card.faces_label.setTextColor(*faces_text_color(result, problem))
+		card.preview.set_warning(no_face(result))
 
 	def show_face_menu(self, index : int, position : QPoint) -> None:
 		if not 0 <= index < len(self.shown_faces):

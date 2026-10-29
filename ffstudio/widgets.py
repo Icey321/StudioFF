@@ -661,6 +661,8 @@ class PreviewView(QWidget):
 		self.scaled_cache = {}
 		self.hint = hint
 		self.badge = ''
+		# a red border around the picture, when face detection found no face in it
+		self.warning = False
 		# detected faces drawn over the image: (box in frame pixels, tag, selected) and optionally a color for the box,
 		# plus the frame size the boxes belong to
 		self.faces : List[tuple] = []
@@ -697,6 +699,11 @@ class PreviewView(QWidget):
 	def set_badge(self, text : str) -> None:
 		self.badge = text
 		self.update()
+
+	def set_warning(self, warning : bool) -> None:
+		if warning != self.warning:
+			self.warning = warning
+			self.update()
 
 	def set_faces(self, faces : List[tuple], frame_size : Tuple[int, int] = (0, 0), mask = None, landmarks : Optional[List[tuple]] = None) -> None:
 		"""boxes for the detected faces, the face mask as a 0-255 array at frame size and the facial landmarks, all cleared by an empty call"""
@@ -849,6 +856,11 @@ class PreviewView(QWidget):
 			painter.setBrush(Qt.BrushStyle.NoBrush)
 			painter.drawRoundedRect(rect.adjusted(1.5, 1.5, -1.5, -1.5), 7, 7)
 			self.paint_check(painter, QPointF(14, self.height() - 14))
+
+		if self.warning and not self.pixmap.isNull():
+			painter.setPen(QPen(QColor(248, 113, 113) if dark else QColor(220, 38, 38), 3))
+			painter.setBrush(Qt.BrushStyle.NoBrush)
+			painter.drawRoundedRect(rect.adjusted(1.5, 1.5, -1.5, -1.5), 7, 7)
 
 		if self.drag_active:
 			painter.setPen(QPen(themeColor(), 2))
