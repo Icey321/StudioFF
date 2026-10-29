@@ -579,6 +579,10 @@ class BatchPage(SourceSelection, QWidget):
 		self.run_clock.timeout.connect(self.show_run_time)
 		# Skip ends the output that is running and the batch goes on with the next one
 		self.skipping = False
+		# Pause freezes the running output in place, Free Memory ends it so Resume makes it again from the start
+		self.paused = False
+		self.paused_at = 0.0
+		self.freeing = False
 		# the outputs Run Selected, Retry and Play run on their own, empty when the whole batch runs
 		self.run_only : set = set()
 		# the selected outputs Run Selected runs once the nsfw check before it is done
@@ -850,7 +854,8 @@ class BatchPage(SourceSelection, QWidget):
 		self.start_button = PrimaryPushButton(FluentIcon.PLAY, 'Run Batch', run_card)
 		self.start_button.setToolTip(START_TIPS.get(False))
 		self.start_button.installEventFilter(ToolTipFilter(self.start_button))
-		self.start_button.clicked.connect(self.start)
+		# while a batch runs the same button pauses and resumes it
+		self.start_button.clicked.connect(lambda: self.toggle_pause() if self.running else self.start())
 		self.stop_button = PushButton(FluentIcon.CLOSE, 'Stop', run_card)
 		self.stop_button.setEnabled(False)
 		self.stop_button.clicked.connect(self.stop)
@@ -859,6 +864,9 @@ class BatchPage(SourceSelection, QWidget):
 		self.skip_button.installEventFilter(ToolTipFilter(self.skip_button))
 		self.skip_button.setEnabled(False)
 		self.skip_button.clicked.connect(self.skip)
+		self.free_button = tool_button(FluentIcon.BROOM, 'Free Memory: end the paused output so its memory is free for other programs. Resume makes that output again from the start, the finished outputs stay as they are.', run_card)
+		self.free_button.setEnabled(False)
+		self.free_button.clicked.connect(self.free_memory)
 		self.check_button = PushButton(FluentIcon.CERTIFICATE, 'NSFW Check', run_card)
 		self.check_button.setToolTip("Run FaceFusion's NSFW filter on every target in the list without processing them, on a type tab only the targets of that type. Run Batch skips the targets it flags.")
 		self.check_button.installEventFilter(ToolTipFilter(self.check_button))
@@ -866,6 +874,7 @@ class BatchPage(SourceSelection, QWidget):
 		run_layout.addWidget(self.start_button)
 		run_layout.addWidget(self.stop_button)
 		run_layout.addWidget(self.skip_button)
+		run_layout.addWidget(self.free_button)
 		run_layout.addWidget(self.check_button)
 		run_layout.addSpacing(10)
 		status = QVBoxLayout()
@@ -1110,7 +1119,17 @@ class BatchPage(SourceSelection, QWidget):
 		return not busy and not self.running and self.type_tab != 'nsfw'
 
 	def refresh_start_button(self) -> None:
-		self.start_button.setEnabled(self.can_start(self.session.runner.is_running()))
+		busy = self.session.runner.is_running()
+		# the nsfw checks before and after a batch cannot pause, Free Memory needs a frozen output
+		self.free_button.setEnabled(self.running and self.paused and self.current >= 0 and busy)
+		if self.running:
+			self.start_button.setEnabled(not self.prechecking and not self.confirming)
+			self.start_button.setIcon(FluentIcon.PLAY if self.paused else FluentIcon.PAUSE)
+			self.start_button.setText('Resume' if self.paused else 'Pause')
+			self.start_button.setToolTip('Go on with the batch where it was paused' if self.paused else 'Pause the batch right where it is, the output being made goes on from the same frame on Resume')
+			return
+		self.start_button.setIcon(FluentIcon.PLAY)
+		self.start_button.setEnabled(self.can_start(busy))
 		self.start_button.setToolTip(START_TIPS.get(self.type_tab == 'nsfw'))
 		count = len(self.run_selection())
 		if count:
@@ -2211,6 +2230,7 @@ class BatchPage(SourceSelection, QWidget):
 		self.running = True
 		self.stopped = False
 		self.confirming = False
+		self.paused = False
 		self.started_count = 0
 		self.current = -1
 		self.run_task = ''
@@ -2220,12 +2240,72 @@ class BatchPage(SourceSelection, QWidget):
 
 	def stop(self) -> None:
 		self.stopped = True
-		self.session.runner.stop()
+		# with its memory freed a paused batch runs nothing, what runs now may be someone else's
+		freed = self.paused and self.current < 0
+		self.end_pause()
+		if freed:
+			self.finish()
+		else:
+			self.session.runner.stop()
 
 	def skip(self) -> None:
 		if self.running and self.current >= 0:
 			self.skipping = True
 			self.session.runner.stop()
+
+	def toggle_pause(self) -> None:
+		if self.paused:
+			self.resume_batch()
+		elif not self.prechecking and not self.confirming:
+			self.pause_batch()
+
+	def pause_batch(self) -> None:
+		self.paused = True
+		self.paused_at = time.monotonic()
+		self.run_clock.stop()
+		self.progress.pause()
+		# frozen, facefusion and its ffmpeg use no cpu or gpu, windows moves their memory to disk when other programs need it
+		if self.current >= 0 and not self.session.runner.freeze(True):
+			self.status_label.setText('Pausing after this output  ·  ' + self.run_task)
+		else:
+			self.show_paused()
+		self.on_busy_changed(self.session.runner.is_running(), self.session.task)
+
+	def show_paused(self) -> None:
+		if self.current < 0:
+			name = next((self.items[index].get('name') for index in self.queued()[:1]), '')
+			self.status_label.setText('Paused  ·  Resume starts ' + name if name else 'Paused')
+			return
+		ratio = self.items[self.current].get('progress')
+		self.status_label.setText('Paused  ·  ' + self.run_task + (' at %d%%' % int(ratio * 100) if ratio else ''))
+
+	def end_pause(self) -> None:
+		"""the clock leaves out the time the batch was paused"""
+		if self.paused:
+			self.paused = False
+			self.run_started += time.monotonic() - self.paused_at
+
+	def resume_batch(self) -> None:
+		if self.current < 0 and self.session.runner.is_running():
+			self.session.notify.emit('warning', 'Busy', 'FaceFusion is running "%s". Resume the batch once it is done.' % self.session.task)
+			return
+		self.end_pause()
+		self.run_clock.start()
+		self.show_run_time()
+		self.progress.resume()
+		if self.current >= 0:
+			self.session.runner.freeze(False)
+			self.status_label.setText(self.run_task)
+			self.on_busy_changed(self.session.runner.is_running(), self.session.task)
+		else:
+			self.run_next()
+
+	def free_memory(self) -> None:
+		"""ends the frozen output and lets go of the models, Resume makes that output again from the start"""
+		if not self.paused or self.current < 0:
+			return
+		self.items[self.current]['freed'] = True
+		self.session.runner.stop()
 
 	def queued(self) -> List[int]:
 		return [ index for index, item in enumerate(self.items) if not item.get('status') and (not self.run_only or self.run_key(item) in self.run_only) ]
@@ -2234,6 +2314,11 @@ class BatchPage(SourceSelection, QWidget):
 		queued = self.queued()
 		if self.stopped or not queued:
 			self.finish()
+			return
+		if self.paused:
+			# an output ended while the batch was paused, the next one waits for Resume
+			self.show_paused()
+			self.on_busy_changed(self.session.runner.is_running(), self.session.task)
 			return
 		self.current = queued[0]
 		self.skipping = False
@@ -2267,10 +2352,11 @@ class BatchPage(SourceSelection, QWidget):
 			self.finish()
 
 	def on_busy_changed(self, busy : bool, task : str) -> None:
-		self.start_button.setEnabled(self.can_start(busy))
+		self.refresh_start_button()
 		self.check_button.setEnabled(not busy and not self.running)
-		self.stop_button.setEnabled(busy and self.running)
-		self.skip_button.setEnabled(busy and self.running and not self.confirming and not self.prechecking)
+		# a batch paused with its memory freed runs nothing, Stop still ends it
+		self.stop_button.setEnabled(self.running and (busy or self.paused))
+		self.skip_button.setEnabled(busy and self.running and self.current >= 0 and not self.confirming and not self.prechecking)
 
 	def on_progress(self, title : str, ratio : float, status : str) -> None:
 		# the nsfw analysis before the frames fills its own bar quickly, only the frames count toward the output
@@ -2301,7 +2387,12 @@ class BatchPage(SourceSelection, QWidget):
 		item = self.items[index]
 		item.pop('progress', None)
 		item.pop('speed', None)
-		if exit_code == 0:
+		if item.pop('freed', False):
+			# Free Memory: the output waits in the queue to be made again on Resume, and counts again then
+			item['status'] = ''
+			self.started_count -= 1
+			self.session.preview_worker.stop()
+		elif exit_code == 0:
 			item['status'] = 'done'
 		elif exit_code == -1:
 			item['status'] = 'skipped' if self.skipping and not self.stopped else ''

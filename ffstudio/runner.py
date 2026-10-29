@@ -8,7 +8,7 @@ from typing import Any, List, Optional, Tuple
 from PySide6.QtCore import QObject, QProcess, QProcessEnvironment, QTimer, Signal
 
 from ffstudio.config import APP_DIR
-from ffstudio.environment import kill_process_tree
+from ffstudio.environment import kill_process_tree, suspend_process_tree
 
 ANSI_PATTERN = re.compile(r'\x1b\[[0-9;?]*[A-Za-z]')
 # facefusion draws its bar as <active color>====<neutral color>====<reset>
@@ -104,6 +104,15 @@ class ProcessRunner(QObject):
 			self.start(*fallback)
 			return
 		self.finished.emit(exit_code, time.monotonic() - self.start_time)
+
+	def process_id(self) -> int:
+		"""the process making the current run, the worker's when it runs there"""
+		process = self.worker.process if self.worker is not None else self.process
+		return int(process.processId()) if process is not None and process.state() != QProcess.ProcessState.NotRunning else 0
+
+	def freeze(self, frozen : bool) -> bool:
+		"""pauses the current run where it is, or lets it go on, its memory stays held while it is frozen"""
+		return suspend_process_tree(self.process_id(), frozen)
 
 	def stop(self) -> None:
 		if self.worker is not None:

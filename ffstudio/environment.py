@@ -287,6 +287,66 @@ def kill_process_tree(pid : int) -> None:
 		subprocess.run([ 'taskkill', '/PID', str(pid), '/T', '/F' ], capture_output = True, creationflags = CREATE_NO_WINDOW)
 
 
+def process_tree(pid : int) -> List[int]:
+	"""the process and every process under it, read from a windows snapshot of all processes"""
+	import ctypes
+	from ctypes import wintypes
+
+	class ProcessEntry(ctypes.Structure):
+		_fields_ =\
+		[
+			('dwSize', wintypes.DWORD),
+			('cntUsage', wintypes.DWORD),
+			('th32ProcessID', wintypes.DWORD),
+			('th32DefaultHeapID', ctypes.c_void_p),
+			('th32ModuleID', wintypes.DWORD),
+			('cntThreads', wintypes.DWORD),
+			('th32ParentProcessID', wintypes.DWORD),
+			('pcPriClassBase', ctypes.c_long),
+			('dwFlags', wintypes.DWORD),
+			('szExeFile', ctypes.c_wchar * 260)
+		]
+
+	kernel32 = ctypes.WinDLL('kernel32', use_last_error = True)
+	kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+	snapshot = kernel32.CreateToolhelp32Snapshot(0x2, 0)
+	if not snapshot or snapshot == wintypes.HANDLE(-1).value:
+		return [ pid ]
+	children : Dict[int, List[int]] = {}
+	entry = ProcessEntry()
+	entry.dwSize = ctypes.sizeof(ProcessEntry)
+	found = kernel32.Process32FirstW(snapshot, ctypes.byref(entry))
+	while found:
+		children.setdefault(entry.th32ParentProcessID, []).append(entry.th32ProcessID)
+		found = kernel32.Process32NextW(snapshot, ctypes.byref(entry))
+	kernel32.CloseHandle(snapshot)
+	tree = [ pid ]
+	for parent in tree:
+		tree += [ child for child in children.get(parent, []) if child not in tree ]
+	return tree
+
+
+def suspend_process_tree(pid : int, suspend : bool) -> bool:
+	"""freezes or unfreezes a process and the processes it started, such as ffmpeg, in place: they use no cpu or gpu while frozen and go on where they were"""
+	if not pid:
+		return False
+	import ctypes
+	from ctypes import wintypes
+
+	kernel32 = ctypes.WinDLL('kernel32', use_last_error = True)
+	kernel32.OpenProcess.restype = wintypes.HANDLE
+	ntdll = ctypes.WinDLL('ntdll')
+	call = ntdll.NtSuspendProcess if suspend else ntdll.NtResumeProcess
+	done = False
+	# PROCESS_SUSPEND_RESUME
+	for process_id in process_tree(pid):
+		handle = kernel32.OpenProcess(0x0800, False, process_id)
+		if handle:
+			done = call(wintypes.HANDLE(handle)) == 0 or done
+			kernel32.CloseHandle(handle)
+	return done
+
+
 def has_nvidia_gpu() -> bool:
 	return bool(shutil.which('nvidia-smi'))
 
