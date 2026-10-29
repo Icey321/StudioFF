@@ -26,6 +26,7 @@ FaceFusion itself is not included: install FaceFusion v4 separately, then point 
 - **Batch**: every source face × every target in a folder, with its own settings (or copied from Studio in one click). Each planned output shows thumbnails and can be removed (removed outputs stay out after a restart until you restore them). A live preview tries the selected one, on the frame you pick for a video (remembered after a restart), and one failed target doesn't stop the rest. Copy Settings from Studio asks first when it would replace settings that differ.
 - **Face mapping**: give each person in the target their own source face. Two people can even swap faces with each other.
 - **GIF support**: GIF targets are converted for FaceFusion and saved back as looping GIFs (needs `ffmpeg`).
+- **AVIF and HEIC support**: AVIF and HEIC (iPhone) images work as sources and targets. StudioFF uses a PNG copy of each one, so the result is a PNG.
 - **Output names**: build file names from tags like `{source}`, `{target}`, `{date}` and `{n}`, with an optional sub-folder per source.
 - **Favorite Settings and search**: star any setting to pin it to Favorite Settings, or filter all settings with *Search settings*. Open or closed setting groups stay that way.
 - **Faces**: shows the faces FaceFusion detects in the current frame and which ones will be processed. If none will be, it says why.

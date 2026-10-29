@@ -16,6 +16,8 @@ IMAGE_EXTENSIONS = { '.bmp', '.jpeg', '.jpg', '.png', '.tif', '.tiff', '.webp' }
 GIF_EXTENSIONS = { '.gif' }
 VIDEO_EXTENSIONS = { '.avi', '.m4v', '.mkv', '.mov', '.mp4', '.mpeg', '.mxf', '.webm', '.wmv' } | GIF_EXTENSIONS
 AUDIO_EXTENSIONS = { '.aac', '.flac', '.m4a', '.mp3', '.ogg', '.opus', '.wav' }
+# images neither facefusion nor opencv read, studio uses a png copy of them made with pillow (see usable_path)
+CONVERTED_EXTENSIONS = { '.avif', '.heic', '.heif' }
 
 
 def extension(path : str) -> str:
@@ -31,6 +33,46 @@ def media_kind(path : str) -> Optional[str]:
 	if ext in AUDIO_EXTENSIONS:
 		return 'audio'
 	return None
+
+
+def usable_path(path : str) -> str:
+	"""the path itself, or for an avif or heic a png copy with the same name in the converted folder, made once and kept.
+	the copy is what studio shows and runs, so the result is a png named after the avif. the path itself when it cannot be made"""
+	if extension(path) not in CONVERTED_EXTENSIONS:
+		return path
+	from ffstudio.config import CONVERTED_DIR
+
+	try:
+		modified = os.path.getmtime(path)
+	except OSError:
+		return path
+	# a folder per file and version, so two photo.avif files in different folders do not meet
+	folder = os.path.join(CONVERTED_DIR, hashlib.sha1(('%s|%f' % (os.path.abspath(path), modified)).encode()).hexdigest()[:16])
+	copy_path = os.path.join(folder, os.path.splitext(os.path.basename(path))[0] + '.png')
+	if os.path.isfile(copy_path):
+		return copy_path
+	try:
+		from PIL import Image, ImageOps
+		# heic is read by the pillow-heif plugin, avif by pillow itself
+		from pillow_heif import register_heif_opener
+
+		register_heif_opener()
+		with Image.open(path) as image:
+			# phones store the turn of a photo apart from its pixels
+			image = ImageOps.exif_transpose(image)
+			os.makedirs(folder, exist_ok = True)
+			image.convert('RGBA' if 'A' in image.getbands() else 'RGB').save(copy_path + '.part', 'PNG')
+		os.replace(copy_path + '.part', copy_path)
+	except (ImportError, OSError, ValueError):
+		return path
+	return copy_path
+
+
+def is_converted(path : str) -> bool:
+	"""a png copy usable_path made, its folder is no place to browse from"""
+	from ffstudio.config import CONVERTED_DIR
+
+	return os.path.normcase(os.path.abspath(path)).startswith(os.path.normcase(os.path.abspath(CONVERTED_DIR)) + os.sep)
 
 
 def read_image(path : str) -> Optional[numpy.ndarray]:

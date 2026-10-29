@@ -15,7 +15,7 @@ from qfluentwidgets import Action, BodyLabel, CaptionLabel, FlowLayout, FluentIc
 from ffstudio.config import APP_DIR, PREVIEW_DIR
 from ffstudio.face_mapping import FACE_PROCESSORS, FRAME_PROCESSORS, LEAVE, PEOPLE_FILE, SELECTED, FaceMappingCard, box_overlap, is_kept, is_mapped, merge_people, people_dir, person_color, person_name, plan_passes
 from ffstudio.faces import FACE_GROUPS, MASK_GROUPS, FaceProbe, describe_faces, describe_landmarks, describe_mask, face_landmarks, face_tag, read_mask
-from ffstudio.media import GIF_EXTENSIONS, VideoReader, extension, format_timecode, media_kind, read_frame, read_image, thumbnail, to_pixmap, write_image
+from ffstudio.media import GIF_EXTENSIONS, VideoReader, extension, format_timecode, is_converted, media_kind, read_frame, read_image, thumbnail, to_pixmap, usable_path, write_image
 from ffstudio.nsfw import BLOCKED_STATUS, NsfwDialog, describe_result, show_blocked_bar
 from ffstudio.option_panel import FavoritesPanel, OptionPanel
 from ffstudio.output_name import AUTOMATIC_TEMPLATE, NAME_EXAMPLES, NAME_TAGS, build_output, build_output_path, unknown_tags
@@ -30,7 +30,7 @@ LIVE_IGNORED_GROUPS = [ 'paths', 'output_creation', 'frame_extraction', 'frame_d
 PREVIEW_MAX_SIDE = 1080
 # the outputs of the passes of a face mapping run before the last one
 PASSES_DIR = os.path.join(PREVIEW_DIR, 'passes')
-SOURCE_FILTERS = [ 'Images and audio (*.jpg *.jpeg *.png *.webp *.bmp *.tif *.tiff *.mp3 *.wav *.flac *.m4a *.aac *.ogg *.opus)', 'All files (*)' ]
+SOURCE_FILTERS = [ 'Images and audio (*.jpg *.jpeg *.png *.webp *.avif *.heic *.heif *.bmp *.tif *.tiff *.mp3 *.wav *.flac *.m4a *.aac *.ogg *.opus)', 'All files (*)' ]
 
 
 def elastic(label : CaptionLabel) -> CaptionLabel:
@@ -148,6 +148,7 @@ class SourceSelection:
 		pass
 
 	def add_sources(self, paths : List[str]) -> None:
+		paths = [ usable_path(path) for path in paths ]
 		accepted = [ path for path in paths if media_kind(path) in [ 'image', 'audio' ] and path not in self.source_paths ]
 		rejected = [ path for path in paths if media_kind(path) not in [ 'image', 'audio' ] ]
 		if rejected:
@@ -562,7 +563,7 @@ class TargetCard(SimpleCardWidget):
 		self.result_label.setText(text or self.result_text)
 
 	def browse(self) -> None:
-		path, _ = QFileDialog.getOpenFileName(self, 'Choose target image or video', self.page.last_dir(), 'Images, videos and GIFs (*.jpg *.jpeg *.png *.webp *.bmp *.tif *.tiff *.mp4 *.mov *.mkv *.avi *.webm *.m4v *.wmv *.gif);;All files (*)')
+		path, _ = QFileDialog.getOpenFileName(self, 'Choose target image or video', self.page.last_dir(), 'Images, videos and GIFs (*.jpg *.jpeg *.png *.webp *.avif *.heic *.heif *.bmp *.tif *.tiff *.mp4 *.mov *.mkv *.avi *.webm *.m4v *.wmv *.gif);;All files (*)')
 		if path:
 			self.page.set_target(os.path.normpath(path))
 
@@ -1119,7 +1120,7 @@ class StudioPage(SourceSelection, QWidget):
 
 	def last_dir(self) -> str:
 		for path in [ self.target_path ] + self.source_paths:
-			if path:
+			if path and not is_converted(path):
 				return os.path.dirname(path)
 		return os.path.expanduser('~')
 
@@ -1133,6 +1134,7 @@ class StudioPage(SourceSelection, QWidget):
 			self.schedule_live_preview()
 
 	def set_target(self, path : str) -> None:
+		path = usable_path(path) if path else path
 		if path and media_kind(path) not in [ 'image', 'video' ]:
 			self.session.notify.emit('warning', 'Unsupported target', 'Choose an image or a video.')
 			return

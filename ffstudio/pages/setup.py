@@ -19,6 +19,7 @@ from ffstudio.widgets import ChoiceButton
 # the theme buttons: key, text, icon and tooltip
 # minutes, 0 keeps them until the app closes
 KEEP_LOADED_CHOICES = [ (5, '5 minutes'), (10, '10 minutes'), (30, '30 minutes'), (60, '1 hour'), (0, 'Until the app closes') ]
+CLOSE_CHOICES = [ ('close', 'Quit the app'), ('minimize', 'Minimize the window'), ('tray', 'Minimize to the system tray') ]
 THEME_CHOICES =[
 	('auto', 'Auto', FluentIcon.CONSTRACT, 'Follow the Windows light or dark setting'),
 	('light', 'Light', FluentIcon.BRIGHTNESS, 'Always light'),
@@ -885,6 +886,15 @@ class SetupPage(QWidget):
 		self.monitor_switch.setChecked(bool(self.session.config.get('show_system_monitor')))
 		self.monitor_switch.checkedChanged.connect(self.on_monitor_toggled)
 		layout.addLayout(form_row('System monitor', [ BodyLabel('Show graphics card, processor and memory use in the title bar', card), self.monitor_switch ], card))
+		self.close_combo = ComboBox(card)
+		for key, text in CLOSE_CHOICES:
+			self.close_combo.addItem(text, userData = key)
+			if key == (self.session.config.get('close_action') or 'close'):
+				self.close_combo.setCurrentIndex(self.close_combo.count() - 1)
+		self.close_combo.setToolTip('Quit stops FaceFusion first when a job is running and asks before it does. Minimize and the tray keep the app and its job running')
+		self.close_combo.installEventFilter(ToolTipFilter(self.close_combo))
+		self.close_combo.currentIndexChanged.connect(self.on_close_action_changed)
+		layout.addLayout(form_row('Close button', [ BodyLabel('The X in the title bar will', card), self.close_combo ], card))
 		self.keep_loaded_combo = ComboBox(card)
 		current = int(self.session.config.get('preview_keep_loaded_minutes'))
 		for minutes, text in KEEP_LOADED_CHOICES:
@@ -905,6 +915,10 @@ class SetupPage(QWidget):
 		self.session.config.set('show_system_monitor', checked)
 		self.session.config.save()
 		self.monitor_toggled.emit(checked)
+
+	def on_close_action_changed(self, _ : int) -> None:
+		self.session.config.set('close_action', self.close_combo.currentData())
+		self.session.config.save()
 
 	def on_keep_loaded_changed(self, _ : int) -> None:
 		minutes = int(self.keep_loaded_combo.currentData())

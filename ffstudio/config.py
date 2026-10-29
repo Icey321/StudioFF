@@ -12,6 +12,8 @@ LEGACY_DATA_DIR = os.path.join(APPDATA_DIR, 'FaceFusionStudio')
 CONFIG_FILE = os.path.join(DATA_DIR, 'config.json')
 SCHEMA_FILE = os.path.join(DATA_DIR, 'schema.json')
 PREVIEW_DIR = os.path.join(DATA_DIR, 'preview')
+# png copies of avif and heic images, see media.usable_path
+CONVERTED_DIR = os.path.join(DATA_DIR, 'converted')
 
 
 
@@ -64,6 +66,10 @@ DEFAULT_CONFIG : Dict[str, Any] =\
 	'output_subfolders': False,
 	# graphics card, processor and memory use in the title bar
 	'show_system_monitor': True,
+	# what the window's X button does: close, minimize or tray
+	'close_action': 'close',
+	# how the window was left: maximized, and the normal size and position as [ x, y, width, height ]
+	'window_state': {},
 	'source_paths': [],
 	'target_path': '',
 	'options': {},

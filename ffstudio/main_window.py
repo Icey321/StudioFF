@@ -1,9 +1,9 @@
 import os
 from typing import Dict, Optional
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QRect, Qt, QTimer
 from PySide6.QtGui import QColor, QIcon
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 from qfluentwidgets import CaptionLabel, DotInfoBadge, FluentIcon, FluentWindow, InfoBar, InfoBarPosition, NavigationItemPosition, Theme, isDarkTheme, setTheme, setThemeColor
 
 from ffstudio import APP_NAME, APP_VERSION, splash
@@ -26,6 +26,8 @@ class MainWindow(FluentWindow):
 	def __init__(self, session : Session) -> None:
 		super().__init__()
 		self.session = session
+		self.tray : Optional[QSystemTrayIcon] = None
+		self.quitting = False
 		# small steps through the slow imports, so the bar keeps moving instead of stopping at 10%
 		splash.step()
 		from ffstudio.pages.batch import BatchPage
@@ -141,7 +143,67 @@ class MainWindow(FluentWindow):
 		factory = { 'success': InfoBar.success, 'warning': InfoBar.warning, 'error': InfoBar.error }.get(level, InfoBar.info)
 		factory(title, content, orient = Qt.Orientation.Horizontal, isClosable = True, position = InfoBarPosition.TOP_RIGHT, duration = 8000 if level == 'error' else 4000, parent = self)
 
+	def restore_window_state(self) -> None:
+		"""puts the window back the way it was closed, maximized or at its normal size and position"""
+		state = self.session.config.get('window_state') or {}
+		geometry = state.get('geometry')
+		if isinstance(geometry, list) and len(geometry) == 4 and all(isinstance(value, int) for value in geometry):
+			x, y, width, height = geometry
+			# only when the spot is still on a screen, a monitor may be gone since
+			if any(screen.availableGeometry().intersects(QRect(x, y, width, height)) for screen in QApplication.screens()):
+				self.setGeometry(x, y, max(width, self.minimumWidth()), max(height, self.minimumHeight()))
+		if state.get('maximized', True):
+			self.showMaximized()
+		else:
+			self.showNormal()
+
+	def save_window_state(self) -> None:
+		# normalGeometry is the restore size, also while the window is maximized
+		rect = self.normalGeometry() if self.isMaximized() else self.geometry()
+		self.session.config.set('window_state', { 'maximized': self.isMaximized(), 'geometry': [ rect.x(), rect.y(), rect.width(), rect.height() ] })
+
+	def setup_tray(self) -> None:
+		if self.tray:
+			return
+		self.tray = QSystemTrayIcon(self.windowIcon(), self)
+		self.tray.setToolTip(APP_NAME)
+		menu = QMenu(self)
+		menu.addAction('Show ' + APP_NAME, self.show_from_tray)
+		menu.addAction('Quit', self.quit_app)
+		self.tray.setContextMenu(menu)
+		self.tray.activated.connect(lambda reason: self.show_from_tray() if reason in (QSystemTrayIcon.ActivationReason.Trigger, QSystemTrayIcon.ActivationReason.DoubleClick) else None)
+		self.tray.show()
+
+	def show_from_tray(self) -> None:
+		if self.tray:
+			self.tray.hide()
+		self.setWindowState(self.windowState() & ~Qt.WindowState.WindowMinimized)
+		self.show()
+		self.raise_()
+		self.activateWindow()
+
+	def quit_app(self) -> None:
+		self.quitting = True
+		if self.tray:
+			self.tray.hide()
+		self.show()
+		self.close()
+		# a declined "Stop and quit?" leaves the app open
+		self.quitting = False
+
 	def closeEvent(self, event) -> None:
+		action = self.session.config.get('close_action') or 'close'
+		if not self.quitting and action != 'close':
+			self.save_window_state()
+			self.session.config.save()
+			event.ignore()
+			if action == 'tray' and QSystemTrayIcon.isSystemTrayAvailable():
+				self.setup_tray()
+				self.hide()
+			else:
+				self.showMinimized()
+			return
+		self.save_window_state()
 		if self.session.runner.is_running():
 			from qfluentwidgets import MessageBox
 			box = MessageBox('FaceFusion is still running', 'Stop "%s" and quit?' % self.session.task, self)

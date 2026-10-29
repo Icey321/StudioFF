@@ -45,9 +45,9 @@ def listen_for_instances(app : QApplication, opened : Dict[str, QWidget]) -> Non
 		window = opened.get('window')
 		# while still starting, the splash already shows it is on its way
 		if window:
-			if window.isMinimized():
-				# back to how it was, maximized stays maximized
-				window.setWindowState(window.windowState() & ~Qt.WindowState.WindowMinimized)
+			if window.isMinimized() or not window.isVisible():
+				# back to how it was, maximized stays maximized, also from the tray
+				window.show_from_tray()
 			window.raise_()
 			window.activateWindow()
 
@@ -119,8 +119,7 @@ def main() -> None:
 	else:
 		opened['window'] = window
 		splash.step()
-		# the size set in MainWindow is what the restore button goes back to
-		window.showMaximized()
+		window.restore_window_state()
 		QTimer.singleShot(0, splash.finish)
 
 	sys.exit(app.exec())

@@ -14,7 +14,7 @@ from qfluentwidgets import Action, BodyLabel, CaptionLabel, ComboBox, FluentIcon
 
 from ffstudio.config import APP_DIR, PREVIEW_DIR
 from ffstudio.faces import FACE_GROUPS, MASK_GROUPS, FaceProbe, describe_faces, describe_landmarks, describe_mask, face_landmarks, face_tag, read_mask
-from ffstudio.media import GIF_EXTENSIONS, VideoReader, extension, format_length, format_timecode, media_kind, read_frame, thumbnail, to_pixmap, video_length, write_image
+from ffstudio.media import GIF_EXTENSIONS, VideoReader, extension, format_length, format_timecode, is_converted, media_kind, read_frame, thumbnail, to_pixmap, usable_path, video_length, write_image
 from ffstudio.nsfw import BLOCKED_TITLE, NsfwDialog, show_blocked_bar
 from ffstudio.output_name import AUTOMATIC_TEMPLATE, build_output, unknown_tags
 from ffstudio.pages.models import format_size
@@ -28,7 +28,7 @@ DEFAULT_TEMPLATE = '{target}_{source}'
 # the placeholders of the first batch file names, read as the tags that replaced them
 OLD_PLACEHOLDERS = { '{target_name}': '{target}', '{source_name}': '{source}', '{target_extension}': '', '{index}': '{n}' }
 LIST_LIMIT = 500
-TARGET_FILES_FILTER = 'Images, videos and GIFs (*.jpg *.jpeg *.png *.webp *.bmp *.tif *.tiff *.mp4 *.mov *.mkv *.avi *.webm *.m4v *.wmv *.gif);;All files (*)'
+TARGET_FILES_FILTER = 'Images, videos and GIFs (*.jpg *.jpeg *.png *.webp *.avif *.heic *.heif *.bmp *.tif *.tiff *.mp4 *.mov *.mkv *.avi *.webm *.m4v *.wmv *.gif);;All files (*)'
 # a mark, the words before the names, and the mark's color in the light and dark theme (none follows the theme color)
 STATUS_LOOK =\
 {
@@ -1308,6 +1308,7 @@ class BatchPage(SourceSelection, QWidget):
 			self.session.notify.emit('info', 'Batch is running', 'Add files once the batch has finished or is stopped.')
 			return
 		folders = [ path for path in paths if os.path.isdir(path) ]
+		paths = [ path if path in folders else usable_path(path) for path in paths ]
 		files = [ path for path in paths if os.path.isfile(path) and media_kind(path) in [ 'image', 'video' ] ]
 		rejected = [ path for path in paths if path not in folders and path not in files ]
 		if rejected:
@@ -1678,9 +1679,10 @@ class BatchPage(SourceSelection, QWidget):
 		folder = self.target_dir.text().strip()
 		if os.path.isdir(folder):
 			return folder
-		if self.target_files:
-			return os.path.dirname(self.target_files[-1])
-		return os.path.dirname(self.source_paths[0]) if self.source_paths else os.path.expanduser('~')
+		for path in self.target_files[::-1] + self.source_paths:
+			if not is_converted(path):
+				return os.path.dirname(path)
+		return os.path.expanduser('~')
 
 	def browse(self, edit : LineEdit) -> None:
 		path = QFileDialog.getExistingDirectory(self, 'Choose folder', edit.text() or os.path.expanduser('~'))
@@ -1697,7 +1699,8 @@ class BatchPage(SourceSelection, QWidget):
 	def folder_targets(self) -> List[str]:
 		pattern = self.target_pattern()
 		# All files also matches text files and the like, only images and videos can be targets
-		return [ path for path in sorted(glob.glob(pattern)) if media_kind(path) in [ 'image', 'video' ] ] if pattern else []
+		# an avif counts as its png copy
+		return [ path for path in map(usable_path, sorted(glob.glob(pattern))) if media_kind(path) in [ 'image', 'video' ] ] if pattern else []
 
 	def targets(self) -> List[str]:
 		"""the files of the target folder, then the added files that still exist and are not in it"""
