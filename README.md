@@ -35,7 +35,7 @@ FaceFusion itself is not included: install FaceFusion v4 separately, then point 
 - **Mask**: shades the face mask FaceFusion will blend through, and redraws as you change mask settings.
 - **Models**: download the lite or full model set, see what's installed, and delete models to free space.
 - **Benchmark**: runs FaceFusion's benchmark on your hardware and exports the results as a shareable image.
-- **Settings**: point the app at an existing FaceFusion v4 or install it from scratch, and check GitHub for FaceFusion updates. It shows whether your FaceFusion is the version StudioFF was tested with, and can switch to that version, to the latest one or back again.
+- **FaceFusion**: point the app at an existing FaceFusion v4 or install it from scratch, and check GitHub for FaceFusion updates. It shows whether your FaceFusion is the version StudioFF was tested with, and can switch to that version, to the latest one or back again.
 - **System monitor**: graphics card, processor and memory use in the title bar, read with FaceFusion's own libraries. A bar under each reading goes from green to orange to red as it fills. It can be turned off in Settings.
 - **Custom look**: Auto, Light or Dark theme, with your own accent color for each (one click puts back the standard purple).
 - **Fluent design**: Windows 11 style throughout, a splash screen with a loading bar, and settings remembered between runs.
@@ -47,13 +47,12 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 ```
 
 This creates `.venv` for the UI (PySide6 + PySide6-Fluent-Widgets + OpenCV) and adds desktop and Start menu
-shortcuts. Then start **StudioFF** and open **Settings**:
+shortcuts. Then start **StudioFF** and open the **FaceFusion** page:
 
 - **Already have FaceFusion v4?** Pick its folder and the `python.exe` of its environment, or press **Detect**, then press **Save and load options**.
-- **No FaceFusion v4 yet?** Use the **Install FaceFusion v4** button in the app's **Settings** page. Note that FaceFusion v4 requires **Python 3.13+**, so a
+- **No FaceFusion v4 yet?** Use the **Install FaceFusion v4** button on the app's **FaceFusion** page. Note that FaceFusion v4 requires **Python 3.13+**, so a
   FaceFusion 3.x environment (Python 3.12) can't run it.
-
-FaceFusion also needs `ffmpeg`, `ffprobe` and `curl` on `PATH`. Settings checks for them.
+FaceFusion also needs `ffmpeg`, `ffprobe` and `curl` on `PATH`. The FaceFusion page checks for them.
 
 ## Layout
 
@@ -72,7 +71,7 @@ FaceFusion also needs `ffmpeg`, `ffprobe` and `curl` on `PATH`. Settings checks 
 | `ffstudio/faces.py` | Talks to `face_probe.py` and words its results |
 | `ffstudio/system_monitor.py` | Runs inside the FaceFusion environment and stays running: graphics card, processor and memory use once a second |
 | `ffstudio/monitor.py` | Talks to `system_monitor.py` and shows its numbers in the title bar |
-| `ffstudio/pages/*` | Studio, Batch, Models, Benchmark, Console, Settings |
+| `ffstudio/pages/*` | Studio, Batch, Models, Benchmark, Console, FaceFusion and Settings |
 
 App data (settings, cached schema, preview frames) lives in `%APPDATA%\StudioFF` (versions before v0.40 used `%APPDATA%\FaceFusionStudio`,
 which is moved over on the first start). The preview

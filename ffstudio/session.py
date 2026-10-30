@@ -242,7 +242,7 @@ class Session(QObject):
 			self.notify.emit('warning', 'Busy', 'FaceFusion is already running: ' + self.task)
 			return False
 		if not self.is_configured():
-			self.notify.emit('error', 'FaceFusion not set up', 'Choose the FaceFusion folder and Python environment in Settings.')
+			self.notify.emit('error', 'FaceFusion not set up', 'Choose the FaceFusion folder and Python environment on the FaceFusion page.')
 			return False
 		self.save()
 		# before set_task, the pages start their preview estimate when they hear that facefusion is busy
@@ -327,7 +327,7 @@ class Session(QObject):
 	def run_content_check(self, owner : str, targets : List[str], trim_start : Optional[int] = None, trim_end : Optional[int] = None) -> bool:
 		"""runs facefusion's own nsfw check on the targets without processing them, content_checked reports back to the owner"""
 		if not self.is_configured():
-			self.notify.emit('error', 'FaceFusion not set up', 'Choose the FaceFusion folder and Python environment in Settings.')
+			self.notify.emit('error', 'FaceFusion not set up', 'Choose the FaceFusion folder and Python environment on the FaceFusion page.')
 			return False
 		if self.runner.is_running():
 			self.notify.emit('warning', 'Busy', 'Already running: ' + self.task)

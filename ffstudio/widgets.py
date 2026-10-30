@@ -339,6 +339,28 @@ def star_icon() -> StarIcon:
 	return StarIcon()
 
 
+# two slanted F's on a 16 x 16 grid: each a stem, a top arm and a middle arm
+FACEFUSION_LINES = [ ((1.8, 13.5), (3.9, 2.5)), ((3.9, 2.5), (7.9, 2.5)), ((2.9, 8), (6.3, 8)), ((8.3, 13.5), (10.4, 2.5)), ((10.4, 2.5), (14.4, 2.5)), ((9.4, 8), (12.8, 8)) ]
+
+
+class FaceFusionIcon(StarIcon):
+	"""the FaceFusion page's FF in the side bar, in the text color like the other fluent icons"""
+
+	def render(self, painter : QPainter, rect, theme = Theme.AUTO, indexes = None, **attributes) -> None:
+		rect = QRectF(rect)
+		scale = min(rect.width(), rect.height()) / 16
+		painter.save()
+		painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+		color = QColor(255, 255, 255) if isDarkTheme() else QColor(0, 0, 0)
+		painter.setPen(QPen(color, 1.2 * scale, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+		path = QPainterPath()
+		for start, end in FACEFUSION_LINES:
+			path.moveTo(rect.topLeft() + QPointF(*start) * scale)
+			path.lineTo(rect.topLeft() + QPointF(*end) * scale)
+		painter.drawPath(path)
+		painter.restore()
+
+
 class StarButton(TransparentToolButton):
 	"""tool button with a star outline, filled in the theme color when on"""
 

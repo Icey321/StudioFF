@@ -104,12 +104,66 @@ def section_card(title : str, description : str, parent : QWidget) -> Tuple[QWid
 	return card, layout
 
 
+def title_row(title : str, parent : QWidget) -> Tuple[QHBoxLayout, QWidget]:
+	"""a page title whose row ends where the cards end, so controls added on the right line up with them"""
+	row = QHBoxLayout()
+	# the same right margin as the search box, it keeps clear of the scroll bar
+	row.setContentsMargins(24, 16, 34, 8)
+	row.addWidget(SubtitleLabel(title, parent))
+	row.addStretch(1)
+	box = QWidget(parent)
+	box.setMaximumWidth(1280 + 10)
+	box.setLayout(row)
+	return row, box
+
+
+def startup_switch(row : QHBoxLayout, text : str, tip : str, checked : bool, parent : QWidget) -> SwitchButton:
+	"""a labeled switch at the right end of a title row"""
+	label = BodyLabel(text, parent)
+	label.setToolTip(tip)
+	label.installEventFilter(ToolTipFilter(label))
+	switch = SwitchButton(parent)
+	switch.setChecked(checked)
+	row.addWidget(label)
+	row.addSpacing(12)
+	row.addWidget(switch)
+	return switch
+
+
+class ScrollPage(QWidget):
+	"""a page with a title and a scrolling column of cards, as wide as the Settings cards"""
+	def __init__(self, title : str, object_name : str, parent : Optional[QWidget] = None) -> None:
+		super().__init__(parent)
+		self.setObjectName(object_name)
+		root = QVBoxLayout(self)
+		root.setContentsMargins(0, 0, 0, 0)
+		root.setSpacing(0)
+		self.header, header_box = title_row(title, self)
+		root.addWidget(header_box)
+		self.scroll = SingleDirectionScrollArea(self, Qt.Orientation.Vertical)
+		self.scroll.setWidgetResizable(True)
+		self.scroll.enableTransparentBackground()
+		self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+		root.addWidget(self.scroll, 1)
+		self.content = QWidget()
+		self.content.setMaximumWidth(1280)
+		self.content.setStyleSheet('background: transparent')
+		# clicking empty space takes focus away from a control, so the wheel scrolls the page again
+		self.content.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
+		self.content_layout = QVBoxLayout(self.content)
+		self.content_layout.setContentsMargins(24, 8, 24, 24)
+		self.content_layout.setSpacing(12)
+		self.scroll.setWidget(self.content)
+
+
 class SetupPage(QWidget):
 	# the github answer arrives from a worker thread
 	update_checked = Signal(object)
 	studio_update_checked = Signal(object, bool)
 	# true while github has a newer StudioFF release than this one
 	studio_update_found = Signal(bool)
+	# true while github has newer FaceFusion commits or a newer release than the installed one
+	facefusion_update_found = Signal(bool)
 	studio_download_progress = Signal(int, int)
 	# the folder of the downloaded files, or an error
 	studio_download_finished = Signal(str, str)
@@ -130,11 +184,10 @@ class SetupPage(QWidget):
 		root = QVBoxLayout(self)
 		root.setContentsMargins(0, 0, 0, 0)
 		root.setSpacing(0)
-		header = QHBoxLayout()
-		header.setContentsMargins(24, 16, 34, 8)
-		header.addWidget(SubtitleLabel('Settings', self))
-		header.addStretch(1)
-		root.addLayout(header)
+		header, header_box = title_row('Settings', self)
+		root.addWidget(header_box)
+		self.startup_check_switch = startup_switch(header, 'Check for StudioFF Updates at Startup', 'Look for a new StudioFF each time the app opens. When one is out, an orange dot shows on the Settings gear and an Update button beside the version at the top', self.session.config.get('check_updates_at_startup') is not False, self)
+		self.startup_check_switch.checkedChanged.connect(self.on_startup_check_toggled)
 		# the search box spans the settings below it, as wide as the cards
 		self.search_edit = SearchLineEdit(self)
 		self.search_edit.setPlaceholderText('Search settings')
@@ -161,17 +214,18 @@ class SetupPage(QWidget):
 		layout = QVBoxLayout(content)
 		layout.setContentsMargins(24, 8, 24, 24)
 		layout.setSpacing(12)
-		# the FaceFusion sections share one card, apart from the StudioFF updates below them
-		self.facefusion_group = SimpleCardWidget(content)
-		group_layout = QVBoxLayout(self.facefusion_group)
-		group_layout.setContentsMargins(0, 0, 0, 0)
-		group_layout.setSpacing(12)
-		self.facefusion_cards = [ self.create_location_card(self.facefusion_group), self.create_install_card(self.facefusion_group), self.create_update_card(self.facefusion_group) ]
-		for card in self.facefusion_cards:
-			group_layout.addWidget(card)
-		layout.addWidget(self.facefusion_group)
-		self.section_cards = self.facefusion_cards + [ self.create_studio_update_card(content), self.create_appearance_card(content) ]
-		for card in self.section_cards[len(self.facefusion_cards):]:
+		# the FaceFusion sections, each its own card, on a page of their own just above Settings in the side bar
+		# they stay built and run from here, the rest of the app reaches them through this page
+		self.facefusion_page = ScrollPage('FaceFusion', 'facefusion', parent)
+		# its own startup check, apart from the StudioFF one in Settings
+		self.facefusion_startup_switch = startup_switch(self.facefusion_page.header, 'Check for FaceFusion Updates at Startup', 'Look for a new FaceFusion release each time the app opens. An orange dot on the FaceFusion icon means one is out', self.session.config.get('check_facefusion_updates_at_startup') is not False, self.facefusion_page)
+		self.facefusion_startup_switch.checkedChanged.connect(self.on_facefusion_startup_check_toggled)
+		page_content = self.facefusion_page.content
+		for card in [ self.create_update_card(page_content), self.create_location_card(page_content), self.create_install_card(page_content) ]:
+			self.facefusion_page.content_layout.addWidget(card)
+		self.facefusion_page.content_layout.addStretch(1)
+		self.section_cards = [ self.create_studio_update_card(content), self.create_appearance_card(content) ]
+		for card in self.section_cards:
 			layout.addWidget(card)
 		self.system_title = StrongBodyLabel('Performance & system', content)
 		layout.addSpacing(6)
@@ -213,7 +267,6 @@ class SetupPage(QWidget):
 		for card in self.section_cards:
 			haystack = self.card_text(card)
 			card.setVisible(all(word in haystack for word in text.split()))
-		self.facefusion_group.setVisible(not all(card.isHidden() for card in self.facefusion_cards))
 		self.system_panel.set_filter(text)
 		has_system = self.system_panel.has_visible_cards()
 		self.system_title.setVisible(has_system)
@@ -495,7 +548,7 @@ class SetupPage(QWidget):
 	# updates
 
 	def create_update_card(self, parent : QWidget) -> QWidget:
-		card, layout = section_card('FaceFusion updates', 'Checks the FaceFusion v4 folder this app drives against its GitHub repository.', parent)
+		card, layout = section_card('FaceFusion updates', 'Checks the FaceFusion v4 folder this app drives against its GitHub repository. An orange dot on the FaceFusion icon means a newer release is out.', parent)
 		self.windows_label = BodyLabel(read_windows_version(), card)
 		self.windows_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
 		layout.addLayout(form_row('Windows', [ self.windows_label ], card))
@@ -514,7 +567,7 @@ class SetupPage(QWidget):
 		buttons = QHBoxLayout()
 		buttons.addSpacing(138)
 		self.update_button = PushButton(FluentIcon.UPDATE, 'Check for FaceFusion Updates', card)
-		self.update_button.clicked.connect(self.check_for_updates)
+		self.update_button.clicked.connect(lambda: self.check_for_updates())
 		self.github_link = HyperlinkButton(github_page(''), 'Open GitHub', card, FluentIcon.GITHUB)
 		self.update_status = StatusLine(card)
 		self.update_status.hide()
@@ -610,10 +663,12 @@ class SetupPage(QWidget):
 		self.tested_compare = {}
 		self.github_label.setText('Not checked yet')
 		self.update_status.hide()
+		# the next check tells again whether github is ahead of the new commit
+		self.facefusion_update_found.emit(False)
 		self.refresh_installed_build()
 		if result.get('requirements_changed'):
 			self.tested_status.set_status('warning', 'Switched. FaceFusion needs other packages now: click Install FaceFusion v4 above, it skips the download.')
-			self.session.notify.emit('warning', 'FaceFusion switched', 'Its requirements changed. Click Install FaceFusion v4 in Settings to update its packages.')
+			self.session.notify.emit('warning', 'FaceFusion switched', 'Its requirements changed. Click Install FaceFusion v4 on the FaceFusion page to update its packages.')
 		else:
 			self.session.notify.emit('success', 'FaceFusion switched', 'Now on commit %s.' % result.get('commit', '')[:7])
 		# options can differ between commits
@@ -641,7 +696,25 @@ class SetupPage(QWidget):
 		self.installed_label.setToolTip(build['commit'])
 		self.show_tested_status()
 
-	def check_for_updates(self) -> None:
+	def check_for_updates(self, quiet : bool = False) -> None:
+		"""quiet is the check at startup, it reads the build off the ui thread, only fills in the card and the dot and stays silent when something is missing"""
+		if not self.update_button.isEnabled():
+			return
+		if quiet:
+			root = self.session.facefusion_root
+			if not is_facefusion_root(root):
+				return
+			self.update_button.setEnabled(False)
+
+			def read_and_fetch() -> None:
+				build = read_facefusion_build(root)
+				self.build_read.emit(root, build)
+				if build.get('commit'):
+					self.fetch_update(dict(build, repository = build['repository'] or DEFAULT_REPOSITORY), quiet)
+				else:
+					self.update_checked.emit({ 'error': 'not a git checkout', 'quiet': True })
+			threading.Thread(target = read_and_fetch, daemon = True).start()
+			return
 		self.refresh_installed_build()
 		if not self.installed_build:
 			self.update_status.set_status('error', 'Set the FaceFusion folder first.')
@@ -654,20 +727,22 @@ class SetupPage(QWidget):
 		self.update_status.show()
 		threading.Thread(target = self.fetch_update, args = (build,), daemon = True).start()
 
-	def fetch_update(self, build : Dict[str, str]) -> None:
+	def fetch_update(self, build : Dict[str, str], quiet : bool = False) -> None:
 		try:
 			remote = fetch_github_build(build['repository'], build['branch'], build['commit'])
 			if build['commit']:
 				remote['tested'] = compare_github_commits(build['repository'], TESTED_FACEFUSION_COMMIT, build['commit'])
 		except Exception as exception:
 			remote = { 'error': str(exception) }
+		remote['quiet'] = quiet
 		self.update_checked.emit(remote)
 
 	def on_update_checked(self, remote : Dict[str, Any]) -> None:
 		self.update_button.setEnabled(True)
 		if remote.get('error'):
-			self.github_label.setText('Not checked yet')
-			self.update_status.set_status('error', 'Could not reach GitHub: %s' % remote['error'])
+			if not remote.get('quiet'):
+				self.github_label.setText('Not checked yet')
+				self.update_status.set_status('error', 'Could not reach GitHub: %s' % remote['error'])
 			return
 		build = self.installed_build
 		self.tested_compare = remote.get('tested') or {}
@@ -678,6 +753,12 @@ class SetupPage(QWidget):
 		self.github_label.setText(text or 'Nothing found')
 		self.github_label.setToolTip(remote['commit'])
 		status, behind = remote['status'], remote['behind']
+		newer_release = bool(remote['release']) and bool(version_tuple(build.get('version', '').lstrip('v'))) and version_tuple(build['version'].lstrip('v')) < version_tuple(remote['release'].lstrip('v'))
+		# like the StudioFF dot, only a newer release counts, new commits come out almost every day
+		newer = bool(remote['release']) and bool(build.get('version')) and is_newer_version(remote['release'], build['version'])
+		self.facefusion_update_found.emit(newer)
+		# the startup check shows its line only when there is something new
+		self.update_status.setVisible(not remote.get('quiet') or newer or self.update_status.isVisible())
 		if status == 'identical':
 			self.update_status.set_status('success', 'You have the most current version installed.')
 		elif status == 'ahead':
@@ -686,7 +767,7 @@ class SetupPage(QWidget):
 			self.update_status.set_status('warning', 'Your copy differs from GitHub, which has %d commit%s you do not.' % (behind, '' if behind == 1 else 's'))
 		elif status == 'behind':
 			self.update_status.set_status('success', 'Your copy is newer than the %s branch on GitHub.' % remote['branch'])
-		elif remote['release'] and version_tuple(build.get('version', '').lstrip('v')) and version_tuple(build['version'].lstrip('v')) < version_tuple(remote['release'].lstrip('v')):
+		elif newer_release:
 			self.update_status.set_status('warning', 'Update available: release %s.' % remote['release'])
 		elif remote['release'] and not build.get('commit'):
 			self.update_status.set_status('info', 'This FaceFusion folder is not a git checkout, so it cannot be compared commit by commit.')
@@ -703,10 +784,6 @@ class SetupPage(QWidget):
 		self.studio_release_label = BodyLabel('Not checked yet', card)
 		self.studio_release_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
 		layout.addLayout(form_row('Latest release', [ self.studio_release_label ], card))
-		self.startup_check_switch = SwitchButton(card)
-		self.startup_check_switch.setChecked(self.session.config.get('check_updates_at_startup') is not False)
-		self.startup_check_switch.checkedChanged.connect(self.on_startup_check_toggled)
-		layout.addLayout(form_row('Check at startup', [ BodyLabel('Look for a new StudioFF each time the app opens, and show an Update button beside the version at the top', card), self.startup_check_switch ], card))
 		buttons = QHBoxLayout()
 		buttons.addSpacing(138)
 		self.studio_install_button = PrimaryPushButton(FluentIcon.DOWNLOAD, 'Update StudioFF', card)
@@ -739,6 +816,10 @@ class SetupPage(QWidget):
 
 	def on_startup_check_toggled(self, checked : bool) -> None:
 		self.session.config.set('check_updates_at_startup', checked)
+		self.session.config.save()
+
+	def on_facefusion_startup_check_toggled(self, checked : bool) -> None:
+		self.session.config.set('check_facefusion_updates_at_startup', checked)
 		self.session.config.save()
 
 	def check_studio_update(self, quiet : bool = False) -> None:
@@ -840,7 +921,7 @@ class SetupPage(QWidget):
 	# appearance
 
 	def create_appearance_card(self, parent : QWidget) -> QWidget:
-		card, layout = section_card('Appearance and behaviour', '', parent)
+		card, layout = section_card('Appearance and behavior', '', parent)
 		themes = QWidget(card)
 		themes_layout = QHBoxLayout(themes)
 		themes_layout.setContentsMargins(0, 0, 0, 0)

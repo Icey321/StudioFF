@@ -41,6 +41,7 @@ class MainWindow(FluentWindow):
 		from ffstudio.pages.setup import SetupPage
 		splash.step()
 		from ffstudio.pages.studio import StudioPage
+		from ffstudio.widgets import FaceFusionIcon
 
 		splash.step('Building the Studio page…')
 		self.studio_page = StudioPage(session, self)
@@ -61,6 +62,8 @@ class MainWindow(FluentWindow):
 		self.addSubInterface(self.models_page, FluentIcon.CLOUD_DOWNLOAD, 'Models')
 		self.addSubInterface(self.benchmark_page, FluentIcon.SPEED_HIGH, 'Benchmark')
 		self.addSubInterface(self.console_page, FluentIcon.COMMAND_PROMPT, 'Console')
+		self.facefusion_page = self.setup_page.facefusion_page
+		self.addSubInterface(self.facefusion_page, FaceFusionIcon(), 'FaceFusion', NavigationItemPosition.BOTTOM)
 		self.addSubInterface(self.setup_page, FluentIcon.SETTING, 'Settings', NavigationItemPosition.BOTTOM)
 		splash.step()
 
@@ -95,14 +98,12 @@ class MainWindow(FluentWindow):
 		session.schema_changed.connect(self.system_monitor.restart)
 		self.setup_page.monitor_toggled.connect(self.set_monitor_shown)
 		# orange dot on the Setup gear while a newer StudioFF release is out
-		setup_item = self.navigationInterface.widget(self.setup_page.objectName())
-		self.update_dot = DotInfoBadge.custom(UPDATE_DOT_COLOR, UPDATE_DOT_COLOR, setup_item)
-		self.update_dot.setFixedSize(8, 8)
-		self.update_dot.move(24, 7)
-		self.update_dot.setToolTip('A StudioFF update is available')
-		self.update_dot.hide()
+		self.update_dot = self.add_update_dot(self.setup_page, 'A StudioFF update is available')
 		self.setup_page.studio_update_found.connect(self.update_dot.setVisible)
 		self.setup_page.studio_update_found.connect(self.show_update_button)
+		# and on the FaceFusion FF while GitHub has a newer FaceFusion release
+		self.facefusion_dot = self.add_update_dot(self.facefusion_page, 'A FaceFusion update is available')
+		self.setup_page.facefusion_update_found.connect(self.facefusion_dot.setVisible)
 		icon_path = os.path.join(APP_DIR, 'assets', 'icon.png')
 		if os.path.exists(icon_path):
 			self.setWindowIcon(QIcon(icon_path))
@@ -113,6 +114,16 @@ class MainWindow(FluentWindow):
 		session.notify.connect(self.show_notification)
 		session.schema_loading.connect(self.on_schema_loading)
 		QTimer.singleShot(300, self.startup)
+
+	def add_update_dot(self, page, tip : str) -> DotInfoBadge:
+		"""small orange dot on the top right of a page's side bar icon, hidden until an update is found"""
+		item = self.navigationInterface.widget(page.objectName())
+		dot = DotInfoBadge.custom(UPDATE_DOT_COLOR, UPDATE_DOT_COLOR, item)
+		dot.setFixedSize(8, 8)
+		dot.move(24, 7)
+		dot.setToolTip(tip)
+		dot.hide()
+		return dot
 
 	def center(self) -> None:
 		screen = QApplication.primaryScreen()
@@ -136,13 +147,15 @@ class MainWindow(FluentWindow):
 		if self.session.config.get('check_updates_at_startup') is not False:
 			self.setup_page.check_studio_update(quiet = True)
 		if not self.session.is_configured():
-			self.switchTo(self.setup_page)
+			self.switchTo(self.facefusion_page)
 			self.show_notification('info', 'Welcome', 'Point the app at your FaceFusion v4 folder, or install v4 from here.')
 			return
 		if self.session.config.get('show_system_monitor'):
 			self.system_monitor.start()
 		# the python check runs off the ui thread and fills in the session's python version
 		self.setup_page.refresh_status()
+		if self.session.config.get('check_facefusion_updates_at_startup') is not False:
+			self.setup_page.check_for_updates(quiet = True)
 		self.session.refresh_schema()
 		# the restored target's check waits for the window, every page should see it run
 		self.studio_page.auto_check_content()

@@ -70,6 +70,7 @@ DEFAULT_CONFIG : Dict[str, Any] =\
 	'close_action': 'close',
 	# look for a newer studioff release when the app opens, and say so with an Update Now button
 	'check_updates_at_startup': True,
+	'check_facefusion_updates_at_startup': True,
 	# how the window was left: maximized, and the normal size and position as [ x, y, width, height ]
 	'window_state': {},
 	'source_paths': [],
