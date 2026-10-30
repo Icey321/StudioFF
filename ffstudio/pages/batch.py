@@ -550,7 +550,7 @@ class OutputDelegate(ListItemDelegate):
 
 
 class BatchPage(SourceSelection, QWidget):
-	SOURCE_KEYS = ('batch_source_paths', 'batch_unused_source_paths', 'batch_source_names')
+	SOURCE_KEYS = ('batch_source_paths', 'batch_unused_source_paths', 'batch_source_names', 'batch_source_groups')
 	# Batch makes whole files, there is no timeline frame to name them after
 	TAG_DESCRIPTIONS = { 'frame': 'Always 0 here, Batch makes whole videos rather than one frame' }
 
@@ -673,9 +673,12 @@ class BatchPage(SourceSelection, QWidget):
 		hint = CaptionLabel('Runs every selected face against every target, one output at a time, with the processors and options in the Options panel. Selected audio goes into every run.', self)
 		hint.setTextColor('#707070', '#9a9a9a')
 		title.addWidget(elastic(hint), 1)
-		self.settings_button = TogglePushButton(FluentIcon.SETTING, 'Options', self)
+		# always in the accent color, its words say what a click does
+		self.settings_button = PrimaryPushButton(FluentIcon.SETTING, 'Show Options', self)
 		self.settings_button.setToolTip('Show or hide the processors and options of the batch on the right')
 		self.settings_button.installEventFilter(ToolTipFilter(self.settings_button))
+		# as wide as its longer label, so the words changing never moves it
+		self.settings_button.setFixedWidth(max(self.settings_button.sizeHint().width(), self.settings_button.fontMetrics().horizontalAdvance('Hide Options') + 56))
 		title.addWidget(self.settings_button)
 		layout.addLayout(title)
 
@@ -695,9 +698,8 @@ class BatchPage(SourceSelection, QWidget):
 		# a double click on the grip splits the page in half again
 		self.splitter.default_sizes = lambda total: [ total // 2, total - total // 2 ]
 		self.splitter.reset.connect(lambda: self.session.config.set('batch_split', self.splitter.sizes()))
-		self.settings_button.setChecked(session.config.get('batch_settings_open') is not False)
-		self.settings_column.setVisible(self.settings_button.isChecked())
-		self.settings_button.toggled.connect(self.toggle_settings)
+		self.show_settings(session.config.get('batch_settings_open') is not False)
+		self.settings_button.clicked.connect(lambda: self.toggle_settings(not self.settings_column.isVisibleTo(self)))
 
 		self.source_card = SourceCard(self, 'Source faces', 'Drop face images (or audio for lip sync) here or click to browse\nLeave empty for processors that need no source')
 		copy_sources = TransparentPushButton(FluentIcon.COPY, 'Copy Faces from Studio', self.source_card)
@@ -918,8 +920,12 @@ class BatchPage(SourceSelection, QWidget):
 		self.settings_column = SettingsColumn(self.store, self.splitter, (copy_button,), expansion_key = 'batch_groups_expanded', preset_key = 'batch_preset')
 		return self.settings_column
 
-	def toggle_settings(self, shown : bool) -> None:
+	def show_settings(self, shown : bool) -> None:
 		self.settings_column.setVisible(shown)
+		self.settings_button.setText('Hide Options' if shown else 'Show Options')
+
+	def toggle_settings(self, shown : bool) -> None:
+		self.show_settings(shown)
 		self.session.config.set('batch_settings_open', shown)
 
 	def create_preview_card(self, parent : QWidget) -> QWidget:

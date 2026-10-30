@@ -8,12 +8,12 @@ from typing import Dict, List, Optional, Tuple
 
 import cv2
 from PySide6.QtCore import QEvent, QPoint, QRectF, QSize, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QColor, QDesktopServices, QPainter
+from PySide6.QtGui import QColor, QDesktopServices, QPainter, QPixmap
 from PySide6.QtWidgets import QFileDialog, QGridLayout, QHBoxLayout, QSizePolicy, QVBoxLayout, QWidget
 from qfluentwidgets import Action, BodyLabel, CaptionLabel, FlowLayout, FluentIcon, Flyout, FlyoutAnimationType, FlyoutViewBase, IndeterminateProgressBar, LineEdit, PrimaryPushButton, ProgressBar, PushButton, RoundMenu, ScrollArea, SearchLineEdit, SegmentedWidget, SimpleCardWidget, SingleDirectionScrollArea, Slider, StrongBodyLabel, SubtitleLabel, TogglePushButton, ToolTipFilter, TransparentPushButton, TransparentToolButton, themeColor
 
 from ffstudio.config import APP_DIR, PREVIEW_DIR
-from ffstudio.face_mapping import FACE_PROCESSORS, FRAME_PROCESSORS, LEAVE, PEOPLE_FILE, SELECTED, FaceMappingCard, box_overlap, is_kept, is_mapped, merge_people, people_dir, person_color, person_name, plan_passes
+from ffstudio.face_mapping import FACE_PROCESSORS, FRAME_PROCESSORS, GROUP_PREFIX, LEAVE, PEOPLE_FILE, SELECTED, FaceMappingCard, box_overlap, group_images, group_value, is_kept, is_mapped, merge_people, people_dir, person_color, person_name, plan_passes
 from ffstudio.faces import FACE_GROUPS, MASK_GROUPS, FaceProbe, describe_faces, describe_landmarks, describe_mask, face_landmarks, face_tag, faces_text_color, no_face, read_mask
 from ffstudio.media import VideoReader, animation_extension, browse_dir, is_animation, format_length, format_seconds, format_timecode, media_kind, read_frame, read_image, thumbnail, to_pixmap, usable_path, write_image
 from ffstudio.nsfw import BLOCKED_STATUS, NsfwDialog, describe_result, show_blocked_bar
@@ -21,7 +21,7 @@ from ffstudio.option_panel import FavoritesPanel, OptionPanel
 from ffstudio.output_name import AUTOMATIC_TEMPLATE, NAME_EXAMPLES, NAME_TAGS, build_output, build_output_path, unknown_tags
 from ffstudio.presets import PresetBar
 from ffstudio.session import CONTENT_RESULT_PREFIX, Session, folder_is_writable
-from ffstudio.widgets import DriveLabel, PreviewView, ProcessorArea, ProcessorButton, Splitter, Thumbnail, add_edit_button, attach_landmarks_cycle, collect_drop_paths, guard_wheel, landmarks_mode
+from ffstudio.widgets import DriveLabel, GroupChip, PreviewView, ProcessorArea, ProcessorButton, Splitter, Thumbnail, add_edit_button, attach_landmarks_cycle, collect_drop_paths, guard_wheel, landmarks_mode
 
 STUDIO_GROUPS = [ 'face_selector', 'face_masker', 'face_detector', 'face_aligner', 'face_tracker', 'output_creation', 'frame_extraction', 'frame_distribution', 'voice_extractor', 'workflow' ]
 # settings that cannot change how a single preview frame looks
@@ -125,24 +125,82 @@ def run_tag_values(session : Session) -> Dict[str, str]:
 class SourceSelection:
 	"""the sources behind a SourceCard: which there are, which are used and what they are called
 
-	the page sets session and source_card, and gets on_sources_changed('list' | 'names' | 'selection') after each change
+	the page sets session and source_card, and gets on_sources_changed('list' | 'names' | 'selection' | 'groups') after each change
 	"""
-	SOURCE_KEYS = ('source_paths', 'unused_source_paths', 'source_names')
+	SOURCE_KEYS = ('source_paths', 'unused_source_paths', 'source_names', 'source_groups')
 
 	def load_sources(self) -> None:
-		paths_key, unused_key, names_key = self.SOURCE_KEYS
+		paths_key, unused_key, names_key, groups_key = self.SOURCE_KEYS
 		config = self.session.config
 		self.source_paths : List[str] = [ path for path in config.get(paths_key) or [] if os.path.exists(path) ]
 		self.unused_sources : List[str] = [ path for path in config.get(unused_key) or [] if path in self.source_paths ]
 		# names given to sources by clicking the name under a thumbnail, {source} in the file name uses them
 		self.source_names : Dict[str, str] = { path: name for path, name in (config.get(names_key) or {}).items() if path in self.source_paths }
+		# faces grouped with the Group button, {id, name, paths}, the id stays when the group is renamed so a face mapping keeps it
+		self.source_groups : List[dict] = [ dict(group) for group in config.get(groups_key) or [] ]
+		self.prune_groups()
 		self.source_anchor = ''
 
 	def store_sources(self) -> None:
-		paths_key, unused_key, names_key = self.SOURCE_KEYS
+		paths_key, unused_key, names_key, groups_key = self.SOURCE_KEYS
 		self.session.config.set(paths_key, self.source_paths)
 		self.session.config.set(unused_key, self.unused_sources)
 		self.session.config.set(names_key, self.source_names)
+		self.session.config.set(groups_key, self.source_groups)
+
+	def prune_groups(self) -> None:
+		"""a removed source leaves its groups, a group with no face left goes"""
+		groups = [ dict(group, paths = [ path for path in group.get('paths') or [] if path in self.source_paths ]) for group in self.source_groups ]
+		self.source_groups = [ group for group in groups if group.get('paths') ]
+
+	def source_choices(self) -> List[Tuple[str, str]]:
+		"""what a face mapping can give a person besides Leave unchanged and Selected sources: the groups, then each face"""
+		choices = [ (group_value(group), '%s (%d faces)' % (group.get('name'), len(group_images(group, self.source_paths)))) for group in self.source_groups ]
+		return choices + [ (path, self.source_name(path)) for path in self.source_paths if media_kind(path) == 'image' ]
+
+	def source_pixmap(self, path : str) -> QPixmap:
+		"""the picture of a source as its thumbnail in the Source card shows it, empty when there is none"""
+		item = next((item for item in getattr(self.source_card, 'thumbnails', []) if item.path == path), None)
+		return item.preview.pixmap if item and item.preview.pixmap else QPixmap()
+
+	def used_images(self) -> List[str]:
+		return [ path for path in self.active_sources() if media_kind(path) == 'image' ]
+
+	def group_sources(self) -> None:
+		"""puts the faces in use into a new group, named after the first free number"""
+		paths = self.used_images()
+		if len(paths) < 2:
+			return
+		names = { group.get('name') for group in self.source_groups }
+		number = next(number for number in range(1, len(names) + 2) if 'Group %d' % number not in names)
+		group_id = max([ int(group.get('id') or 0) for group in self.source_groups ] + [ 0 ]) + 1
+		self.source_groups.append({ 'id': group_id, 'name': 'Group %d' % number, 'paths': paths })
+		self.store_sources()
+		self.source_card.refresh_groups()
+		self.on_sources_changed('groups')
+
+	def rename_group(self, group_id : int, name : str) -> None:
+		for group in self.source_groups:
+			if group.get('id') == group_id and name:
+				group['name'] = name
+		self.store_sources()
+		self.source_card.refresh_groups()
+		self.on_sources_changed('groups')
+
+	def remove_group(self, group_id : int) -> None:
+		"""ungroups, the faces stay"""
+		self.source_groups = [ group for group in self.source_groups if group.get('id') != group_id ]
+		self.store_sources()
+		self.source_card.refresh_groups()
+		# a person mapped to the group is left unchanged now, which changes the run
+		self.on_sources_changed('list')
+
+	def select_group(self, group_id : int) -> None:
+		"""uses the faces of a group and no other face, the audio picked stays"""
+		group = next((group for group in self.source_groups if group.get('id') == group_id), None)
+		if group:
+			used = { path for path in self.active_sources() if media_kind(path) != 'image' } | set(group.get('paths'))
+			self.set_unused_sources([ path for path in self.source_paths if path not in used ])
 
 	def on_sources_changed(self, change : str) -> None:
 		pass
@@ -167,6 +225,7 @@ class SourceSelection:
 		self.source_paths = paths
 		self.unused_sources = [ path for path in self.unused_sources if path in paths ]
 		self.source_names = { path: name for path, name in self.source_names.items() if path in paths }
+		self.prune_groups()
 		self.store_sources()
 		self.source_card.refresh(paths)
 		self.on_sources_changed('list')
@@ -233,6 +292,9 @@ class SourceCard(SimpleCardWidget):
 		self.count_label.installEventFilter(ToolTipFilter(self.count_label))
 		self.count_label.setTextColor('#707070', '#9a9a9a')
 		header.insertWidget(1, self.count_label, 1)
+		self.group_button = tool_button(FluentIcon.PEOPLE, 'Group the selected faces, a group can be picked again with one click' + (' and given to a person in Face mapping' if hasattr(page, 'mapping_passes') else ''), self)
+		self.group_button.clicked.connect(self.page.group_sources)
+		header.addWidget(self.group_button)
 		self.select_button = tool_button(FluentIcon.CHECKBOX, 'Use all sources / none', self)
 		self.select_button.clicked.connect(self.page.toggle_all_sources)
 		add_button = tool_button(FluentIcon.ADD, 'Add face images or audio', self)
@@ -262,6 +324,15 @@ class SourceCard(SimpleCardWidget):
 		self.strip_scroll.setWidget(self.strip)
 		layout.addWidget(self.strip_scroll)
 
+		# the groups made with the Group button, as pills under the thumbnails
+		self.groups = QWidget(self)
+		self.groups_flow = FlowLayout(self.groups, needAni = False)
+		self.groups_flow.setContentsMargins(0, 0, 0, 0)
+		self.groups_flow.setHorizontalSpacing(8)
+		self.groups_flow.setVerticalSpacing(6)
+		layout.addWidget(self.groups)
+		self.chips : List[GroupChip] = []
+
 	def browse(self) -> None:
 		paths, _ = QFileDialog.getOpenFileNames(self, 'Choose source faces or audio', self.page.last_dir(), ';;'.join(SOURCE_FILTERS), self.browse_filter)
 		if paths:
@@ -290,12 +361,33 @@ class SourceCard(SimpleCardWidget):
 		self.empty.setVisible(not paths)
 		self.strip_scroll.setVisible(bool(paths))
 		self.select_button.setVisible(len(paths) > 1)
-		self.refresh_count()
+		self.group_button.setVisible(len([ path for path in paths if media_kind(path) == 'image' ]) > 1)
+		self.refresh_groups()
 		self.strip_scroll.fit()
+
+	def refresh_groups(self) -> None:
+		for chip in self.chips:
+			chip.hide()
+		self.groups_flow.takeAllWidgets()
+		self.chips = []
+		pixmaps = { item.path: item.preview.pixmap for item in getattr(self, 'thumbnails', []) }
+		for group in self.page.source_groups:
+			chip = GroupChip(group.get('id'), group.get('name'), [ pixmaps.get(path, QPixmap()) for path in group.get('paths') ], self.groups)
+			chip.clicked.connect(self.page.select_group)
+			chip.renamed.connect(self.page.rename_group)
+			chip.removed.connect(self.page.remove_group)
+			self.groups_flow.addWidget(chip)
+			self.chips.append(chip)
+		self.groups.setVisible(bool(self.chips))
+		self.refresh_selection()
 
 	def refresh_selection(self) -> None:
 		for item in self.thumbnails:
 			item.set_selected(item.path not in self.page.unused_sources)
+		used = set(self.page.used_images())
+		for chip, group in zip(self.chips, self.page.source_groups):
+			chip.set_current(set(group.get('paths')) == used)
+		self.group_button.setEnabled(len(used) > 1)
 		self.refresh_count()
 
 	def refresh_count(self) -> None:
@@ -1158,12 +1250,11 @@ class StudioPage(SourceSelection, QWidget):
 		return os.path.expanduser('~')
 
 	def on_sources_changed(self, change : str) -> None:
-		if change == 'selection':
-			self.mapping_card.refresh_text()
-		else:
-			self.mapping_card.refresh_sources()
+		# a new selection too, Selected sources in the dropdowns shows the faces in use
+		self.mapping_card.refresh_sources()
 		self.refresh_name_preview()
-		if change != 'names':
+		# a new or renamed group changes no run
+		if change not in [ 'names', 'groups' ]:
 			self.schedule_live_preview()
 
 	def set_target(self, path : str) -> None:
@@ -1924,7 +2015,7 @@ class StudioPage(SourceSelection, QWidget):
 		menu.addAction(Action(FluentIcon.EDIT, 'Rename %s' % person_name(people, person), triggered = lambda: (row.name_edit.setFocus(), row.name_edit.selectAll())))
 		sources = RoundMenu('Use source', self)
 		sources.setIcon(FluentIcon.PEOPLE)
-		choices = [ (SELECTED, 'Selected sources') ] + [ (path, self.source_name(path)) for path in self.source_paths if media_kind(path) == 'image' ]
+		choices = [ (SELECTED, 'Selected sources') ] + self.source_choices()
 		for value, label in choices:
 			action = Action(label, triggered = lambda _ = False, value = value: row.set_source(value))
 			action.setCheckable(True)
@@ -1966,6 +2057,8 @@ class StudioPage(SourceSelection, QWidget):
 	def source_label(self, choice : str) -> str:
 		if choice == SELECTED:
 			return 'selected sources'
+		if choice.startswith(GROUP_PREFIX):
+			return next((group.get('name') for group in self.source_groups if group_value(group) == choice), 'missing group')
 		return self.source_name(choice) if choice in self.source_paths else 'missing source'
 
 	def find_people(self) -> None:
@@ -2019,7 +2112,7 @@ class StudioPage(SourceSelection, QWidget):
 		if not people or not any(processor in FACE_PROCESSORS for processor in self.session.processors()):
 			return []
 		images = [ path for path in self.active_sources() if media_kind(path) == 'image' ]
-		return plan_passes(people, images, self.source_paths, float(self.session.values.get('reference_face_distance') or 0.3))
+		return plan_passes(people, images, self.source_paths, float(self.session.values.get('reference_face_distance') or 0.3), self.source_groups)
 
 	def start_chain(self, passes : List[dict], target : str, output_path : str, info : dict, preview : bool) -> None:
 		"""finds each mapped person in the target first, then runs the steps that swap them"""

@@ -8,8 +8,8 @@ import numpy
 
 from PySide6.QtCore import QEvent, QMimeData, QObject, QPoint, QPointF, QRect, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QDrag, QDragEnterEvent, QDropEvent, QFont, QFontMetrics, QIcon, QImage, QPainter, QPainterPath, QPen, QPixmap, QPolygonF
-from PySide6.QtWidgets import QAbstractSpinBox, QApplication, QFrame, QHBoxLayout, QLineEdit, QPushButton, QSizePolicy, QSplitter, QSplitterHandle, QVBoxLayout, QWidget
-from qfluentwidgets import CaptionLabel, CompactDoubleSpinBox, CompactSpinBox, FlowLayout, FluentIcon, FluentIconBase, Flyout, FlyoutAnimationType, IconWidget, SimpleCardWidget, StrongBodyLabel, Theme, TogglePushButton, ToolTipFilter, TransparentToolButton, isDarkTheme, themeColor
+from PySide6.QtWidgets import QAbstractSpinBox, QApplication, QFrame, QHBoxLayout, QLineEdit, QPushButton, QSizePolicy, QSplitter, QSplitterHandle, QStyle, QStyleOptionButton, QStylePainter, QVBoxLayout, QWidget
+from qfluentwidgets import CaptionLabel, ComboBox, CompactDoubleSpinBox, CompactSpinBox, FlowLayout, FluentIcon, FluentIconBase, Flyout, FlyoutAnimationType, IconWidget, SimpleCardWidget, StrongBodyLabel, Theme, TogglePushButton, ToolTipFilter, TransparentToolButton, isDarkTheme, themeColor
 from qfluentwidgets.components.widgets.line_edit import LineEditButton
 from qfluentwidgets.components.widgets.spin_box import CompactSpinBoxBase, SpinIcon
 
@@ -1122,6 +1122,225 @@ class Thumbnail(QFrame):
 		else:
 			state = 'Used as a source.' if selected else 'Not used.'
 			self.preview.setToolTip('%s\n%s\nClick to use only this one, Ctrl+click to add or remove it, Shift+click to pick a range.' % (self.path, state))
+
+
+def round_pixmap(pixmap : QPixmap, size : int, ratio : int = 2) -> QPixmap:
+	"""the picture cut to a circle of size, drawn at twice the pixels so it stays sharp"""
+	result = QPixmap(size * ratio, size * ratio)
+	result.fill(Qt.GlobalColor.transparent)
+	if pixmap.isNull():
+		return result
+	scaled = pixmap.scaled(size * ratio, size * ratio, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation)
+	painter = QPainter(result)
+	painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+	path = QPainterPath()
+	path.addEllipse(QRectF(0, 0, size * ratio, size * ratio))
+	painter.setClipPath(path)
+	painter.drawPixmap((size * ratio - scaled.width()) // 2, (size * ratio - scaled.height()) // 2, scaled)
+	painter.end()
+	result.setDevicePixelRatio(ratio)
+	return result
+
+
+FACE_ICON = 22
+FACE_ICON_OVERLAP = 7
+FACE_ICON_SLOTS = 3
+# every face icon is as wide as three overlapping faces, so the names after them line up
+FACE_ICON_SIZE = QSize(FACE_ICON + (FACE_ICON_SLOTS - 1) * (FACE_ICON - FACE_ICON_OVERLAP), FACE_ICON)
+
+
+def faces_icon(pixmaps : List[QPixmap]) -> QIcon:
+	"""up to three round faces overlapping from the left, like the group pills"""
+	ratio = 2
+	result = QPixmap(FACE_ICON_SIZE * ratio)
+	result.fill(Qt.GlobalColor.transparent)
+	painter = QPainter(result)
+	painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+	# a ring in the menu color keeps the overlapping faces apart
+	ring = QColor(43, 43, 43) if isDarkTheme() else QColor(249, 249, 249)
+	for index, pixmap in enumerate(pixmaps[:FACE_ICON_SLOTS]):
+		left = index * (FACE_ICON - FACE_ICON_OVERLAP) * ratio
+		painter.drawPixmap(left, 0, round_pixmap(pixmap, FACE_ICON * ratio, 1))
+		painter.setBrush(Qt.BrushStyle.NoBrush)
+		painter.setPen(QPen(ring, 2 * ratio))
+		painter.drawEllipse(QRectF(left, 0, FACE_ICON * ratio, FACE_ICON * ratio).adjusted(-1, -1, 1, 1))
+	painter.end()
+	result.setDevicePixelRatio(ratio)
+	return QIcon(result)
+
+
+def symbol_icon(icon : FluentIconBase) -> QIcon:
+	"""a small Fluent icon in the room of a face icon"""
+	ratio = 2
+	result = QPixmap(FACE_ICON_SIZE * ratio)
+	result.fill(Qt.GlobalColor.transparent)
+	painter = QPainter(result)
+	painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+	icon.render(painter, QRectF(4 * ratio, 3 * ratio, 16 * ratio, 16 * ratio))
+	painter.end()
+	result.setDevicePixelRatio(ratio)
+	return QIcon(result)
+
+
+class FaceComboBox(ComboBox):
+	"""a dropdown with a face icon before each name, in the box and in its list"""
+
+	def _createComboMenu(self):
+		menu = super()._createComboMenu()
+		menu.view.setIconSize(FACE_ICON_SIZE)
+		return menu
+
+	def paintEvent(self, event) -> None:
+		# the button without its text, then the icon and name from the left, then the arrow
+		painter = QStylePainter(self)
+		option = QStyleOptionButton()
+		self.initStyleOption(option)
+		option.text = ''
+		option.icon = QIcon()
+		painter.drawControl(QStyle.ControlElement.CE_PushButton, option)
+		painter.end()
+		painter = QPainter(self)
+		painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+		if not self.isEnabled():
+			painter.setOpacity(0.4)
+		left = 10
+		index = self.currentIndex()
+		if index >= 0:
+			self.itemIcon(index).paint(painter, QRect(left, (self.height() - FACE_ICON) // 2, FACE_ICON_SIZE.width(), FACE_ICON), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+			text_left = left + FACE_ICON_SIZE.width() + 8
+			text_width = self.width() - text_left - 32
+			painter.setPen(QColor(255, 255, 255) if isDarkTheme() else QColor(0, 0, 0))
+			painter.setFont(self.font())
+			painter.drawText(QRectF(text_left, 0, text_width, self.height()), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, self.fontMetrics().elidedText(self.itemText(index), Qt.TextElideMode.ElideRight, text_width))
+		if self.isHover:
+			painter.setOpacity(0.8)
+		elif self.isPressed:
+			painter.setOpacity(0.7)
+		rect = QRectF(self.width() - 22, self.height() / 2 - 5 + self.arrowAni.y, 10, 10)
+		if isDarkTheme():
+			FluentIcon.ARROW_DOWN.render(painter, rect)
+		else:
+			FluentIcon.ARROW_DOWN.render(painter, rect, fill = '#646464')
+
+
+class GroupChip(QWidget):
+	"""a group of source faces as a pill: small faces, the name and how many, clicking the name renames it
+	and clicking elsewhere uses the faces of the group"""
+	clicked = Signal(int)
+	renamed = Signal(int, str)
+	removed = Signal(int)
+
+	AVATAR = 24
+	OVERLAP = 6
+	MAX_AVATARS = 4
+	HEIGHT = 32
+
+	def __init__(self, group_id : int, name : str, pixmaps : List[QPixmap], parent : Optional[QWidget] = None) -> None:
+		super().__init__(parent)
+		self.group_id = group_id
+		self.name = name
+		self.count = len(pixmaps)
+		self.current = False
+		self.hovered = False
+		self.editor : Optional[NameEdit] = None
+		self.avatars = [ self.round_pixmap(pixmap) for pixmap in pixmaps[:self.MAX_AVATARS] ]
+		self.setFixedHeight(self.HEIGHT)
+		self.setCursor(Qt.CursorShape.PointingHandCursor)
+		layout = QHBoxLayout(self)
+		avatars_width = len(self.avatars) * (self.AVATAR - self.OVERLAP) + self.OVERLAP
+		layout.setContentsMargins(5 + avatars_width + 8, 0, 4, 0)
+		layout.setSpacing(6)
+		self.name_label = StrongBodyLabel(name, self)
+		self.name_label.setCursor(Qt.CursorShape.IBeamCursor)
+		self.name_label.setToolTip('%s\nClick to rename' % name)
+		self.name_label.installEventFilter(self)
+		self.name_label.installEventFilter(ToolTipFilter(self.name_label))
+		layout.addWidget(self.name_label)
+		count_label = CaptionLabel('%d faces' % self.count, self)
+		count_label.setTextColor('#707070', '#9a9a9a')
+		layout.addWidget(count_label)
+		self.remove_button = TransparentToolButton(FluentIcon.CLOSE, self)
+		self.remove_button.setFixedSize(22, 22)
+		self.remove_button.setIconSize(QSize(9, 9))
+		self.remove_button.setToolTip('Ungroup, the faces stay')
+		self.remove_button.installEventFilter(ToolTipFilter(self.remove_button))
+		self.remove_button.clicked.connect(lambda: self.removed.emit(self.group_id))
+		layout.addWidget(self.remove_button)
+		self.setToolTip('Click to use the faces of %s' % name)
+		self.installEventFilter(ToolTipFilter(self))
+
+	def round_pixmap(self, pixmap : QPixmap) -> QPixmap:
+		return round_pixmap(pixmap, self.AVATAR)
+
+	def set_current(self, current : bool) -> None:
+		"""outlined in the accent color while exactly its faces are in use"""
+		self.current = current
+		self.update()
+
+	def paintEvent(self, event) -> None:
+		painter = QPainter(self)
+		painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+		dark = isDarkTheme()
+		shade = 255 if dark else 0
+		painter.setBrush(QColor(shade, shade, shade, 22 if self.hovered else 10))
+		painter.setPen(QPen(themeColor(), 1.5) if self.current else QPen(QColor(shade, shade, shade, 45), 1))
+		painter.drawRoundedRect(QRectF(self.rect()).adjusted(1, 1, -1, -1), self.HEIGHT / 2 - 1, self.HEIGHT / 2 - 1)
+		ring = QColor(43, 43, 43) if dark else QColor(255, 255, 255)
+		top = (self.height() - self.AVATAR) / 2
+		for index, avatar in enumerate(self.avatars):
+			left = 5 + index * (self.AVATAR - self.OVERLAP)
+			painter.drawPixmap(int(left), int(top), avatar)
+			# a ring in the card color keeps the overlapping faces apart
+			painter.setBrush(Qt.BrushStyle.NoBrush)
+			painter.setPen(QPen(ring, 2))
+			painter.drawEllipse(QRectF(left, top, self.AVATAR, self.AVATAR).adjusted(-1, -1, 1, 1))
+
+	def enterEvent(self, event) -> None:
+		self.hovered = True
+		self.update()
+
+	def leaveEvent(self, event) -> None:
+		self.hovered = False
+		self.update()
+
+	def mouseReleaseEvent(self, event) -> None:
+		if event.button() == Qt.MouseButton.LeftButton and self.rect().contains(event.position().toPoint()):
+			self.clicked.emit(self.group_id)
+
+	def eventFilter(self, watched : QObject, event : QEvent) -> bool:
+		if watched is self.name_label and event.type() == QEvent.Type.MouseButtonRelease and event.button() == Qt.MouseButton.LeftButton:
+			self.start_rename()
+			return True
+		return super().eventFilter(watched, event)
+
+	def start_rename(self) -> None:
+		if self.editor:
+			return
+		self.editor = NameEdit(self)
+		self.editor.setText(self.name)
+		self.editor.selectAll()
+		geometry = self.name_label.geometry()
+		self.editor.setGeometry(geometry.x() - 4, (self.height() - 22) // 2, max(geometry.width() + 8, 90), 22)
+		self.editor.editingFinished.connect(self.finish_rename)
+		self.editor.cancelled.connect(self.close_editor)
+		self.editor.show()
+		self.editor.setFocus()
+
+	def finish_rename(self) -> None:
+		if not self.editor:
+			return
+		# an empty name keeps the old one
+		name = self.editor.text().strip() or self.name
+		self.close_editor()
+		if name != self.name:
+			self.renamed.emit(self.group_id, name)
+
+	def close_editor(self) -> None:
+		editor, self.editor = self.editor, None
+		if editor:
+			# hiding takes the focus away, which finishes the edit a second time, so self.editor is cleared first
+			editor.hide()
+			editor.deleteLater()
 
 
 PROCESSOR_MIME = 'application/x-ffstudio-processor'

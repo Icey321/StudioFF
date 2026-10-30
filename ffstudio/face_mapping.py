@@ -13,18 +13,19 @@ from typing import Any, Callable, Dict, List, Optional
 from PySide6.QtCore import QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QSizePolicy, QVBoxLayout, QWidget
-from qfluentwidgets import CaptionLabel, ComboBox, FluentIcon, LineEdit, TogglePushButton, ToolTipFilter, TransparentToolButton, qconfig, themeColor
+from qfluentwidgets import CaptionLabel, FluentIcon, LineEdit, TogglePushButton, ToolTipFilter, TransparentToolButton, qconfig, themeColor
 
 from ffstudio.config import DATA_DIR
 from ffstudio.media import media_kind
-from ffstudio.widgets import CollapsibleCard
+from ffstudio.widgets import CollapsibleCard, FaceComboBox, faces_icon, symbol_icon
 
 PEOPLE_DIR = os.path.join(DATA_DIR, 'people')
 # written by face_probe.py's people scan next to the crops, one embedding per person
 PEOPLE_FILE = 'people.npy'
-# a person's source: nothing, the sources picked in the Source card, or one source file
+# a person's source: nothing, the sources picked in the Source card, a group of sources ('group:<id>') or one source file
 LEAVE = ''
 SELECTED = '*'
+GROUP_PREFIX = 'group:'
 # processors that work on the whole frame instead of the selected faces, they only run in the last pass
 FRAME_PROCESSORS = [ 'background_remover', 'frame_colorizer', 'frame_enhancer' ]
 # the processors whose work follows the face selector, without one of them there is nothing to map
@@ -46,9 +47,21 @@ def person_name(people : List[Dict[str, Any]], index : int) -> str:
 	return people[index].get('name') or 'Face %d' % (index + 1)
 
 
-def resolve_sources(choice : str, active_images : List[str], source_paths : List[str]) -> List[str]:
+def group_value(group : Dict[str, Any]) -> str:
+	return GROUP_PREFIX + str(group.get('id'))
+
+
+def group_images(group : Dict[str, Any], source_paths : List[str]) -> List[str]:
+	return [ path for path in group.get('paths') or [] if path in source_paths and media_kind(path) == 'image' ]
+
+
+def resolve_sources(choice : str, active_images : List[str], source_paths : List[str], groups : Optional[List[Dict[str, Any]]] = None) -> List[str]:
 	if choice == SELECTED:
 		return list(active_images)
+	if choice.startswith(GROUP_PREFIX):
+		# a group swaps in all of its faces, used or not in the Source card
+		group = next((group for group in groups or [] if group_value(group) == choice), None)
+		return group_images(group, source_paths) if group else []
 	if choice and choice in source_paths and media_kind(choice) == 'image':
 		return [ choice ]
 	return []
@@ -99,11 +112,11 @@ def pass_distance(person : Dict[str, Any], distance : float) -> float:
 	return distance
 
 
-def plan_passes(people : List[Dict[str, Any]], active_images : List[str], source_paths : List[str], distance : float) -> List[Dict[str, Any]]:
+def plan_passes(people : List[Dict[str, Any]], active_images : List[str], source_paths : List[str], distance : float, groups : Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
 	"""one run per mapped person, or a single run when every person gets the same sources"""
 	mapped = []
 	for index, person in enumerate(people):
-		sources = resolve_sources(person.get('source') or LEAVE, active_images, source_paths)
+		sources = resolve_sources(person.get('source') or LEAVE, active_images, source_paths, groups)
 		if sources:
 			mapped.append((index, person, sources))
 	if not mapped:
@@ -165,6 +178,8 @@ class PersonRow(QWidget):
 		self.name_edit.setPlaceholderText('Face %d' % (index + 1))
 		self.name_edit.setText(person.get('name') or '')
 		self.name_edit.setFixedHeight(30)
+		# short, so the source dropdown has room for its faces
+		self.name_edit.setFixedWidth(150)
 		self.name_edit.editingFinished.connect(self.on_name_edited)
 		text.addWidget(self.name_edit)
 		self.info_label = CaptionLabel(self.describe(), self)
@@ -175,14 +190,15 @@ class PersonRow(QWidget):
 			self.info_label.setTextColor('#b45309', '#f0b35a')
 			self.info_label.setToolTip('FaceFusion sees this face as almost the same person as another one (distance %.2f), a swap of one may also change the other.' % nearest)
 		text.addWidget(self.info_label)
-		layout.addLayout(text, 1)
+		layout.addLayout(text)
+		layout.addStretch(1)
 
 		arrow = QLabel('→', self)
 		arrow.setStyleSheet('QLabel { color: #9a9a9a; }')
 		layout.addWidget(arrow)
-		self.source_combo = ComboBox(self)
-		self.source_combo.setMinimumWidth(170)
-		self.source_combo.setMaximumWidth(220)
+		self.source_combo = FaceComboBox(self)
+		self.source_combo.setMinimumWidth(220)
+		self.source_combo.setMaximumWidth(280)
 		self.fill_sources()
 		self.source_combo.currentIndexChanged.connect(self.on_source_picked)
 		layout.addWidget(self.source_combo)
@@ -197,13 +213,19 @@ class PersonRow(QWidget):
 	def fill_sources(self) -> None:
 		self.source_combo.blockSignals(True)
 		self.source_combo.clear()
-		choices = [ (LEAVE, 'Leave unchanged'), (SELECTED, 'Selected sources') ]
-		choices += [ (path, self.card.page.source_name(path)) for path in self.card.page.source_paths if media_kind(path) == 'image' ]
+		choices = [ (LEAVE, 'Leave unchanged'), (SELECTED, 'Selected sources') ] + self.card.page.source_choices()
 		current = self.person.get('source') or LEAVE
 		if current not in [ value for value, _ in choices ]:
 			current = LEAVE
+		page = self.card.page
 		for value, label in choices:
-			self.source_combo.addItem(label, userData = value)
+			if value == LEAVE:
+				icon = symbol_icon(FluentIcon.REMOVE)
+			else:
+				# the faces the choice gives, Selected sources shows the ones in use now
+				paths = resolve_sources(value, page.used_images(), page.source_paths, page.source_groups)
+				icon = faces_icon([ page.source_pixmap(path) for path in paths ])
+			self.source_combo.addItem(label, icon, userData = value)
 		self.source_combo.setCurrentIndex([ value for value, _ in choices ].index(current))
 		self.source_combo.blockSignals(False)
 
@@ -376,7 +398,7 @@ class FaceMappingCard(CollapsibleCard):
 		else:
 			self.status_label.setText(' · '.join(summary))
 		self.status_label.setToolTip('\n'.join(summary))
-		passes = plan_passes(self.people, [ path for path in self.page.active_sources() if media_kind(path) == 'image' ], self.page.source_paths, 0.3)
+		passes = plan_passes(self.people, [ path for path in self.page.active_sources() if media_kind(path) == 'image' ], self.page.source_paths, 0.3, self.page.source_groups)
 		if not passes:
 			self.footer_label.setText('Pick a source for each face you want to change. With none picked, Start runs as usual.')
 		elif passes[0].get('many'):

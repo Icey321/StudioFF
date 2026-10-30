@@ -158,6 +158,13 @@ class FaceMappingTest(unittest.TestCase):
 		self.assertEqual((passes[0].get('frame'), passes[0].get('position'), passes[0].get('distance'), passes[0].get('label')), (4, 1, 0.15, 'Ann'))
 		self.assertEqual(passes[1].get('label'), 'Face 3')
 
+	def test_a_group_gives_all_its_faces(self) -> None:
+		# a group's faces count whether they are in use or not, a removed face drops out and a gone group leaves the person unchanged
+		groups = [ { 'id': 1, 'name': 'Group 1', 'paths': [ 'a.jpg', 'b.jpg', 'gone.jpg' ] } ]
+		passes = plan_passes([ { 'source': 'group:1' }, { 'source': 'group:2' } ], [ 'c.jpg' ], [ 'a.jpg', 'b.jpg', 'c.jpg' ], 0.3, groups)
+		self.assertEqual([ item.get('person') for item in passes ], [ 0 ])
+		self.assertEqual(passes[0].get('sources'), [ 'a.jpg', 'b.jpg' ])
+
 
 class VersionTest(unittest.TestCase):
 	def test_is_newer_version(self) -> None:
