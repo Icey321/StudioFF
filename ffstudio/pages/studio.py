@@ -15,7 +15,7 @@ from qfluentwidgets import Action, BodyLabel, CaptionLabel, FlowLayout, FluentIc
 from ffstudio.config import APP_DIR, PREVIEW_DIR
 from ffstudio.face_mapping import FACE_PROCESSORS, FRAME_PROCESSORS, GROUP_PREFIX, LEAVE, PEOPLE_FILE, SELECTED, FaceMappingCard, box_overlap, group_images, group_value, is_kept, is_mapped, merge_people, people_dir, person_color, person_name, plan_passes
 from ffstudio.faces import FACE_GROUPS, MASK_GROUPS, FaceProbe, describe_faces, describe_landmarks, describe_mask, face_landmarks, face_tag, faces_text_color, no_face, read_mask
-from ffstudio.media import VideoReader, animation_extension, browse_dir, is_animation, format_length, format_seconds, format_timecode, media_kind, read_frame, read_image, thumbnail, to_pixmap, usable_path, write_image
+from ffstudio.media import VideoReader, animation_extension, browse_dir, is_animated_webp, is_animation, format_length, format_seconds, format_timecode, media_kind, read_frame, read_image, thumbnail, to_pixmap, usable_path, write_image
 from ffstudio.nsfw import BLOCKED_STATUS, NsfwDialog, describe_result, show_blocked_bar
 from ffstudio.option_panel import FavoritesPanel, OptionPanel
 from ffstudio.output_name import AUTOMATIC_TEMPLATE, NAME_EXAMPLES, NAME_TAGS, build_output, build_output_path, unknown_tags
@@ -1164,7 +1164,7 @@ class StudioPage(SourceSelection, QWidget):
 		self.tags_button = add_edit_button(self.output_name_edit, FluentIcon.TAG, 'File name tags and examples')
 		self.tags_button.clicked.connect(self.show_name_tags)
 		self.subfolders_button = TogglePushButton('Sub-Folders', card)
-		self.subfolders_button.setToolTip('Save into <output folder>\\<source name>\\Images, Videos or GIF, created as needed')
+		self.subfolders_button.setToolTip('Save into <output folder>\\<source name>\\Images, Videos or Animated GIFs, created as needed')
 		self.subfolders_button.installEventFilter(ToolTipFilter(self.subfolders_button))
 		self.subfolders_button.setChecked(bool(self.session.config.get('output_subfolders')))
 		self.subfolders_button.toggled.connect(self.on_subfolders_toggled)
@@ -1311,10 +1311,12 @@ class StudioPage(SourceSelection, QWidget):
 			if info.get('preview'):
 				before = info.get('frame')
 				after = read_image(self.last_output)
-			elif media_kind(self.last_output) == 'video':
-				if not self.result_reader or self.result_reader.path != self.last_output:
+			elif media_kind(self.last_output) == 'video' or is_animated_webp(self.last_output):
+				# an animated webp is read from its video copy, opencv only decodes the first frame of a webp
+				read_path = usable_path(self.last_output)
+				if not self.result_reader or self.result_reader.path != read_path:
 					self.release_result_reader()
-					self.result_reader = VideoReader(self.last_output)
+					self.result_reader = VideoReader(read_path)
 				frame_index = self.target_card.current_frame_index() - info.get('trim_start', 0)
 				after = self.result_reader.read(frame_index) if frame_index >= 0 else None
 				before = self.target_card.current_frame() if same_target else None
@@ -1381,8 +1383,8 @@ class StudioPage(SourceSelection, QWidget):
 		return animation_extension(self.target_path) or '.mp4'
 
 	def build_output(self) -> Tuple[str, bool]:
-		"""the output path and whether it replaces a file, inside <source name>\\Images, Videos or GIF when Sub-Folders is on"""
-		return build_output(self.output_name_edit.text(), self.name_tag_values(), self.output_dir(), self.output_extension(), self.subfolders_button.isChecked())
+		"""the output path and whether it replaces a file, inside <source name>\\Images, Videos or Animated GIFs when Sub-Folders is on"""
+		return build_output(self.output_name_edit.text(), self.name_tag_values(), self.output_dir(), self.output_extension(), self.subfolders_button.isChecked(), animated = is_animation(self.target_path))
 
 	def suggest_output_path(self) -> str:
 		return self.build_output()[0]

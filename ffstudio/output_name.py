@@ -102,13 +102,14 @@ def build_output_path(template : str, values : Dict[str, str], output_dir : str,
 	return path, exists(path)
 
 
-def build_output(template : str, values : Dict[str, str], output_dir : str, fallback_ext : str, subfolders : bool, taken : Optional[Set[str]] = None) -> Tuple[str, bool]:
-	"""the output path and whether it replaces a file, inside <source name>\\Images, Videos or GIF when subfolders is on"""
+def build_output(template : str, values : Dict[str, str], output_dir : str, fallback_ext : str, subfolders : bool, taken : Optional[Set[str]] = None, animated : bool = False) -> Tuple[str, bool]:
+	"""the output path and whether it replaces a file, inside <source name>\\Images, Videos or Animated GIFs when subfolders is on.
+	animated is for a gif or animated webp target, whose result is an animation even when its name ends in .webp"""
 	path, replaces = build_output_path(template, values, output_dir, fallback_ext, taken)
 	if subfolders:
 		# a typed extension can turn an image target into a video, so the kind comes from the built name
-		if path.lower().endswith('.gif'):
-			kind = 'GIF'
+		if animated or path.lower().endswith('.gif'):
+			kind = 'Animated GIFs'
 		else:
 			kind = 'Images' if media_kind(path) == 'image' else 'Videos'
 		folder = os.path.join(output_dir, clean_name(values.get('source') or '') or 'No source', kind)

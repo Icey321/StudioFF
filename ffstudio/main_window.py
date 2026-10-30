@@ -240,9 +240,17 @@ class MainWindow(FluentWindow):
 				self.showMinimized()
 			return
 		self.save_window_state()
-		if self.session.runner.is_running():
+		# a run with its memory freed has no process left, but closing still loses the output it was making
+		freed = self.studio_page.freed or self.batch_page.running and self.batch_page.paused and self.batch_page.current < 0
+		if self.session.runner.is_running() or freed:
 			from qfluentwidgets import MessageBox
-			box = MessageBox('FaceFusion is still running', 'Stop "%s" and quit?' % self.session.task, self)
+			paused = self.studio_page.paused or self.batch_page.running and self.batch_page.paused
+			if freed:
+				box = MessageBox('A run is paused with its memory freed', 'Quit anyway? The output being made is lost and the run cannot be resumed.', self)
+			elif paused:
+				box = MessageBox('A run is paused', 'Stop "%s" and quit? The run cannot be resumed.' % self.session.task, self)
+			else:
+				box = MessageBox('FaceFusion is still running', 'Stop "%s" and quit?' % self.session.task, self)
 			if not box.exec():
 				event.ignore()
 				return

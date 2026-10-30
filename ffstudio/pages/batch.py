@@ -741,7 +741,7 @@ class BatchPage(SourceSelection, QWidget):
 		self.tags_button = add_edit_button(self.output_name_edit, FluentIcon.TAG, 'File name tags and examples')
 		self.tags_button.clicked.connect(self.show_name_tags)
 		self.subfolders_button = TogglePushButton('Sub-Folders', card)
-		self.subfolders_button.setToolTip('Save into <output folder>\\<source name>\\Images, Videos or GIF, created as needed')
+		self.subfolders_button.setToolTip('Save into <output folder>\\<source name>\\Images, Videos or Animated GIFs, created as needed')
 		self.subfolders_button.installEventFilter(ToolTipFilter(self.subfolders_button))
 		self.subfolders_button.setChecked(bool(stored.get('subfolders')))
 		self.subfolders_button.toggled.connect(lambda _: self.refresh_matches())
@@ -1817,7 +1817,7 @@ class BatchPage(SourceSelection, QWidget):
 		runs = self.runs()
 		self.removed_count = sum(1 for run in runs if self.run_key(run) in self.removed)
 		for run in [ run for run in runs if self.run_key(run) not in self.removed ]:
-			path, replaces = build_output(template, self.name_tag_values(run), output_dir, self.output_extension(run), subfolders, taken)
+			path, replaces = build_output(template, self.name_tag_values(run), output_dir, self.output_extension(run), subfolders, taken, animated = is_animation(run.get('target') or ''))
 			key = os.path.normcase(path)
 			name = os.path.relpath(path, output_dir) if subfolders and output_dir else os.path.basename(path)
 			items.append(dict(run, output = path, name = name, replaces = replaces, repeated = key in taken, status = ''))

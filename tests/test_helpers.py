@@ -88,7 +88,7 @@ class OutputNameTest(unittest.TestCase):
 			path, _ = build_output('{target}', { 'target': 'clip', 'source': '' }, folder, '.mp4', True)
 			self.assertEqual(path, os.path.join(folder, 'No source', 'Videos', 'clip.mp4'))
 			path, _ = build_output('{target}', { 'target': 'clip', 'source': 'Ann' }, folder, '.gif', True)
-			self.assertEqual(path, os.path.join(folder, 'Ann', 'GIF', 'clip.gif'))
+			self.assertEqual(path, os.path.join(folder, 'Ann', 'Animated GIFs', 'clip.gif'))
 
 
 SCHEMA = Schema(

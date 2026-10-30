@@ -121,7 +121,7 @@ class ConsolePage(QWidget):
 		self.output = PlainTextEdit(self)
 		self.output.setReadOnly(True)
 		self.output.setMaximumBlockCount(MAX_BLOCKS)
-		self.output.setLineWrapMode(PlainTextEdit.LineWrapMode.NoWrap)
+		self.output.setLineWrapMode(PlainTextEdit.LineWrapMode.WidgetWidth)
 		font = QFont('Cascadia Mono')
 		font.setStyleHint(QFont.StyleHint.Monospace)
 		font.setPointSize(9)
