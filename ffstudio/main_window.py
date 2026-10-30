@@ -28,6 +28,7 @@ class MainWindow(FluentWindow):
 		self.session = session
 		self.tray : Optional[QSystemTrayIcon] = None
 		self.quitting = False
+		self.close_button_pressed = False
 		# small steps through the slow imports, so the bar keeps moving instead of stopping at 10%
 		splash.step()
 		from ffstudio.pages.batch import BatchPage
@@ -71,6 +72,9 @@ class MainWindow(FluentWindow):
 		self.navigationInterface.setExpandWidth(150)
 		self.setWindowTitle(APP_NAME)
 		# the version sits right after the name in the title bar, a little dimmer
+		# only the X in the title bar minimizes or goes to the tray, the taskbar's Close window and Alt+F4 really quit
+		self.titleBar.closeBtn.clicked.disconnect()
+		self.titleBar.closeBtn.clicked.connect(self.on_close_button)
 		self.version_label = CaptionLabel('v' + APP_VERSION, self.titleBar)
 		self.version_label.setTextColor('#808080', '#9a9a9a')
 		self.titleBar.hBoxLayout.insertSpacing(2, 8)
@@ -198,20 +202,29 @@ class MainWindow(FluentWindow):
 		rect = self.normalGeometry() if self.isMaximized() else self.geometry()
 		self.session.config.set('window_state', { 'maximized': self.isMaximized(), 'geometry': [ rect.x(), rect.y(), rect.width(), rect.height() ] })
 
-	def setup_tray(self) -> None:
-		if self.tray:
-			return
-		self.tray = QSystemTrayIcon(self.windowIcon(), self)
-		self.tray.setToolTip(APP_NAME)
-		menu = QMenu(self)
-		menu.addAction('Show ' + APP_NAME, self.show_from_tray)
-		menu.addAction('Quit', self.quit_app)
-		self.tray.setContextMenu(menu)
-		self.tray.activated.connect(lambda reason: self.show_from_tray() if reason in (QSystemTrayIcon.ActivationReason.Trigger, QSystemTrayIcon.ActivationReason.DoubleClick) else None)
-		self.tray.show()
+	def on_close_button(self) -> None:
+		self.close_button_pressed = True
+		try:
+			self.close()
+		finally:
+			self.close_button_pressed = False
+
+	def setup_tray(self) -> bool:
+		# made once and kept, taking the icon away and back each time makes windows hide the new one
+		if not self.tray:
+			self.tray = QSystemTrayIcon(self.windowIcon(), self)
+			self.tray.setToolTip(APP_NAME)
+			menu = QMenu(self)
+			menu.addAction('Show ' + APP_NAME, self.show_from_tray)
+			menu.addAction('Quit', self.quit_app)
+			self.tray.setContextMenu(menu)
+			self.tray.activated.connect(lambda reason: self.show_from_tray() if reason in (QSystemTrayIcon.ActivationReason.Trigger, QSystemTrayIcon.ActivationReason.DoubleClick) else None)
+		if not self.tray.isVisible():
+			self.tray.show()
+		return self.tray.isVisible()
 
 	def show_from_tray(self) -> None:
-		if self.tray:
+		if self.tray and (self.session.config.get('close_action') or 'close') != 'tray':
 			self.tray.hide()
 		self.setWindowState(self.windowState() & ~Qt.WindowState.WindowMinimized)
 		self.show()
@@ -229,12 +242,12 @@ class MainWindow(FluentWindow):
 
 	def closeEvent(self, event) -> None:
 		action = self.session.config.get('close_action') or 'close'
-		if not self.quitting and action != 'close':
+		if not self.quitting and action != 'close' and self.close_button_pressed:
 			self.save_window_state()
 			self.session.config.save()
 			event.ignore()
-			if action == 'tray' and QSystemTrayIcon.isSystemTrayAvailable():
-				self.setup_tray()
+			# without a tray icon that really showed, hiding the window would leave no way back
+			if action == 'tray' and QSystemTrayIcon.isSystemTrayAvailable() and self.setup_tray():
 				self.hide()
 			else:
 				self.showMinimized()
