@@ -70,14 +70,29 @@ def video_to_animation(ffmpeg : str, video_path : str, output_path : str, target
 	width, height = probe_size(ffmpeg, target_path)
 	# facefusion may round the size down, so never crop wider or taller than the frame
 	crop = 'crop=min(iw\\,%d):min(ih\\,%d):0:0,' % (width, height) if width and height else ''
-	if webp_output:
+	# media.animation_to_video keeps the see-through parts of an animated webp in a second video beside the copy
+	alpha_path = target_path + '.alpha.mp4'
+	if webp_output and os.path.isfile(alpha_path):
+		encode_args = [ '-i', alpha_path, '-filter_complex', '[0:v]' + crop + 'format=rgb24[c];[1:v]' + crop + 'format=gray[a];[c][a]alphamerge,format=rgba', '-c:v', 'libwebp_anim', '-quality', '90', '-loop', '0' ]
+	elif webp_output:
 		encode_args = [ '-vf', crop + 'null', '-c:v', 'libwebp_anim', '-quality', '90', '-loop', '0' ]
 	else:
 		encode_args = [ '-filter_complex', '[0:v]' + crop + 'split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=sierra2_4a', '-loop', '0' ]
 	if run_ffmpeg(ffmpeg, [ '-i', video_path ] + encode_args + [ output_path ]):
 		print('Could not write ' + output_path, flush = True)
 		return 1
+	if webp_output and os.path.isfile(alpha_path):
+		flag_alpha(output_path)
 	return 0
+
+
+def flag_alpha(webp_path : str) -> None:
+	"""ffmpeg writes the see-through frames but not the header flag that says so, and readers such as pillow go by the flag"""
+	with open(webp_path, 'r+b') as webp_file:
+		header = webp_file.read(21)
+		if header[12:16] == b'VP8X':
+			webp_file.seek(20)
+			webp_file.write(bytes([ header[20] | 0x10 ]))
 
 
 def finish(argv : List[str]) -> int:

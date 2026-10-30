@@ -18,6 +18,8 @@ VIDEO_EXTENSIONS = { '.avi', '.m4v', '.mkv', '.mov', '.mp4', '.mpeg', '.mpg', '.
 AUDIO_EXTENSIONS = { '.aac', '.flac', '.m4a', '.mp3', '.ogg', '.opus', '.wav' }
 # files facefusion turns away by their extension, studio uses a copy of them in the converted folder (see usable_path):
 # avif and heic as a png made with pillow, jfif (a jpeg by another name) as a jpg, flash video rewrapped into mkv by ffmpeg
+# the see-through parts of an animated webp, kept as a gray video beside its video copy
+ALPHA_SUFFIX = '.alpha.mp4'
 CONVERTED_EXTENSIONS = { '.avif': '.png', '.heic': '.png', '.heif': '.png', '.jfif': '.jpg', '.flv': '.mkv', '.f4v': '.mkv' }
 
 
@@ -50,8 +52,8 @@ def usable_path(path : str) -> str:
 		modified = os.path.getmtime(path)
 	except OSError:
 		return path
-	# a folder per file and version, so two photo.avif files in different folders do not meet
-	folder = os.path.join(CONVERTED_DIR, hashlib.sha1(('%s|%f' % (os.path.abspath(path), modified)).encode()).hexdigest()[:16])
+	# a folder per file and version (video copies of animated webps made before the see-through parts were kept differ), so two photo.avif files in different folders do not meet
+	folder = os.path.join(CONVERTED_DIR, hashlib.sha1(('%s|%f%s' % (os.path.abspath(path), modified, '|alpha' if copy_extension == '.mp4' else '')).encode()).hexdigest()[:16])
 	copy_path = os.path.join(folder, os.path.splitext(os.path.basename(path))[0] + copy_extension)
 	if os.path.isfile(copy_path):
 		write_original_note(folder, path)
@@ -126,9 +128,11 @@ def animation_to_video(path : str, video_path : str) -> bool:
 
 		with Image.open(path) as image:
 			durations = []
+			see_through = False
 			for frame in ImageSequence.Iterator(image):
 				# pillow only reads a frame's duration once the frame is loaded
 				frame.load()
+				see_through = see_through or frame.convert('RGBA').getchannel('A').getextrema()[0] < 255
 				durations.append(max(10, int(frame.info.get('duration') or 100)))
 			step = 0
 			for duration in durations:
@@ -139,6 +143,13 @@ def animation_to_video(path : str, video_path : str) -> bool:
 			temp_path = video_path + '.part.mp4'
 			# yuv444 at qp 0 is lossless and, unlike yuv420, takes odd sizes
 			process = subprocess.Popen([ ffmpeg, '-hide_banner', '-loglevel', 'error', '-y', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-s', '%dx%d' % (width, height), '-r', '1000/%d' % step, '-i', '-', '-c:v', 'libx264', '-qp', '0', '-pix_fmt', 'yuv444p', temp_path ], stdin = subprocess.PIPE, stdout = subprocess.DEVNULL, stderr = subprocess.DEVNULL, creationflags = CREATE_NO_WINDOW)
+			# the see-through parts go into a second video beside the first, gif_run.py puts them back on the result
+			alpha_path = video_path + ALPHA_SUFFIX
+			alpha_process = None
+			if see_through:
+				alpha_process = subprocess.Popen([ ffmpeg, '-hide_banner', '-loglevel', 'error', '-y', '-f', 'rawvideo', '-pix_fmt', 'gray', '-s', '%dx%d' % (width, height), '-r', '1000/%d' % step, '-i', '-', '-c:v', 'libx264', '-qp', '0', '-pix_fmt', 'gray', '-f', 'mp4', alpha_path + '.part' ], stdin = subprocess.PIPE, stdout = subprocess.DEVNULL, stderr = subprocess.DEVNULL, creationflags = CREATE_NO_WINDOW)
+			elif os.path.isfile(alpha_path):
+				os.remove(alpha_path)
 			try:
 				for frame, duration in zip(ImageSequence.Iterator(image), durations):
 					rgba = frame.convert('RGBA')
@@ -146,14 +157,22 @@ def animation_to_video(path : str, video_path : str) -> bool:
 					canvas = Image.new('RGBA', rgba.size, (255, 255, 255, 255))
 					canvas.alpha_composite(rgba)
 					data = canvas.convert('RGB').tobytes()
+					alpha_data = rgba.getchannel('A').tobytes() if alpha_process else b''
 					for _ in range(max(1, round(duration / step))):
 						process.stdin.write(data)
+						if alpha_process:
+							alpha_process.stdin.write(alpha_data)
 			finally:
 				process.stdin.close()
 				code = process.wait()
+				if alpha_process:
+					alpha_process.stdin.close()
+					code = code or alpha_process.wait()
 		if code or not os.path.isfile(temp_path):
 			return False
 		os.replace(temp_path, video_path)
+		if alpha_process:
+			os.replace(alpha_path + '.part', alpha_path)
 	except (ImportError, OSError, ValueError):
 		return False
 	return True
@@ -349,7 +368,7 @@ def gif_as_video(ffmpeg : str, path : str, work_dir : str) -> Optional[str]:
 		modified = os.path.getmtime(path)
 	except OSError:
 		return None
-	video_path = os.path.join(work_dir, 'gif_%s.mp4' % hashlib.sha1(('%s|%f' % (os.path.abspath(path), modified)).encode()).hexdigest()[:16])
+	video_path = os.path.join(work_dir, 'gif_%s.mp4' % hashlib.sha1(('%s|%f%s' % (os.path.abspath(path), modified, '|alpha' if copy_extension == '.mp4' else '')).encode()).hexdigest()[:16])
 	if os.path.isfile(video_path):
 		return video_path
 	os.makedirs(work_dir, exist_ok = True)

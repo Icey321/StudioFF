@@ -968,6 +968,8 @@ class PreviewView(QWidget):
 					if tag_rect.top() < image_rect.top():
 						tag_rect.moveTop(rect.top() + 3)
 				tag_rect.moveLeft(min(max(tag_rect.left(), image_rect.left()), image_rect.right() - tag_rect.width()))
+				# a box reaching past the picture would still push its label off, so keep the label on the picture
+				tag_rect.moveTop(min(max(tag_rect.top(), image_rect.top()), image_rect.bottom() - tag_rect.height()))
 				painter.setPen(Qt.PenStyle.NoPen)
 				painter.setBrush(color if selected else QColor(0, 0, 0, 170))
 				painter.drawRoundedRect(tag_rect, 3, 3)
