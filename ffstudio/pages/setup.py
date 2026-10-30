@@ -9,7 +9,7 @@ from PySide6.QtWidgets import QAbstractButton, QApplication, QButtonGroup, QFile
 from qfluentwidgets import BodyLabel, CaptionLabel, CheckBox, ColorPickerButton, ComboBox, EditableComboBox, FluentIcon, HyperlinkButton, IconWidget, InfoBarIcon, LineEdit, MessageBox, PrimaryPushButton, ProgressBar, PushButton, SearchLineEdit, SimpleCardWidget, SingleDirectionScrollArea, StrongBodyLabel, SubtitleLabel, SwitchButton, ToolTipFilter, TransparentToolButton
 
 from ffstudio import APP_REPOSITORY, APP_VERSION, TESTED_FACEFUSION_COMMIT, TESTED_FACEFUSION_DATE
-from ffstudio.environment import check_dependencies, compare_github_commits, create_process_environment, fetch_github_build, fetch_latest_release, find_conda, find_conda_base, find_python_candidates, has_nvidia_gpu, is_facefusion_root, is_newer_version, probe_python_version, read_facefusion_build, read_facefusion_version, read_windows_version, switch_facefusion_commit, version_tuple
+from ffstudio.environment import PREREQUISITES, check_dependencies, compare_github_commits, create_process_environment, fetch_github_build, fetch_latest_release, find_conda, find_conda_base, find_missing_prerequisites, find_python_candidates, has_nvidia_gpu, is_facefusion_root, is_newer_version, probe_python_version, read_facefusion_build, read_facefusion_version, read_windows_version, refresh_path, switch_facefusion_commit, version_tuple, winget_install_args
 from ffstudio.main_window import DEFAULT_ACCENT, apply_theme
 from ffstudio.option_panel import OptionPanel
 from ffstudio.session import MINIMUM_PYTHON, Session
@@ -413,7 +413,7 @@ class SetupPage(QWidget):
 	# installation
 
 	def create_install_card(self, parent : QWidget) -> QWidget:
-		card, layout = section_card('Install FaceFusion v4', 'Clones the v4 branch, creates a Python 3.13 environment and installs the requirements with the onnxruntime build you pick. It downloads a few GB and the progress shows in Console.', parent)
+		card, layout = section_card('Install FaceFusion v4', 'Clones the v4 branch, creates a Python 3.13 environment and installs the requirements with the onnxruntime build you pick. Anything missing that it needs (Git, uv, FFmpeg, curl) is listed first and only installed if you agree. It downloads a few GB and the progress shows in Console.', parent)
 		self.conda_path = find_conda()
 		self.uv_path = shutil.which('uv')
 		default_folder = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))), 'facefusion-v4')
@@ -429,7 +429,10 @@ class SetupPage(QWidget):
 		if self.uv_path:
 			self.env_combo.addItem('uv virtual environment (.venv in the install folder)', userData = 'uv')
 		if not self.conda_path and not self.uv_path:
-			self.env_combo.addItem('Install Miniconda or uv first', userData = None)
+			if shutil.which('winget'):
+				self.env_combo.addItem('uv virtual environment (uv is installed first)', userData = 'uv')
+			else:
+				self.env_combo.addItem('Install Miniconda or uv first', userData = None)
 		self.env_combo.currentIndexChanged.connect(self.refresh_cuda_option)
 		layout.addLayout(form_row('Environment', [ self.env_combo ], card))
 
@@ -495,13 +498,28 @@ class SetupPage(QWidget):
 		python_path = self.env_python_path()
 		steps : List[Tuple[str, Callable[[], bool]]] = []
 
+		missing = find_missing_prerequisites(env_kind == 'uv', not is_facefusion_root(folder))
+		if missing:
+			if not shutil.which('winget'):
+				names = ', '.join(PREREQUISITES[key][1] for key in missing)
+				self.session.notify.emit('error', 'Missing programs', 'Install %s first (winget is not available here to do it for you), then press Install again.' % names)
+				return
+			lines = '\n'.join('•  %s: %s' % (PREREQUISITES[key][1], PREREQUISITES[key][2]) for key in missing)
+			box = MessageBox('Install the missing programs?', 'FaceFusion needs these and they were not found on this PC:\n\n%s\n\nThey are installed with Windows Package Manager (winget). Windows may ask for your permission. Nothing else is installed.' % lines, self.window())
+			box.yesButton.setText('Install')
+			box.cancelButton.setText('Cancel')
+			if not box.exec():
+				return
+			for key in missing:
+				steps.append(('Installing ' + PREREQUISITES[key][1], lambda key = key: self.session.run_program('Installing ' + PREREQUISITES[key][1], 'winget', winget_install_args(key), os.path.expanduser('~'))))
+
 		if not is_facefusion_root(folder):
-			steps.append(('Cloning FaceFusion v4', lambda: self.session.run_program('Cloning FaceFusion v4', 'git', [ 'clone', '--branch', 'v4', '--depth', '1', REPOSITORY_URL, folder ], os.path.dirname(folder) or '.')))
+			steps.append(('Cloning FaceFusion v4', lambda: self.session.run_program('Cloning FaceFusion v4', shutil.which('git') or 'git', [ 'clone', '--branch', 'v4', '--depth', '1', REPOSITORY_URL, folder ], os.path.dirname(folder) or '.')))
 		if not os.path.isfile(python_path):
 			if env_kind == 'conda':
 				steps.append(('Creating conda environment', lambda: self.session.run_program('Creating conda environment', 'cmd.exe', [ '/c', self.conda_path, 'create', '-y', '-n', CONDA_ENV_NAME, 'python=3.13', 'pip' ], folder)))
 			else:
-				steps.append(('Creating virtual environment', lambda: self.session.run_program('Creating virtual environment', self.uv_path, [ 'venv', '--python', '3.13', '--seed', os.path.join(folder, '.venv') ], folder)))
+				steps.append(('Creating virtual environment', lambda: bool(self.uv_path) and self.session.run_program('Creating virtual environment', self.uv_path, [ 'venv', '--python', '3.13', '--seed', os.path.join(folder, '.venv') ], folder)))
 		if env_kind == 'conda' and str(onnxruntime).startswith('cuda') and self.cuda_check.isChecked():
 			cuda_major = onnxruntime.split('@')[1]
 			steps.append(('Installing CUDA runtime and cuDNN', lambda: self.session.run_program('Installing CUDA runtime and cuDNN', 'cmd.exe', [ '/c', self.conda_path, 'install', '-y', '-n', CONDA_ENV_NAME, '-c', 'conda-forge', 'cuda-runtime=' + cuda_major, 'cudnn=9' ], folder)))
@@ -517,6 +535,9 @@ class SetupPage(QWidget):
 		if self.install_index >= len(self.install_steps):
 			return
 		title, action = self.install_steps[self.install_index]
+		# an earlier step may have installed git or uv
+		refresh_path()
+		self.uv_path = self.uv_path or shutil.which('uv')
 		self.install_status.setText('Step %d of %d: %s…' % (self.install_index + 1, len(self.install_steps), title))
 		if not action():
 			self.install_failed('Could not start: ' + title)
@@ -534,12 +555,14 @@ class SetupPage(QWidget):
 		self.install_steps = []
 		self.install_button.setEnabled(True)
 		self.install_status.setText(message)
+		self.refresh_dependency_status()
 		self.session.notify.emit('error', 'Installation stopped', message)
 
 	def finish_install(self, folder : str, python_path : str) -> bool:
 		self.install_steps = []
 		self.install_button.setEnabled(True)
 		self.install_status.setText('Installed. Models download on first use, or ahead of time from the Models page.')
+		self.refresh_dependency_status()
 		self.root_edit.setText(folder)
 		self.python_combo.setText(python_path)
 		self.apply_location()

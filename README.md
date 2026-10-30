@@ -51,7 +51,9 @@ shortcuts. Then start **StudioFF** and open the **FaceFusion** page:
 
 - **Already have FaceFusion v4?** Pick its folder and the `python.exe` of its environment, or press **Detect**, then press **Save and load options**.
 - **No FaceFusion v4 yet?** Use the **Install FaceFusion v4** button on the app's **FaceFusion** page. Note that FaceFusion v4 requires **Python 3.13+**, so a
-  FaceFusion 3.x environment (Python 3.12) can't run it.
+  FaceFusion 3.x environment (Python 3.12) can't run it. The installer lists any missing program it needs (Git, uv, FFmpeg, curl) and installs them
+  through winget only after you agree. uv downloads Python 3.13 itself, so you don't have to install Python.
+
 FaceFusion also needs `ffmpeg`, `ffprobe` and `curl` on `PATH`. The FaceFusion page checks for them.
 
 ## Layout

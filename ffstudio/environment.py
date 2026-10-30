@@ -353,3 +353,57 @@ def has_nvidia_gpu() -> bool:
 
 def check_dependencies() -> Dict[str, bool]:
 	return { name: bool(shutil.which(name)) for name in [ 'git', 'ffmpeg', 'ffprobe', 'curl' ] }
+
+
+# what the install needs, winget package id and the plain reason shown before anything is installed
+# ffprobe comes with the ffmpeg package
+PREREQUISITES : Dict[str, Tuple[str, str, str]] =\
+{
+	'git': ('Git.Git', 'Git', 'downloads FaceFusion and updates it later'),
+	'uv': ('astral-sh.uv', 'uv', 'creates the Python 3.13 environment and downloads Python 3.13 itself'),
+	'ffmpeg': ('Gyan.FFmpeg', 'FFmpeg', 'reads and writes video and audio (includes ffprobe)'),
+	'curl': ('cURL.cURL', 'curl', 'downloads the models FaceFusion needs')
+}
+
+
+def find_missing_prerequisites(need_uv : bool, need_git : bool) -> List[str]:
+	"""keys of PREREQUISITES that are not on PATH yet and that this install needs"""
+	found = check_dependencies()
+	missing = []
+	if need_git and not found['git']:
+		missing.append('git')
+	if need_uv and not shutil.which('uv'):
+		missing.append('uv')
+	if not found['ffmpeg'] or not found['ffprobe']:
+		missing.append('ffmpeg')
+	if not found['curl']:
+		missing.append('curl')
+	return missing
+
+
+def winget_install_args(key : str) -> List[str]:
+	return [ 'install', '--id', PREREQUISITES[key][0], '--exact', '--silent', '--accept-package-agreements', '--accept-source-agreements' ]
+
+
+def refresh_path() -> None:
+	"""takes the PATH Windows holds now, programs installed while the app runs would not be found otherwise"""
+	import winreg
+
+	parts : List[str] = []
+	for root, sub_key in [ (winreg.HKEY_LOCAL_MACHINE, r'SYSTEM\CurrentControlSet\Control\Session Manager\Environment'), (winreg.HKEY_CURRENT_USER, 'Environment') ]:
+		try:
+			with winreg.OpenKey(root, sub_key) as key:
+				value, _ = winreg.QueryValueEx(key, 'Path')
+				parts.extend(os.path.expandvars(part) for part in value.split(os.pathsep) if part)
+		except OSError:
+			pass
+	known = { os.path.normcase(part) for part in parts }
+	parts.extend(part for part in os.environ.get('PATH', '').split(os.pathsep) if part and os.path.normcase(part) not in known)
+	path = os.pathsep.join(parts)
+	os.environ['PATH'] = path
+	# QProcess starts programs from the Windows environment block, which os.environ does not always reach
+	try:
+		import ctypes
+		ctypes.windll.kernel32.SetEnvironmentVariableW('PATH', path)
+	except (OSError, AttributeError):
+		pass
