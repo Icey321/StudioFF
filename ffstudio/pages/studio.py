@@ -1579,9 +1579,10 @@ class StudioPage(SourceSelection, QWidget):
 		# a run paused with its memory freed comes first, nothing else starts until it is resumed or stopped
 		self.check_button.setEnabled(not busy and not self.freed)
 		self.target_card.preview_button.setEnabled(not busy and not self.freed)
-		# a preview, Studio's or Batch's, shows its progress on its own preview card and leaves the run bar as it was
-		run_bar = not self.session.task_is_preview
-		self.stop_button.setEnabled(busy and (run_bar or bool(self.pending_output)) or self.paused and self.run_active())
+		# only what Studio started can be stopped here: its run or preview, or its content check. a Batch run or preview
+		# shows its progress on its own page
+		own_task = bool(self.pending_output) or self.session.content_check_owner == 'studio'
+		self.stop_button.setEnabled(busy and own_task or self.paused and self.run_active())
 
 	def toggle_pause(self) -> None:
 		if self.paused:
