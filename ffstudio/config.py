@@ -66,6 +66,8 @@ DEFAULT_CONFIG : Dict[str, Any] =\
 	'output_subfolders': False,
 	# graphics card, processor and memory use in the title bar
 	'show_system_monitor': True,
+	# the drives the output folders are on, in the title bar after the memory (they update with the system monitor)
+	'show_drives_in_title_bar': False,
 	# what the window's X button does: close, minimize or tray
 	'close_action': 'close',
 	# look for a newer studioff release when the app opens, and say so with an Update Now button

@@ -1011,7 +1011,7 @@ class DriveLabel(CaptionLabel):
 	def __init__(self, folder : Callable[[], str], parent : Optional[QWidget] = None) -> None:
 		super().__init__(parent)
 		self.folder = folder
-		self.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+		self.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
 		self.installEventFilter(ToolTipFilter(self, 300))
 		# files saved by a run or by other programs change it, so it is read again now and then
 		self.timer = QTimer(self)
@@ -1036,6 +1036,62 @@ class DriveLabel(CaptionLabel):
 	def hideEvent(self, event) -> None:
 		super().hideEvent(event)
 		self.timer.stop()
+
+
+class DriveBar(QWidget):
+	"""a thin gray bar that fills as the drive of an output folder fills, orange once it is getting full. gray, so it does not
+	look like a progress bar that is stuck"""
+	HEIGHT = 4
+
+	def __init__(self, folder : Callable[[], str], parent : Optional[QWidget] = None) -> None:
+		super().__init__(parent)
+		self.folder = folder
+		self.drive = None
+		self.setFixedHeight(self.HEIGHT)
+		self.timer = QTimer(self)
+		self.timer.setInterval(5000)
+		self.timer.timeout.connect(self.refresh)
+
+	def refresh(self) -> None:
+		folder = self.folder()
+		self.drive = describe_drive(folder) if folder else None
+		self.update()
+
+	def showEvent(self, event) -> None:
+		super().showEvent(event)
+		self.refresh()
+		self.timer.start()
+
+	def hideEvent(self, event) -> None:
+		super().hideEvent(event)
+		self.timer.stop()
+
+	def paintEvent(self, event) -> None:
+		if not self.drive:
+			return
+		painter = QPainter(self)
+		painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+		painter.setPen(Qt.PenStyle.NoPen)
+		rect = QRectF(self.rect())
+		radius = rect.height() / 2
+		painter.setBrush(QColor(255, 255, 255, 40) if isDarkTheme() else QColor(0, 0, 0, 35))
+		painter.drawRoundedRect(rect, radius, radius)
+		filled = QRectF(rect.x(), rect.y(), max(rect.width() * self.drive.get('share'), rect.height()), rect.height())
+		painter.setBrush(QColor('#d97706') if self.drive.get('warn') else QColor('#8a8a8a'))
+		painter.drawRoundedRect(filled, radius, radius)
+
+
+def with_drive_bar(edit : QWidget, folder : Callable[[], str], parent : QWidget) -> Tuple[QWidget, DriveBar]:
+	"""the output folder box with the drive bar right under it, the same width. the space above the box is as tall as the
+	bar, so the box stays level with the buttons beside it"""
+	box = QWidget(parent)
+	column = QVBoxLayout(box)
+	column.setContentsMargins(0, DriveBar.HEIGHT + 2, 0, 0)
+	column.setSpacing(2)
+	column.addWidget(edit)
+	bar = DriveBar(folder, box)
+	column.addWidget(bar)
+	return box, bar
 
 
 class NameEdit(QLineEdit):

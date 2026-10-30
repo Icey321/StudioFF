@@ -21,7 +21,7 @@ from ffstudio.option_panel import FavoritesPanel, OptionPanel
 from ffstudio.output_name import AUTOMATIC_TEMPLATE, NAME_EXAMPLES, NAME_TAGS, build_output, build_output_path, unknown_tags
 from ffstudio.presets import PresetBar
 from ffstudio.session import CONTENT_RESULT_PREFIX, Session, folder_is_writable
-from ffstudio.widgets import DisabledToolTipFilter, DriveLabel, GroupChip, PreviewView, ProcessorArea, ProcessorButton, Splitter, Thumbnail, add_edit_button, attach_landmarks_cycle, collect_drop_paths, guard_wheel, landmarks_mode
+from ffstudio.widgets import DisabledToolTipFilter, DriveLabel, GroupChip, PreviewView, ProcessorArea, ProcessorButton, Splitter, Thumbnail, add_edit_button, attach_landmarks_cycle, collect_drop_paths, guard_wheel, landmarks_mode, with_drive_bar
 
 STUDIO_GROUPS = [ 'face_selector', 'face_masker', 'face_detector', 'face_aligner', 'face_tracker', 'output_creation', 'frame_extraction', 'frame_distribution', 'voice_extractor', 'workflow' ]
 # settings that cannot change how a single preview frame looks
@@ -293,7 +293,7 @@ class SourceCard(SimpleCardWidget):
 		self.count_label.setTextColor('#707070', '#9a9a9a')
 		header.insertWidget(1, self.count_label, 1)
 		self.group_button = TransparentToolButton(FluentIcon.PEOPLE, self)
-		self.group_button.setToolTip('Group the selected faces, a group can be picked again with one click' + (' and given to a person in Face mapping' if hasattr(page, 'mapping_passes') else '') + '\nNeeds (2) or more faces in use')
+		self.group_button.setToolTip('Group the selected faces, a group can be picked again with one click' + (' and given to a person in Face Mapping' if hasattr(page, 'mapping_passes') else '') + '\nNeeds (2) or more faces in use')
 		self.group_button.installEventFilter(DisabledToolTipFilter(self.group_button))
 		self.group_button.clicked.connect(self.page.group_sources)
 		header.addWidget(self.group_button)
@@ -1145,14 +1145,22 @@ class StudioPage(SourceSelection, QWidget):
 		layout = QHBoxLayout()
 		layout.setSpacing(8)
 		column.addLayout(layout)
-		layout.addWidget(StrongBodyLabel('Output', card))
+		# the space left where the results go sits under the word Output, so a long video does not fill the drive halfway
+		self.drive_label = DriveLabel(self.output_dir, card)
+		label_column = QVBoxLayout()
+		label_column.setSpacing(0)
+		label_column.addWidget(StrongBodyLabel('Output Folder', card))
+		label_column.addWidget(self.drive_label)
+		layout.addLayout(label_column)
 		layout.addSpacing(8)
 		self.output_dir_edit = LineEdit(card)
 		self.output_dir_edit.setText(self.session.config.get('output_dir') or '')
 		self.output_dir_edit.setPlaceholderText('Output folder')
 		self.output_dir_edit.editingFinished.connect(lambda: self.session.config.set('output_dir', self.output_dir_edit.text().strip()))
 		self.output_dir_edit.textChanged.connect(lambda _: self.refresh_name_preview())
-		layout.addWidget(self.output_dir_edit, 3)
+		output_box, self.drive_bar = with_drive_bar(self.output_dir_edit, self.output_dir, card)
+		self.output_dir_edit.textChanged.connect(lambda _: self.drive_bar.refresh())
+		layout.addWidget(output_box, 3)
 		browse_button = add_edit_button(self.output_dir_edit, FluentIcon.FOLDER, 'Choose output folder')
 		browse_button.clicked.connect(self.browse_output_dir)
 		self.output_name_edit = LineEdit(card)
@@ -1179,10 +1187,7 @@ class StudioPage(SourceSelection, QWidget):
 		names_row = QHBoxLayout()
 		names_row.setSpacing(12)
 		names_row.addWidget(self.name_preview_label, 1)
-		# the space left where the results go, so a long video does not fill the drive halfway
-		self.drive_label = DriveLabel(self.output_dir, card)
 		self.output_dir_edit.textChanged.connect(lambda _: self.drive_label.refresh())
-		names_row.addWidget(self.drive_label)
 		column.addLayout(names_row)
 		return card
 
@@ -1516,7 +1521,7 @@ class StudioPage(SourceSelection, QWidget):
 			# a gif's passes run on the video facefusion gets of it, the last step turns the result back into a gif
 			target = self.session.facefusion_video(self.target_path)
 			if not target:
-				self.session.notify.emit('error', 'Face mapping', 'Could not turn %s into a video. Check that ffmpeg is installed.' % os.path.basename(self.target_path))
+				self.session.notify.emit('error', 'Face Mapping', 'Could not turn %s into a video. Check that ffmpeg is installed.' % os.path.basename(self.target_path))
 				return
 			self.start_clock()
 			self.start_chain(passes, target, output_path, info, preview = False)
@@ -2009,7 +2014,7 @@ class StudioPage(SourceSelection, QWidget):
 		people = self.mapping_card.active_people()
 		menu = RoundMenu(parent = self)
 		if person is not None and person < len(people) and people[person].get('removed'):
-			menu.addAction(Action(FluentIcon.ADD, 'Add %s back to Face mapping' % person_name(people, person), triggered = lambda: self.mapping_card.restore_person(person)))
+			menu.addAction(Action(FluentIcon.ADD, 'Add %s back to Face Mapping' % person_name(people, person), triggered = lambda: self.mapping_card.restore_person(person)))
 			menu.exec(position)
 			return
 		if not is_kept(people, person):
@@ -2029,7 +2034,7 @@ class StudioPage(SourceSelection, QWidget):
 		menu.addMenu(sources)
 		menu.addAction(Action(FluentIcon.CANCEL, 'Leave unchanged', triggered = lambda: row.set_source(LEAVE)))
 		menu.addSeparator()
-		menu.addAction(Action(FluentIcon.DELETE, 'Remove %s from Face mapping' % person_name(people, person), triggered = lambda: self.mapping_card.remove_person(person)))
+		menu.addAction(Action(FluentIcon.DELETE, 'Remove %s from Face Mapping' % person_name(people, person), triggered = lambda: self.mapping_card.remove_person(person)))
 		menu.exec(position)
 
 	# face mapping
@@ -2126,7 +2131,7 @@ class StudioPage(SourceSelection, QWidget):
 		trim_end = self.session.values.get('trim_frame_end')
 		for item in passes:
 			if not item.get('many') and video and (item.get('frame') < trim_start or trim_end is not None and item.get('frame') >= trim_end):
-				self.session.notify.emit('warning', 'Face mapping', "%s's reference frame #%d is outside the trimmed part. Look for people again with the refresh button." % (item.get('label'), item.get('frame')))
+				self.session.notify.emit('warning', 'Face Mapping', "%s's reference frame #%d is outside the trimmed part. Look for people again with the refresh button." % (item.get('label'), item.get('frame')))
 				return
 		shutil.rmtree(PASSES_DIR, ignore_errors = True)
 		os.makedirs(PASSES_DIR, exist_ok = True)
@@ -2154,7 +2159,7 @@ class StudioPage(SourceSelection, QWidget):
 		self.status_label.setText('Face mapping stopped')
 		self.detail_label.setText('')
 		self.progress_bar.error()
-		self.session.notify.emit('error', 'Face mapping', message)
+		self.session.notify.emit('error', 'Face Mapping', message)
 
 	def locate_next(self) -> None:
 		"""asks the probe where the next person is in their reference frame, the position depends on the sources"""

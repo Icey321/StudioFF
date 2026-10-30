@@ -254,7 +254,7 @@ class FaceMappingCard(CollapsibleCard):
 	renamed = Signal()
 
 	def __init__(self, page : Any, find : Callable[[], None]) -> None:
-		super().__init__('Face mapping', icon = FluentIcon.PEOPLE, expanded = page.session.config.get('face_mapping_expanded', True), parent = page)
+		super().__init__('Face Mapping', icon = FluentIcon.PEOPLE, expanded = page.session.config.get('face_mapping_expanded', True), parent = page)
 		self.page = page
 		self.people : List[Dict[str, Any]] = []
 		self.samples = 0
@@ -274,7 +274,7 @@ class FaceMappingCard(CollapsibleCard):
 		self.refresh_button.clicked.connect(self.find)
 		self.add_tool(self.refresh_button)
 		# the switch: in the accent color while face mapping is on or people are being looked for, the card gets an accent tint too
-		self.find_button = TogglePushButton(FluentIcon.PEOPLE, 'Face mapping off', self)
+		self.find_button = TogglePushButton(FluentIcon.PEOPLE, 'Face Mapping Off', self)
 		self.find_button.setToolTip('Turn face mapping on to give each person in the target a source of their own.\nThe first time it looks through the target for the people in it, turned off it keeps them for later.')
 		self.find_button.installEventFilter(ToolTipFilter(self.find_button))
 		self.find_button.clicked.connect(self.on_find_clicked)
@@ -358,7 +358,7 @@ class FaceMappingCard(CollapsibleCard):
 		self.finding = True
 		self.find_button.setEnabled(False)
 		self.find_button.setChecked(True)
-		self.find_button.setText('Face mapping on')
+		self.find_button.setText('Face Mapping On')
 		self.refresh_button.setEnabled(False)
 		self.update()
 		if total:
@@ -376,7 +376,7 @@ class FaceMappingCard(CollapsibleCard):
 		on = self.active()
 		self.find_button.setEnabled(True)
 		self.find_button.setChecked(on)
-		self.find_button.setText('Face mapping on' if on else 'Face mapping off')
+		self.find_button.setText('Face Mapping On' if on else 'Face Mapping Off')
 		self.refresh_button.setEnabled(True)
 		self.refresh_button.setVisible(on)
 		self.rows_layout.parentWidget().setVisible(on)

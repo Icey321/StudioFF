@@ -21,13 +21,15 @@ from ffstudio.pages.models import format_size
 from ffstudio.pages.setup import SYSTEM_GROUPS, form_row, section_card
 from ffstudio.pages.studio import LIVE_IGNORED_GROUPS, PREVIEW_MAX_SIDE, NameTagsView, SettingsColumn, SourceCard, SourceSelection, StudioPage, elastic, estimated_progress, preview_step_floor, run_tag_values, tool_button
 from ffstudio.session import OptionStore, Session, explain_error, folder_is_writable
-from ffstudio.widgets import DriveLabel, IconCountButton, PreviewView, Splitter, add_edit_button, attach_landmarks_cycle, collect_drop_paths, guard_wheel, landmarks_mode
+from ffstudio.widgets import DriveLabel, IconCountButton, PreviewView, Splitter, add_edit_button, attach_landmarks_cycle, collect_drop_paths, guard_wheel, landmarks_mode, with_drive_bar
 
 TARGET_FILTERS = [ ('*.*', 'All files'), ('*.mp4', 'MP4 videos'), ('*.jpg', 'JPG images'), ('*.png', 'PNG images'), ('*.mov', 'MOV videos'), ('*.webm', 'WebM videos'), ('*.gif', 'GIF animations') ]
 DEFAULT_TEMPLATE = '{target}_{source}'
 # the placeholders of the first batch file names, read as the tags that replaced them
 OLD_PLACEHOLDERS = { '{target_name}': '{target}', '{source_name}': '{source}', '{target_extension}': '', '{index}': '{n}' }
 LIST_LIMIT = 500
+# wide enough for the drive text under "Output folder"
+LABEL_WIDTH = 190
 TARGET_FILES_FILTER = 'Images, videos and GIFs (*.jpg *.jpeg *.jfif *.png *.webp *.avif *.heic *.heif *.bmp *.tif *.tiff *.mp4 *.mov *.mkv *.avi *.webm *.m4v *.wmv *.mpg *.mpeg *.flv *.f4v *.gif);;All files (*)'
 # a mark, the words before the names, and the mark's color in the light and dark theme (none follows the theme color)
 STATUS_LOOK =\
@@ -709,7 +711,7 @@ class BatchPage(SourceSelection, QWidget):
 		self.source_card.add_tool(copy_sources)
 		batch_layout.addWidget(self.source_card)
 
-		card, form = section_card('Targets and output', '', batch_tab)
+		card, form = section_card('Targets and Output', '', batch_tab)
 		self.target_dir = LineEdit(card)
 		self.target_dir.setText(stored.get('target_dir', ''))
 		self.target_dir.setPlaceholderText('Folder with the target images or videos')
@@ -724,7 +726,7 @@ class BatchPage(SourceSelection, QWidget):
 		self.target_filter.currentIndexChanged.connect(lambda _: self.refresh_matches())
 		target_browse = PushButton(FluentIcon.FOLDER, 'Browse', card)
 		target_browse.clicked.connect(lambda: self.browse(self.target_dir))
-		form.addLayout(form_row('Target folder', [ self.target_dir, self.target_filter, target_browse ], card))
+		form.addLayout(form_row('Target Folder', [ self.target_dir, self.target_filter, target_browse ], card, LABEL_WIDTH))
 		self.output_dir_edit = LineEdit(card)
 		self.output_dir_edit.setText(stored.get('output_dir', os.path.join(session.config.get('output_dir') or '', 'batch')))
 		output_browse = PushButton(FluentIcon.FOLDER, 'Browse', card)
@@ -733,7 +735,12 @@ class BatchPage(SourceSelection, QWidget):
 		output_open.setToolTip('Open the output folder in File Explorer')
 		output_open.installEventFilter(ToolTipFilter(output_open))
 		output_open.clicked.connect(self.open_output_folder)
-		form.addLayout(form_row('Output folder', [ self.output_dir_edit, output_browse, output_open ], card))
+		output_box, self.drive_bar = with_drive_bar(self.output_dir_edit, self.output_dir, card)
+		self.output_dir_edit.textChanged.connect(lambda _: self.drive_bar.refresh())
+		# the space left where the results go, under the label, so a long batch does not fill the drive halfway
+		self.drive_label = DriveLabel(self.output_dir, card)
+		self.output_dir_edit.textChanged.connect(lambda _: self.drive_label.refresh())
+		form.addLayout(form_row('Output Folder', [ output_box, output_browse, output_open ], card, LABEL_WIDTH, self.drive_label))
 		self.output_name_edit = LineEdit(card)
 		self.output_name_edit.setPlaceholderText('File name (automatic)')
 		self.output_name_edit.setClearButtonEnabled(True)
@@ -745,15 +752,12 @@ class BatchPage(SourceSelection, QWidget):
 		self.subfolders_button.installEventFilter(ToolTipFilter(self.subfolders_button))
 		self.subfolders_button.setChecked(bool(stored.get('subfolders')))
 		self.subfolders_button.toggled.connect(lambda _: self.refresh_matches())
-		form.addLayout(form_row('File name', [ self.output_name_edit, self.subfolders_button ], card))
+		form.addLayout(form_row('File name', [ self.output_name_edit, self.subfolders_button ], card, LABEL_WIDTH))
 		# what the first file will be called, so tags can be checked before a run
 		self.name_preview_label = elastic(CaptionLabel('', card))
 		self.name_preview_label.setTextColor('#707070', '#9a9a9a')
 		self.name_preview_label.installEventFilter(ToolTipFilter(self.name_preview_label))
-		# the space left where the results go, so a long batch does not fill the drive halfway
-		self.drive_label = DriveLabel(self.output_dir, card)
-		self.output_dir_edit.textChanged.connect(lambda _: self.drive_label.refresh())
-		form.addLayout(form_row('', [ self.name_preview_label, self.drive_label ], card))
+		form.addLayout(form_row('', [ self.name_preview_label ], card, LABEL_WIDTH))
 		batch_layout.addWidget(card)
 
 		for edit in [ self.target_dir, self.output_dir_edit, self.output_name_edit ]:

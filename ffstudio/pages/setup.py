@@ -5,8 +5,8 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
-from PySide6.QtWidgets import QAbstractButton, QApplication, QButtonGroup, QFileDialog, QHBoxLayout, QLabel, QSizePolicy, QVBoxLayout, QWidget
-from qfluentwidgets import BodyLabel, CaptionLabel, CheckBox, ColorPickerButton, ComboBox, EditableComboBox, FluentIcon, HyperlinkButton, IconWidget, InfoBarIcon, LineEdit, MessageBox, PrimaryPushButton, ProgressBar, PushButton, SearchLineEdit, SimpleCardWidget, SingleDirectionScrollArea, StrongBodyLabel, SubtitleLabel, SwitchButton, ToolTipFilter, TransparentToolButton
+from PySide6.QtWidgets import QAbstractButton, QApplication, QButtonGroup, QFileDialog, QFrame, QHBoxLayout, QLabel, QSizePolicy, QVBoxLayout, QWidget
+from qfluentwidgets import BodyLabel, CaptionLabel, CheckBox, ColorPickerButton, ComboBox, EditableComboBox, FluentIcon, HyperlinkButton, IconWidget, InfoBarIcon, LineEdit, MessageBox, PrimaryPushButton, ProgressBar, PushButton, SearchLineEdit, SimpleCardWidget, SingleDirectionScrollArea, StrongBodyLabel, SubtitleLabel, SwitchButton, ToolTipFilter, TransparentToolButton, isDarkTheme
 
 from ffstudio import APP_REPOSITORY, APP_VERSION, TESTED_FACEFUSION_COMMIT, TESTED_FACEFUSION_DATE
 from ffstudio.environment import PREREQUISITES, check_dependencies, compare_github_commits, create_process_environment, fetch_github_build, fetch_latest_release, find_conda, find_conda_base, find_missing_prerequisites, find_python_candidates, has_nvidia_gpu, is_facefusion_root, is_newer_version, probe_python_version, read_facefusion_build, read_facefusion_version, read_windows_version, refresh_path, switch_facefusion_commit, version_tuple, winget_install_args
@@ -58,12 +58,24 @@ class StatusLine(QWidget):
 		self.label.setText(text)
 
 
-def form_row(label : str, widgets : List[QWidget], parent : QWidget) -> QHBoxLayout:
+def form_row(label : str, widgets : List[QWidget], parent : QWidget, label_width : int = 130, under : Optional[QWidget] = None) -> QHBoxLayout:
+	"""under is a small widget shown below the label, such as the space left on a drive"""
 	row = QHBoxLayout()
 	row.setSpacing(8)
 	caption = BodyLabel(label, parent)
-	caption.setFixedWidth(130)
-	row.addWidget(caption)
+	if under:
+		column = QVBoxLayout()
+		column.setSpacing(0)
+		column.addWidget(caption)
+		column.addWidget(under)
+		holder = QWidget(parent)
+		holder.setFixedWidth(label_width)
+		holder.setLayout(column)
+		column.setContentsMargins(0, 0, 0, 0)
+		row.addWidget(holder)
+	else:
+		caption.setFixedWidth(label_width)
+		row.addWidget(caption)
 	# a first widget with a maximum width would sit centred in the space it cannot fill, so pack the row to the left instead
 	limited = bool(widgets) and widgets[0].maximumWidth() < 16777215
 	for index, widget in enumerate(widgets):
@@ -221,7 +233,18 @@ class SetupPage(QWidget):
 		self.facefusion_startup_switch = startup_switch(self.facefusion_page.header, 'Check for FaceFusion Updates at Startup', 'Look for a new FaceFusion release each time the app opens. An orange dot on the FaceFusion icon means one is out', self.session.config.get('check_facefusion_updates_at_startup') is not False, self.facefusion_page)
 		self.facefusion_startup_switch.checkedChanged.connect(self.on_facefusion_startup_check_toggled)
 		page_content = self.facefusion_page.content
-		for card in [ self.create_update_card(page_content), self.create_location_card(page_content), self.create_install_card(page_content) ]:
+		self.facefusion_page.content_layout.addWidget(self.create_update_card(page_content))
+		# a visible division, the cards below are about installing FaceFusion rather than updating it
+		self.facefusion_page.content_layout.addSpacing(12)
+		divider = QFrame(page_content)
+		divider.setFrameShape(QFrame.Shape.HLine)
+		divider.setFixedHeight(4)
+		divider.setStyleSheet('background: %s; border: none' % ('#4a4a4a' if isDarkTheme() else '#c8c8c8'))
+		self.facefusion_page.content_layout.addWidget(divider)
+		installation_row, installation_box = title_row('FaceFusion Installation', page_content)
+		installation_row.setContentsMargins(0, 8, 0, 0)
+		self.facefusion_page.content_layout.addWidget(installation_box)
+		for card in [ self.create_location_card(page_content), self.create_install_card(page_content) ]:
 			self.facefusion_page.content_layout.addWidget(card)
 		self.facefusion_page.content_layout.addStretch(1)
 		self.section_cards = [ self.create_studio_update_card(content), self.create_appearance_card(content) ]
@@ -276,7 +299,7 @@ class SetupPage(QWidget):
 	# location
 
 	def create_location_card(self, parent : QWidget) -> QWidget:
-		card, layout = section_card('FaceFusion v4 location', 'FaceFusion v4 has no built-in UI. This app drives its command line, so it needs the FaceFusion folder and a Python environment with Python 3.13 or newer and the FaceFusion requirements installed.', parent)
+		card, layout = section_card('FaceFusion Already Installed ?', 'FaceFusion v4 has no built-in UI. This app drives its command line, so it needs the FaceFusion folder and a Python environment with Python 3.13 or newer and the FaceFusion requirements installed.', parent)
 		self.root_edit = LineEdit(card)
 		self.root_edit.setPlaceholderText('Folder that contains facefusion.py')
 		self.root_edit.setText(self.session.facefusion_root)
@@ -348,7 +371,7 @@ class SetupPage(QWidget):
 		self.python_combo.setText(best or current or (found[0][0] if found else ''))
 		self.refresh_python_status()
 		if not found:
-			self.session.notify.emit('warning', 'No environments found', 'No conda or venv Python was found. Use "Install FaceFusion v4" below.')
+			self.session.notify.emit('warning', 'No environments found', 'No conda or venv Python was found. Use "Install FaceFusion" below.')
 
 	def refresh_root_status(self) -> None:
 		root = self.root_edit.text().strip()
@@ -413,7 +436,7 @@ class SetupPage(QWidget):
 	# installation
 
 	def create_install_card(self, parent : QWidget) -> QWidget:
-		card, layout = section_card('Install FaceFusion v4', 'Clones the v4 branch, creates a Python 3.13 environment and installs the requirements with the onnxruntime build you pick. Anything missing that it needs (Git, uv, FFmpeg, curl) is listed first and only installed if you agree. It downloads a few GB and the progress shows in Console.', parent)
+		card, layout = section_card('Install FaceFusion', 'Clones the v4 branch, creates a Python 3.13 environment and installs the requirements with the onnxruntime build you pick. Anything missing that it needs (Git, uv, FFmpeg, curl) is listed first and only installed if you agree. It downloads a few GB and the progress shows in Console.', parent)
 		self.conda_path = find_conda()
 		self.uv_path = shutil.which('uv')
 		default_folder = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))), 'facefusion-v4')
@@ -451,7 +474,7 @@ class SetupPage(QWidget):
 		layout.addLayout(form_row('', [ self.dependency_status ], card))
 		buttons = QHBoxLayout()
 		buttons.addSpacing(138)
-		self.install_button = PrimaryPushButton(FluentIcon.DOWNLOAD, 'Install FaceFusion v4', card)
+		self.install_button = PrimaryPushButton(FluentIcon.DOWNLOAD, 'Install FaceFusion', card)
 		self.install_button.clicked.connect(self.start_install)
 		self.install_status = CaptionLabel('', card)
 		self.install_status.setWordWrap(True)
@@ -690,8 +713,8 @@ class SetupPage(QWidget):
 		self.facefusion_update_found.emit(False)
 		self.refresh_installed_build()
 		if result.get('requirements_changed'):
-			self.tested_status.set_status('warning', 'Switched. FaceFusion needs other packages now: click Install FaceFusion v4 above, it skips the download.')
-			self.session.notify.emit('warning', 'FaceFusion switched', 'Its requirements changed. Click Install FaceFusion v4 on the FaceFusion page to update its packages.')
+			self.tested_status.set_status('warning', 'Switched. FaceFusion needs other packages now: click Install FaceFusion above, it skips the download.')
+			self.session.notify.emit('warning', 'FaceFusion switched', 'Its requirements changed. Click Install FaceFusion on the FaceFusion page to update its packages.')
 		else:
 			self.session.notify.emit('success', 'FaceFusion switched', 'Now on commit %s.' % result.get('commit', '')[:7])
 		# options can differ between commits
@@ -998,6 +1021,10 @@ class SetupPage(QWidget):
 		self.monitor_switch.setChecked(bool(self.session.config.get('show_system_monitor')))
 		self.monitor_switch.checkedChanged.connect(self.on_monitor_toggled)
 		layout.addLayout(form_row('System monitor', [ BodyLabel('Show graphics card, processor and memory use in the title bar', card), self.monitor_switch ], card))
+		self.drives_switch = SwitchButton(card)
+		self.drives_switch.setChecked(bool(self.session.config.get('show_drives_in_title_bar')))
+		self.drives_switch.checkedChanged.connect(self.on_drives_toggled)
+		layout.addLayout(form_row('Hard drives', [ BodyLabel('Show the free space of the drives the output folders are on in the title bar (needs the system monitor)', card), self.drives_switch ], card))
 		self.close_combo = ComboBox(card)
 		for key, text in CLOSE_CHOICES:
 			self.close_combo.addItem(text, userData = key)
@@ -1027,6 +1054,10 @@ class SetupPage(QWidget):
 		self.session.config.set('show_system_monitor', checked)
 		self.session.config.save()
 		self.monitor_toggled.emit(checked)
+
+	def on_drives_toggled(self, checked : bool) -> None:
+		self.session.config.set('show_drives_in_title_bar', checked)
+		self.session.config.save()
 
 	def on_close_action_changed(self, _ : int) -> None:
 		self.session.config.set('close_action', self.close_combo.currentData())

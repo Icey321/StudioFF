@@ -87,7 +87,7 @@ class MainWindow(FluentWindow):
 		# graphics card, processor and memory use, left of the window buttons
 		from ffstudio.monitor import MonitorBar, SystemMonitor
 		self.monitor_bar = MonitorBar(self.titleBar)
-		self.monitor_bar.drive_folders = lambda: [ self.studio_page.output_dir(), self.batch_page.output_dir() ]
+		self.monitor_bar.drive_folders = lambda: [ self.studio_page.output_dir(), self.batch_page.output_dir() ] if self.session.config.get('show_drives_in_title_bar') else []
 		# the window buttons sit in the title bar's last layout
 		buttons_index = self.titleBar.hBoxLayout.count() - 1
 		self.titleBar.hBoxLayout.insertWidget(buttons_index, self.monitor_bar, 0, Qt.AlignmentFlag.AlignVCenter)
