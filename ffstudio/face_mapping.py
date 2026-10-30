@@ -178,8 +178,8 @@ class PersonRow(QWidget):
 		self.name_edit.setPlaceholderText('Face %d' % (index + 1))
 		self.name_edit.setText(person.get('name') or '')
 		self.name_edit.setFixedHeight(30)
-		# short, so the source dropdown has room for its faces
-		self.name_edit.setFixedWidth(150)
+		# stretches to the arrow before the source dropdown
+		self.name_edit.setMinimumWidth(120)
 		self.name_edit.editingFinished.connect(self.on_name_edited)
 		text.addWidget(self.name_edit)
 		self.info_label = CaptionLabel(self.describe(), self)
@@ -190,15 +190,15 @@ class PersonRow(QWidget):
 			self.info_label.setTextColor('#b45309', '#f0b35a')
 			self.info_label.setToolTip('FaceFusion sees this face as almost the same person as another one (distance %.2f), a swap of one may also change the other.' % nearest)
 		text.addWidget(self.info_label)
-		layout.addLayout(text)
-		layout.addStretch(1)
+		layout.addLayout(text, 1)
 
 		arrow = QLabel('→', self)
 		arrow.setStyleSheet('QLabel { color: #9a9a9a; }')
 		layout.addWidget(arrow)
 		self.source_combo = FaceComboBox(self)
-		self.source_combo.setMinimumWidth(220)
-		self.source_combo.setMaximumWidth(280)
+		# wider for the room of five faces before the name
+		self.source_combo.setMinimumWidth(260)
+		self.source_combo.setMaximumWidth(320)
 		self.fill_sources()
 		self.source_combo.currentIndexChanged.connect(self.on_source_picked)
 		layout.addWidget(self.source_combo)

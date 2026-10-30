@@ -1124,6 +1124,14 @@ class Thumbnail(QFrame):
 			self.preview.setToolTip('%s\n%s\nClick to use only this one, Ctrl+click to add or remove it, Shift+click to pick a range.' % (self.path, state))
 
 
+class DisabledToolTipFilter(ToolTipFilter):
+	"""a tooltip that also shows while its button is off, so it can say what turns the button on"""
+
+	def _canShowToolTip(self) -> bool:
+		parent = self.parent()
+		return parent.isWidgetType() and bool(parent.toolTip())
+
+
 def round_pixmap(pixmap : QPixmap, size : int, ratio : int = 2) -> QPixmap:
 	"""the picture cut to a circle of size, drawn at twice the pixels so it stays sharp"""
 	result = QPixmap(size * ratio, size * ratio)
@@ -1144,13 +1152,13 @@ def round_pixmap(pixmap : QPixmap, size : int, ratio : int = 2) -> QPixmap:
 
 FACE_ICON = 22
 FACE_ICON_OVERLAP = 7
-FACE_ICON_SLOTS = 3
-# every face icon is as wide as three overlapping faces, so the names after them line up
+FACE_ICON_SLOTS = 5
+# every face icon is as wide as five overlapping faces, like the group pills, so the names after them line up
 FACE_ICON_SIZE = QSize(FACE_ICON + (FACE_ICON_SLOTS - 1) * (FACE_ICON - FACE_ICON_OVERLAP), FACE_ICON)
 
 
 def faces_icon(pixmaps : List[QPixmap]) -> QIcon:
-	"""up to three round faces overlapping from the left, like the group pills"""
+	"""up to five round faces overlapping, like the group pills"""
 	ratio = 2
 	result = QPixmap(FACE_ICON_SIZE * ratio)
 	result.fill(Qt.GlobalColor.transparent)
@@ -1158,8 +1166,11 @@ def faces_icon(pixmaps : List[QPixmap]) -> QIcon:
 	painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 	# a ring in the menu color keeps the overlapping faces apart
 	ring = QColor(43, 43, 43) if isDarkTheme() else QColor(249, 249, 249)
-	for index, pixmap in enumerate(pixmaps[:FACE_ICON_SLOTS]):
-		left = index * (FACE_ICON - FACE_ICON_OVERLAP) * ratio
+	pixmaps = pixmaps[:FACE_ICON_SLOTS]
+	# centered in the room of five, so one face sits in the middle of the column
+	offset = (FACE_ICON_SLOTS - len(pixmaps)) * (FACE_ICON - FACE_ICON_OVERLAP) * ratio // 2
+	for index, pixmap in enumerate(pixmaps):
+		left = offset + index * (FACE_ICON - FACE_ICON_OVERLAP) * ratio
 		painter.drawPixmap(left, 0, round_pixmap(pixmap, FACE_ICON * ratio, 1))
 		painter.setBrush(Qt.BrushStyle.NoBrush)
 		painter.setPen(QPen(ring, 2 * ratio))
@@ -1176,7 +1187,7 @@ def symbol_icon(icon : FluentIconBase) -> QIcon:
 	result.fill(Qt.GlobalColor.transparent)
 	painter = QPainter(result)
 	painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-	icon.render(painter, QRectF(4 * ratio, 3 * ratio, 16 * ratio, 16 * ratio))
+	icon.render(painter, QRectF((FACE_ICON_SIZE.width() - 16) / 2 * ratio, 3 * ratio, 16 * ratio, 16 * ratio))
 	painter.end()
 	result.setDevicePixelRatio(ratio)
 	return QIcon(result)
@@ -1232,7 +1243,7 @@ class GroupChip(QWidget):
 
 	AVATAR = 24
 	OVERLAP = 6
-	MAX_AVATARS = 4
+	MAX_AVATARS = 5
 	HEIGHT = 32
 
 	def __init__(self, group_id : int, name : str, pixmaps : List[QPixmap], parent : Optional[QWidget] = None) -> None:

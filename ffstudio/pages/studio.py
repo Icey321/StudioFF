@@ -21,7 +21,7 @@ from ffstudio.option_panel import FavoritesPanel, OptionPanel
 from ffstudio.output_name import AUTOMATIC_TEMPLATE, NAME_EXAMPLES, NAME_TAGS, build_output, build_output_path, unknown_tags
 from ffstudio.presets import PresetBar
 from ffstudio.session import CONTENT_RESULT_PREFIX, Session, folder_is_writable
-from ffstudio.widgets import DriveLabel, GroupChip, PreviewView, ProcessorArea, ProcessorButton, Splitter, Thumbnail, add_edit_button, attach_landmarks_cycle, collect_drop_paths, guard_wheel, landmarks_mode
+from ffstudio.widgets import DisabledToolTipFilter, DriveLabel, GroupChip, PreviewView, ProcessorArea, ProcessorButton, Splitter, Thumbnail, add_edit_button, attach_landmarks_cycle, collect_drop_paths, guard_wheel, landmarks_mode
 
 STUDIO_GROUPS = [ 'face_selector', 'face_masker', 'face_detector', 'face_aligner', 'face_tracker', 'output_creation', 'frame_extraction', 'frame_distribution', 'voice_extractor', 'workflow' ]
 # settings that cannot change how a single preview frame looks
@@ -292,10 +292,12 @@ class SourceCard(SimpleCardWidget):
 		self.count_label.installEventFilter(ToolTipFilter(self.count_label))
 		self.count_label.setTextColor('#707070', '#9a9a9a')
 		header.insertWidget(1, self.count_label, 1)
-		self.group_button = tool_button(FluentIcon.PEOPLE, 'Group the selected faces, a group can be picked again with one click' + (' and given to a person in Face mapping' if hasattr(page, 'mapping_passes') else ''), self)
+		self.group_button = TransparentToolButton(FluentIcon.PEOPLE, self)
+		self.group_button.setToolTip('Group the selected faces, a group can be picked again with one click' + (' and given to a person in Face mapping' if hasattr(page, 'mapping_passes') else '') + '\nNeeds (2) or more faces in use')
+		self.group_button.installEventFilter(DisabledToolTipFilter(self.group_button))
 		self.group_button.clicked.connect(self.page.group_sources)
 		header.addWidget(self.group_button)
-		self.select_button = tool_button(FluentIcon.CHECKBOX, 'Use all sources / none', self)
+		self.select_button = tool_button(FluentIcon.CHECKBOX, 'Select all sources / none', self)
 		self.select_button.clicked.connect(self.page.toggle_all_sources)
 		add_button = tool_button(FluentIcon.ADD, 'Add face images or audio', self)
 		add_button.clicked.connect(self.browse)
