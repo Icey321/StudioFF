@@ -5,6 +5,9 @@
   scratchpad. Nik's real settings (`%APPDATA%\StudioFF`) are NOT shielded from Claude: on
   2026-10-29 a test without it wiped his source faces, names and a face mapping.
 
+- StudioFF supports only FaceFusion's v4 branch from commit e7a2848 (2026-10-30, `--face-selector-map`)
+  on. Do not add or keep fallbacks for older FaceFusion commits (Nik, 2026-10-30).
+
 - Nik works on this project only on his home PC, so the to-do list stays in Claude's
   memory (`deferred-features-oct-2026.md`), not in a file in the project.
 

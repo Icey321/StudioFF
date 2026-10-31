@@ -10,7 +10,7 @@ usage: python face_probe.py
 		{"id": 1, "frame": <image path>, "reference": <image path or null>, "sources": [<image path>], "args": [<facefusion option flags>], "mask": <png path or null>}
 	prints one line per request: FACES {json}
 	with a mask path it also writes the face mask a run would blend with there, white where the new face goes
-	each face has its position in the sorted and filtered list, the number reference_face_position counts in,
+	each face has its position in the order reference_face_position counts in (see order_faces),
 	and with "people_file" (the embeddings a people scan saved) the index of the person it belongs to
 
 	a people request finds who appears in a target instead:
@@ -130,8 +130,15 @@ def prepare(request : dict, model_keys : set, path : str, result : dict) -> bool
 	return True
 
 
+def order_faces(faces) -> list:
+	"""the faces in the order a --face-selector-map position counts in: largest first, no filters"""
+	from facefusion import face_selector
+
+	return face_selector.sort_faces_by_order(faces, 'large-small')
+
+
 def find_position(face, ordered) -> int:
-	"""where a face is in the sorted and filtered list, the number reference_face_position counts in, -1 when the filters skip it"""
+	"""where a face is in the ordered list, the number reference_face_position counts in, -1 when it is not there"""
 	return next((index for index, other in enumerate(ordered) if same_box(face, other)), -1)
 
 
@@ -158,19 +165,21 @@ def scan(request : dict, model_keys : set) -> dict:
 	face_store.clear()
 	# get_static_faces keeps the faces in the store, so select_faces below reuses them instead of detecting again
 	faces = get_static_faces([ frame ])
-	selected = face_selector.select_faces(reference_frame, source_frames, [ frame ])
+	# every reference face of the map is in the one reference frame the request gives
+	pointers = [ pointer for face_map in face_selector.decode_face_selector_maps(state_manager.get_item('face_selector_maps')) for pointer in face_map.get('reference_faces') ]
+	selected = face_selector.select_faces([ reference_frame ] * len(pointers), source_frames, [ frame ])[1]
+	reference_position = pointers[0].get('face_position') if pointers else 0
 	mode = state_manager.get_item('face_selector_mode')
 	result['mode'] = mode
-	# the order reference_face_position counts in, the sources decide the auto gender and race filters
-	ordered = face_selector.sort_and_filter_faces(get_static_faces(source_frames), faces)
+	# the order reference_face_position counts in
+	ordered = order_faces(faces)
 	people_file = request.get('people_file')
 	people = numpy.load(people_file) if people_file and os.path.isfile(people_file) else None
 
 	# the distances are measured in every mode, they show how far each face is from the one the reference selector would take
 	all_reference_faces = get_static_faces([ reference_frame ])
-	# the gender, race and age filters apply to the reference frame too
-	reference_faces = face_selector.sort_and_filter_faces(get_static_faces(source_frames), all_reference_faces)
-	reference_face = get_one_face(reference_faces, state_manager.get_item('reference_face_position'))
+	reference_faces = order_faces(all_reference_faces)
+	reference_face = get_one_face(reference_faces, reference_position)
 	if mode == 'reference':
 		result['reference_faces'] = len(all_reference_faces)
 		result['reference_found'] = reference_face is not None
@@ -273,7 +282,7 @@ def find_people(request : dict, model_keys : set) -> dict:
 		result['samples'] += 1
 		face_store.clear()
 		faces = get_many_faces([ frame ])
-		ordered = face_selector.sort_and_filter_faces([], faces)
+		ordered = order_faces(faces)
 		# the closest pairs first, so two people in one frame never end up in the same group
 		pairs = []
 		for face_index, face in enumerate(faces):

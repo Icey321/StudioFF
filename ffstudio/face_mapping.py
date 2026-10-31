@@ -139,6 +139,13 @@ def plan_passes(people : List[Dict[str, Any]], active_images : List[str], source
 	]
 
 
+def face_map(item : Dict[str, Any], sources : List[str], video : bool) -> str:
+	"""one person's --face-selector-map: the largest face of each of their sources, by its place in the run's
+	source list, to their face in their reference frame, a frame of an image target is always 0"""
+	source_faces = ' '.join('%d:0' % sources.index(path) for path in item.get('sources'))
+	return '%s to %d:%d' % (source_faces, item.get('frame') if video else 0, item.get('position'))
+
+
 class PersonRow(QWidget):
 	changed = Signal()
 	# a new name changes no run, so it does not refresh the preview

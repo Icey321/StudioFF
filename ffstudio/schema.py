@@ -24,7 +24,14 @@ GROUP_TITLES : Dict[str, str] =\
 	'misc': 'Misc'
 }
 # options the UI drives through dedicated controls instead of generic option rows
-MANAGED_OPTIONS = [ 'config_path', 'source_paths', 'target_path', 'output_path', 'processors' ]
+MANAGED_OPTIONS = [ 'config_path', 'source_paths', 'target_path', 'output_path', 'processors', 'face_selector_maps' ]
+# facefusion picks the reference face with --face-selector-map "to <frame>:<position>",
+# these two keep their rows and are turned into that map. the position counts the faces largest first
+MAP_OPTIONS =\
+{
+	'reference_face_position': { 'help': 'specify the position used to create the reference face, counting the faces largest first', 'after': 'face_selector_maps' },
+	'reference_frame_index': { 'help': 'specify the frame used to create the reference face', 'after': 'reference_face_distance' }
+}
 # split_label cuts these after the first word, the first two words would leave a name that says little
 SPLIT_AFTER_ONE = [ 'temp_frame_format', 'temp_pixel_format', 'reference_frame_index', 'target_frame_amount' ]
 # short labels split_label cannot make, two rows of the face masker would both be called Model
@@ -47,6 +54,7 @@ class Schema:
 		self.options : Dict[str, Dict[str, Any]] = data.get('options', {})
 		self.dependencies : Dict[str, Dict[str, Any]] = data.get('dependencies', {})
 		self.processors : List[str] = data.get('processors', [])
+		self.options = add_map_options(self.options)
 
 	@staticmethod
 	def load(path : str = SCHEMA_FILE) -> Optional['Schema']:
@@ -112,6 +120,27 @@ class Schema:
 		return list(dict.fromkeys(dependency.get('driver') for dependency in self.dependencies.values()))
 
 
+def add_map_options(options : Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+	"""the options with the reference frame and position rows back in their old places, they have no flag of their own"""
+	added : Dict[str, Dict[str, Any]] = {}
+	for dest, option in options.items():
+		added[dest] = option
+		for map_dest, map_option in MAP_OPTIONS.items():
+			if map_option.get('after') == dest and map_dest not in options:
+				added[map_dest] = { 'dest': map_dest, 'flag': None, 'help': map_option.get('help'), 'default': 0, 'choices': None, 'range': None, 'type': 'int', 'multiple': False, 'group': 'face_selector', 'mapped': True }
+	return added
+
+
+def face_map_args(values : Dict[str, Any]) -> List[str]:
+	"""--face-selector-map from the given maps, or from the reference frame and position, nothing for facefusion's own 'to 0:0'"""
+	maps = list(values.get('face_selector_maps') or [])
+	frame = int(values.get('reference_frame_index') or 0)
+	position = int(values.get('reference_face_position') or 0)
+	if not maps and (frame, position) != (0, 0):
+		maps = [ 'to %d:%d' % (frame, position) ]
+	return [ '--face-selector-map' ] + maps if maps else []
+
+
 def format_value(value : Any) -> List[str]:
 	if isinstance(value, list):
 		return [ format_scalar(item) for item in value ]
@@ -135,8 +164,10 @@ def build_option_args(schema : Schema, values : Dict[str, Any], groups : Optiona
 	args : List[str] = []
 	active_processors = values.get('processors') or schema.options.get('processors', {}).get('default') or []
 
+	if groups is None or 'face_selector' in groups:
+		args.extend(face_map_args(values))
 	for dest, option in schema.options.items():
-		if dest in MANAGED_OPTIONS or dest not in values:
+		if dest in MANAGED_OPTIONS or dest not in values or option.get('mapped'):
 			continue
 		group = option.get('group')
 		if groups is not None and group not in groups:

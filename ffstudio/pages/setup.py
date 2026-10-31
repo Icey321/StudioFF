@@ -28,6 +28,10 @@ THEME_CHOICES =[
 SYSTEM_GROUPS = [ 'execution', 'memory', 'download', 'misc', 'paths' ]
 REPOSITORY_URL = 'https://github.com/facefusion/facefusion.git'
 DEFAULT_REPOSITORY = 'facefusion/facefusion'
+# the branch StudioFF drives, the install clones it and the tested commit is on it
+FACEFUSION_BRANCH = 'v4'
+# the update card's labels are longer than the other cards'
+UPDATE_LABEL_WIDTH = 170
 CONDA_ENV_NAME = 'facefusion-v4'
 ONNXRUNTIME_CHOICES =\
 [
@@ -479,7 +483,11 @@ class SetupPage(QWidget):
 		self.install_status = CaptionLabel('', card)
 		self.install_status.setWordWrap(True)
 		self.install_status.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+		self.install_github_link = HyperlinkButton(github_page(''), 'Open GitHub', card, FluentIcon.GITHUB)
+		self.install_github_link.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
 		buttons.addWidget(self.install_button)
+		buttons.addSpacing(4)
+		buttons.addWidget(self.install_github_link)
 		buttons.addSpacing(8)
 		buttons.addWidget(self.install_status, 1)
 		layout.addLayout(buttons)
@@ -537,7 +545,7 @@ class SetupPage(QWidget):
 				steps.append(('Installing ' + PREREQUISITES[key][1], lambda key = key: self.session.run_program('Installing ' + PREREQUISITES[key][1], 'winget', winget_install_args(key), os.path.expanduser('~'))))
 
 		if not is_facefusion_root(folder):
-			steps.append(('Cloning FaceFusion v4', lambda: self.session.run_program('Cloning FaceFusion v4', shutil.which('git') or 'git', [ 'clone', '--branch', 'v4', '--depth', '1', REPOSITORY_URL, folder ], os.path.dirname(folder) or '.')))
+			steps.append(('Cloning FaceFusion v4', lambda: self.session.run_program('Cloning FaceFusion v4', shutil.which('git') or 'git', [ 'clone', '--branch', FACEFUSION_BRANCH, '--depth', '1', REPOSITORY_URL, folder ], os.path.dirname(folder) or '.')))
 		if not os.path.isfile(python_path):
 			if env_kind == 'conda':
 				steps.append(('Creating conda environment', lambda: self.session.run_program('Creating conda environment', 'cmd.exe', [ '/c', self.conda_path, 'create', '-y', '-n', CONDA_ENV_NAME, 'python=3.13', 'pip' ], folder)))
@@ -594,25 +602,25 @@ class SetupPage(QWidget):
 	# updates
 
 	def create_update_card(self, parent : QWidget) -> QWidget:
-		card, layout = section_card('FaceFusion updates', 'Checks the FaceFusion v4 folder this app drives against its GitHub repository. An orange dot on the FaceFusion icon means a newer release is out.', parent)
+		card, layout = section_card('FaceFusion updates', 'StudioFF uses the %s branch of FaceFusion on GitHub (%s). This checks your FaceFusion folder against that branch. An orange dot on the FaceFusion icon means a newer release is out.' % (FACEFUSION_BRANCH, DEFAULT_REPOSITORY), parent)
 		self.windows_label = BodyLabel(read_windows_version(), card)
 		self.windows_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-		layout.addLayout(form_row('Windows', [ self.windows_label ], card))
+		layout.addLayout(form_row('Operating System',[ self.windows_label ], card, UPDATE_LABEL_WIDTH))
 		self.installed_label = BodyLabel('', card)
 		self.installed_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-		layout.addLayout(form_row('FaceFusion', [ self.installed_label ], card))
+		layout.addLayout(form_row('FaceFusion Installed', [ self.installed_label ], card, UPDATE_LABEL_WIDTH))
 		self.github_label = BodyLabel('Not checked yet', card)
 		self.github_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-		layout.addLayout(form_row('On GitHub', [ self.github_label ], card))
-		self.tested_label = BodyLabel('commit %s  ·  %s' % (TESTED_FACEFUSION_COMMIT[:7], TESTED_FACEFUSION_DATE), card)
+		layout.addLayout(form_row('FaceFusion on GitHub', [ self.github_label ], card, UPDATE_LABEL_WIDTH))
+		self.tested_label = BodyLabel(format_build(FACEFUSION_BRANCH, '', TESTED_FACEFUSION_COMMIT, TESTED_FACEFUSION_DATE), card)
 		self.tested_label.setToolTip('StudioFF v%s was tested with this FaceFusion commit. Newer ones usually work too, but FaceFusion v4 is still changing and a new commit can break options' % APP_VERSION)
 		self.tested_label.installEventFilter(ToolTipFilter(self.tested_label))
 		self.tested_status = StatusLine(card)
-		layout.addLayout(form_row('Tested with', [ self.tested_label ], card))
-		layout.addLayout(form_row('', [ self.tested_status ], card))
+		layout.addLayout(form_row('Tested with', [ self.tested_label ], card, UPDATE_LABEL_WIDTH))
+		layout.addLayout(form_row('', [ self.tested_status ], card, UPDATE_LABEL_WIDTH))
 		buttons = QHBoxLayout()
-		buttons.addSpacing(138)
-		self.update_button = PushButton(FluentIcon.UPDATE, 'Check for FaceFusion Updates', card)
+		buttons.addSpacing(UPDATE_LABEL_WIDTH + 8)
+		self.update_button = PrimaryPushButton(FluentIcon.UPDATE, 'Check for FaceFusion Updates', card)
 		self.update_button.clicked.connect(lambda: self.check_for_updates())
 		self.github_link = HyperlinkButton(github_page(''), 'Open GitHub', card, FluentIcon.GITHUB)
 		self.update_status = StatusLine(card)
@@ -628,14 +636,14 @@ class SetupPage(QWidget):
 		buttons.addStretch(0)
 		layout.addLayout(buttons)
 		switch_buttons = QHBoxLayout()
-		switch_buttons.addSpacing(138)
+		switch_buttons.addSpacing(UPDATE_LABEL_WIDTH + 8)
 		self.tested_button = PushButton(FluentIcon.ACCEPT, 'Use Tested Version', card)
 		self.tested_button.setToolTip('Moves FaceFusion to the commit StudioFF was tested with')
 		self.tested_button.clicked.connect(lambda: self.switch_facefusion('tested'))
 		self.latest_button = PushButton(FluentIcon.SYNC, 'Update to Latest', card)
 		self.latest_button.setToolTip('Moves FaceFusion to the newest commit on GitHub, which StudioFF may not have been tested with')
 		self.latest_button.clicked.connect(lambda: self.switch_facefusion('latest'))
-		self.back_button = PushButton(FluentIcon.RETURN, 'Go Back', card)
+		self.back_button = PushButton(FluentIcon.RETURN, 'Go Back to Previous Version', card)
 		self.back_button.clicked.connect(lambda: self.switch_facefusion('back'))
 		for button in [ self.tested_button, self.latest_button, self.back_button ]:
 			button.installEventFilter(ToolTipFilter(button))
@@ -685,7 +693,7 @@ class SetupPage(QWidget):
 			return
 		commit = { 'tested': TESTED_FACEFUSION_COMMIT, 'latest': '', 'back': self.session.config.get('facefusion_previous_commit') or '' }[where]
 		if where == 'latest':
-			box = MessageBox('Update FaceFusion to the latest commit?', 'FaceFusion v4 is still being developed and any new commit can change or break options. StudioFF v%s was tested with commit %s.\n\nGo Back returns to your current commit if something stops working.' % (APP_VERSION, TESTED_FACEFUSION_COMMIT[:7]), self.window())
+			box = MessageBox('Update FaceFusion to the latest commit?', 'FaceFusion v4 is still being developed and any new commit can change or break options. StudioFF v%s was tested with commit %s.\n\nGo Back to Previous Version returns to your current commit if something stops working.' % (APP_VERSION, TESTED_FACEFUSION_COMMIT[:7]), self.window())
 			box.yesButton.setText('Update')
 			if not box.exec():
 				return
@@ -738,6 +746,7 @@ class SetupPage(QWidget):
 			return
 		self.installed_build = build
 		self.github_link.setUrl(github_page(build['repository']))
+		self.install_github_link.setUrl(github_page(build['repository']))
 		self.installed_label.setText(format_build(build['version'], build['branch'], build['commit'], build['date']))
 		self.installed_label.setToolTip(build['commit'])
 		self.show_tested_status()

@@ -69,6 +69,9 @@ def load_values(schema : Optional[Schema], stored : Dict[str, Any]) -> Dict[str,
 	values : Dict[str, Any] = {}
 	if schema:
 		for dest, option in schema.options.items():
+			# a run sets its own face maps, facefusion's 'to 0:0' kept here would replace the reference position of every run
+			if dest == 'face_selector_maps':
+				continue
 			values[dest] = stored.get(dest, option.get('default'))
 		for dest in list(values):
 			resolved = schema.resolve(dest, values)
@@ -93,6 +96,8 @@ class Session(QObject):
 	notify = Signal(str, str, str)
 	# owner, one result per target, exit code
 	content_checked = Signal(str, list, int)
+	# a batch keeps facefusion from its first check to its last output, other pages wait for it to end
+	batch_running_changed = Signal(bool)
 
 	def __init__(self) -> None:
 		super().__init__()
@@ -125,6 +130,7 @@ class Session(QObject):
 		# the page that started the running nsfw check, and what it found so far
 		self.content_check_owner = ''
 		self.content_results : List[Dict[str, Any]] = []
+		self.batch_running = False
 		self.init_values()
 
 	# configuration
@@ -229,6 +235,11 @@ class Session(QObject):
 			self.notify.emit('error', 'Could not read FaceFusion options', tail or 'exit code %d' % exit_code)
 
 	# running facefusion
+
+	def set_batch_running(self, running : bool) -> None:
+		if running != self.batch_running:
+			self.batch_running = running
+			self.batch_running_changed.emit(running)
 
 	def set_task(self, task : str, preview : bool = False) -> None:
 		self.task = task

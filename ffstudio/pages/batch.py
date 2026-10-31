@@ -560,7 +560,7 @@ class BatchPage(SourceSelection, QWidget):
 		super().__init__(parent)
 		self.setObjectName('batch')
 		self.session = session
-		self.running = False
+		self.batch_running = False
 		# one entry per output: sources, target, output path, status
 		self.items : List[Dict[str, Any]] = []
 		self.pairs_count = 0
@@ -915,6 +915,16 @@ class BatchPage(SourceSelection, QWidget):
 		self.refresh_matches()
 		# only once the page is built, the splash lets timers fire while it builds
 		self.clock.start()
+
+	@property
+	def running(self) -> bool:
+		return self.batch_running
+
+	@running.setter
+	def running(self, running : bool) -> None:
+		# the session holds facefusion for the batch, studio's own nsfw check would take it between two runs
+		self.batch_running = running
+		self.session.set_batch_running(running)
 
 	def create_settings_column(self) -> QWidget:
 		copy_button = PushButton(FluentIcon.COPY, 'Copy Options from Studio', self)

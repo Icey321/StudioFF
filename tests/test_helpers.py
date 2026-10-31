@@ -16,11 +16,12 @@ from unittest import mock
 from ffstudio import config
 from ffstudio.config import AppConfig, migrate_data_dir
 from ffstudio.environment import is_newer_version
-from ffstudio.face_mapping import SELECTED, pass_distance, plan_passes
+from ffstudio.face_mapping import SELECTED, face_map, pass_distance, plan_passes
 from ffstudio.media import VideoReader, format_seconds
 from ffstudio.output_name import build_output, build_output_path, clean_name, expand, unknown_tags
 from ffstudio.runner import PreviewWorker, ProcessRunner
 from ffstudio.schema import Schema, build_option_args
+from ffstudio.session import load_values
 from ffstudio.updater import APP_ROOT, RETIRED_FILES, download_release
 
 
@@ -132,6 +133,43 @@ class BuildOptionArgsTest(unittest.TestCase):
 
 	def test_groups(self) -> None:
 		self.assertEqual(build_option_args(SCHEMA, { 'face_detector_score': 0.7, 'keep_temp': True }, [ 'misc' ]), [ '--keep-temp' ])
+
+
+MAP_SELECTOR_SCHEMA = Schema(
+{
+	'options':
+	{
+		'face_selector_maps': { 'dest': 'face_selector_maps', 'flag': '--face-selector-map', 'group': 'face_selector', 'default': [ 'to 0:0' ], 'multiple': True },
+		'reference_face_distance': { 'dest': 'reference_face_distance', 'flag': '--reference-face-distance', 'group': 'face_selector', 'default': 0.3 },
+		'keep_temp': { 'dest': 'keep_temp', 'flag': '--keep-temp', 'group': 'misc', 'type': 'bool', 'default': False }
+	}
+})
+
+
+class FaceSelectorMapTest(unittest.TestCase):
+	def test_the_rows_come_back_in_place(self) -> None:
+		self.assertEqual(list(MAP_SELECTOR_SCHEMA.options), [ 'face_selector_maps', 'reference_face_position', 'reference_face_distance', 'reference_frame_index', 'keep_temp' ])
+		self.assertEqual([ option.get('dest') for option in MAP_SELECTOR_SCHEMA.group_options('face_selector') ], [ 'reference_face_position', 'reference_face_distance', 'reference_frame_index' ])
+
+	def test_frame_and_position_become_a_map(self) -> None:
+		self.assertEqual(build_option_args(MAP_SELECTOR_SCHEMA, { 'reference_frame_index': 0, 'reference_face_position': 0 }), [])
+		self.assertEqual(build_option_args(MAP_SELECTOR_SCHEMA, { 'reference_frame_index': 12, 'reference_face_position': 1 }), [ '--face-selector-map', 'to 12:1' ])
+		self.assertEqual(build_option_args(MAP_SELECTOR_SCHEMA, { 'reference_frame_index': 12 }, [ 'misc' ]), [])
+
+	def test_given_maps_win(self) -> None:
+		values = { 'reference_frame_index': 12, 'face_selector_maps': [ '0:0 to 4:1', '1:0 2:0 to 9:0' ], 'reference_face_distance': 0.4 }
+		self.assertEqual(build_option_args(MAP_SELECTOR_SCHEMA, values), [ '--face-selector-map', '0:0 to 4:1', '1:0 2:0 to 9:0', '--reference-face-distance', '0.4' ])
+
+	def test_stored_maps_are_not_kept(self) -> None:
+		# facefusion's own 'to 0:0' left in the options would replace the picked face of every run
+		values = load_values(MAP_SELECTOR_SCHEMA, { 'face_selector_maps': [ 'to 0:0' ], 'reference_face_position': 1 })
+		self.assertNotIn('face_selector_maps', values)
+		self.assertEqual(build_option_args(MAP_SELECTOR_SCHEMA, values), [ '--face-selector-map', 'to 0:1' ])
+
+	def test_face_map(self) -> None:
+		sources = [ 'a.jpg', 'b.jpg', 'c.jpg' ]
+		self.assertEqual(face_map({ 'sources': [ 'b.jpg', 'c.jpg' ], 'frame': 40, 'position': 2 }, sources, True), '1:0 2:0 to 40:2')
+		self.assertEqual(face_map({ 'sources': [ 'a.jpg' ], 'frame': 40, 'position': 0 }, sources, False), '0:0 to 0:0')
 
 
 class FaceMappingTest(unittest.TestCase):

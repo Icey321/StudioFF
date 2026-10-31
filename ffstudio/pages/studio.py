@@ -13,7 +13,7 @@ from PySide6.QtWidgets import QFileDialog, QGridLayout, QHBoxLayout, QSizePolicy
 from qfluentwidgets import Action, BodyLabel, CaptionLabel, FlowLayout, FluentIcon, Flyout, FlyoutAnimationType, FlyoutViewBase, IndeterminateProgressBar, LineEdit, PrimaryPushButton, ProgressBar, PushButton, RoundMenu, ScrollArea, SearchLineEdit, SegmentedWidget, SimpleCardWidget, SingleDirectionScrollArea, Slider, StrongBodyLabel, SubtitleLabel, TogglePushButton, ToolTipFilter, TransparentPushButton, TransparentToolButton, themeColor
 
 from ffstudio.config import APP_DIR, PREVIEW_DIR
-from ffstudio.face_mapping import FACE_PROCESSORS, FRAME_PROCESSORS, GROUP_PREFIX, LEAVE, PEOPLE_FILE, SELECTED, FaceMappingCard, box_overlap, group_images, group_value, is_kept, is_mapped, merge_people, people_dir, person_color, person_name, plan_passes
+from ffstudio.face_mapping import FACE_PROCESSORS, FRAME_PROCESSORS, GROUP_PREFIX, LEAVE, PEOPLE_FILE, SELECTED, FaceMappingCard, box_overlap, face_map, group_images, group_value, is_kept, is_mapped, merge_people, people_dir, person_color, person_name, plan_passes
 from ffstudio.faces import FACE_GROUPS, MASK_GROUPS, FaceProbe, describe_faces, describe_landmarks, describe_mask, face_landmarks, face_tag, faces_text_color, no_face, read_mask
 from ffstudio.media import VideoReader, animation_extension, browse_dir, is_animated_webp, is_animation, format_length, format_seconds, format_timecode, media_kind, read_frame, read_image, thumbnail, to_pixmap, usable_path, write_image
 from ffstudio.nsfw import BLOCKED_STATUS, NsfwDialog, describe_result, show_blocked_bar
@@ -1095,6 +1095,7 @@ class StudioPage(SourceSelection, QWidget):
 		session.runner.log.connect(self.on_log)
 		session.runner.finished.connect(self.on_finished)
 		session.content_checked.connect(self.on_content_checked)
+		session.batch_running_changed.connect(self.on_batch_running_changed)
 
 		self.source_card.refresh(self.source_paths)
 		self.target_card.load(self.target_path)
@@ -1991,7 +1992,8 @@ class StudioPage(SourceSelection, QWidget):
 			found = '1 face detected' if len(faces) == 1 else '%d faces detected' % len(faces)
 			named = [ face for face in faces if is_kept(people, face.get('person')) ]
 			swapped = [ face for face in named if people[face.get('person')].get('source') ]
-			lines.append('%s, %d of them mapped. Face mapping runs one pass per mapped person, the face selector is set for each pass.' % (found, len(swapped)) + ('' if len(named) == len(faces) else ' Faces without a name are left as they are, look for people again with the refresh button if someone is missing.'))
+			how = 'Everyone is swapped in one run.' if all(person.get('source') for person in people) else 'Face mapping runs one pass per mapped person, the face selector is set for each pass.'
+			lines.append('%s, %d of them mapped. %s' % (found, len(swapped), how) + ('' if len(named) == len(faces) else ' Faces without a name are left as they are, look for people again with the refresh button if someone is missing.'))
 		else:
 			reference_index = int(self.session.values.get('reference_frame_index') or 0) if card.reader else None
 			lines.append(describe_faces(result, reference_index))
@@ -2138,7 +2140,10 @@ class StudioPage(SourceSelection, QWidget):
 		self.chain_id += 1
 		# a gif or animated webp result: the gif or the webp's video copy, whose size the result is cropped to
 		animation = self.target_path if not preview and is_animation(self.target_path, output_path) else ''
-		self.chain = { 'id': self.chain_id, 'passes': passes, 'located': [], 'steps': [], 'index': 0, 'target': target, 'output': output_path, 'info': info, 'preview': preview, 'video': video, 'animation': animation, 'started': time.monotonic() }
+		# facefusion's face selector map swaps everyone in one run, only when nobody is left unchanged: a run that
+		# matches faces to the closest person has no way to keep a look-alike of a mapped person as they are
+		together = not passes[0].get('many') and len(passes) == len(self.mapping_card.active_people())
+		self.chain = { 'id': self.chain_id, 'passes': passes, 'located': [], 'steps': [], 'index': 0, 'target': target, 'output': output_path, 'info': info, 'preview': preview, 'video': video, 'animation': animation, 'together': together, 'started': time.monotonic() }
 		self.pending_info = info
 		self.refresh_run_buttons()
 		self.locate_next()
@@ -2240,6 +2245,8 @@ class StudioPage(SourceSelection, QWidget):
 			output_path = os.path.join(PASSES_DIR, 'animation.mp4')
 		if len(passes) == 1:
 			chain['steps'] = [ { 'kind': 'pass', 'item': passes[0], 'output': output_path, 'all': True } ]
+		elif chain.get('together'):
+			chain['steps'] = [ { 'kind': 'pass', 'items': passes, 'output': output_path, 'all': True } ]
 		else:
 			image_target = not chain.get('video')
 			# lossless in between: png, or h264 at quality 100 in mkv
@@ -2262,7 +2269,9 @@ class StudioPage(SourceSelection, QWidget):
 		kind = step.get('kind')
 		item = step.get('item') or {}
 		count = len(chain.get('located'))
-		if kind == 'pass':
+		if kind == 'pass' and step.get('items'):
+			what = 'swapping %d people · %s' % (count, ', '.join(item.get('label') for item in step.get('items')))
+		elif kind == 'pass':
 			names = ', '.join(self.source_name(path) for path in item.get('sources'))
 			number = chain.get('located').index(item) + 1
 			what = ('pass %d of %d · ' % (number, count) if count > 1 else '') + '%s → %s' % (names, item.get('label'))
@@ -2339,7 +2348,11 @@ class StudioPage(SourceSelection, QWidget):
 				processors = [ processor for processor in processors if processor not in FRAME_PROCESSORS ]
 				# the audio too, it is encoded and its volume set once, in the last step
 				values.update({ 'output_video_encoder': 'libx264', 'output_video_quality': 100, 'output_image_quality': 100, 'output_audio_encoder': 'flac', 'output_audio_volume': 100 })
-			if item.get('many'):
+			if step.get('items'):
+				# one source list for everyone, each person's map takes the largest face of their own sources
+				sources = list(dict.fromkeys(path for other in step.get('items') for path in other.get('sources')))
+				values.update({ 'face_selector_mode': 'reference', 'face_selector_maps': [ face_map(other, sources, chain.get('video')) for other in step.get('items') ] })
+			elif item.get('many'):
 				values['face_selector_mode'] = 'many'
 			else:
 				values.update({ 'face_selector_mode': 'reference', 'reference_frame_index': item.get('frame') if chain.get('video') else 0, 'reference_face_position': item.get('position'), 'reference_face_distance': item.get('distance') })
@@ -2357,11 +2370,16 @@ class StudioPage(SourceSelection, QWidget):
 		self.auto_check_pending = False
 		if not self.target_path or self.target_path in self.checked_targets or not self.session.is_configured():
 			return
-		if self.session.runner.is_running() or self.chain or self.freed:
+		# a batch between two of its runs keeps facefusion, the check waits for it to end
+		if self.session.runner.is_running() or self.session.batch_running or self.chain or self.freed:
 			self.auto_check_pending = True
 			return
 		self.checked_targets.add(self.target_path)
 		self.check_content(False, auto = True)
+
+	def on_batch_running_changed(self, running : bool) -> None:
+		if not running and self.auto_check_pending:
+			QTimer.singleShot(0, self.auto_check_content)
 
 	def check_content(self, after_run : bool, target : str = '', auto : bool = False) -> None:
 		"""runs facefusion's nsfw filter on the target, or on the given file (a preview frame), without processing it"""
