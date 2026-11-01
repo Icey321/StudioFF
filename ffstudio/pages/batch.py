@@ -557,7 +557,7 @@ class OutputDelegate(ListItemDelegate):
 
 
 class BatchPage(SourceSelection, QWidget):
-	SOURCE_KEYS = ('batch_source_paths', 'batch_unused_source_paths', 'batch_source_names', 'batch_source_groups')
+	SOURCE_KEYS = ('batch_source_paths', 'batch_unused_source_paths', 'batch_source_names', 'batch_source_groups', 'batch_removed_sources')
 	# Batch makes whole files, there is no timeline frame to name them after
 	TAG_DESCRIPTIONS = { 'frame': 'Always 0 here, Batch makes whole videos rather than one frame' }
 
@@ -1320,7 +1320,6 @@ class BatchPage(SourceSelection, QWidget):
 			self.session.notify.emit('info', 'Nothing selected', 'Click an output in the list first, Ctrl+click or Shift+click for several.')
 			return
 		self.removed.update(self.run_key(self.items[row]) for row in rows if row < len(self.items))
-		self.forget_removed_files()
 		self.match_list.clearSelection()
 		self.refresh_matches(True)
 		self.match_list.setCurrentRow(min(rows[0], self.match_list.count() - 1), QItemSelectionModel.SelectionFlag.ClearAndSelect)
@@ -1332,7 +1331,6 @@ class BatchPage(SourceSelection, QWidget):
 		key = self.run_key(self.items[row])
 		self.removed.add(key)
 		if not self.running:
-			self.forget_removed_files()
 			self.refresh_matches(True)
 			return
 		# the batch goes on with the list it has, the plan after it leaves the output out
@@ -1386,17 +1384,6 @@ class BatchPage(SourceSelection, QWidget):
 			self.stop_preview()
 			return
 		self.begin_run()
-
-	def forget_removed_files(self) -> None:
-		"""an added file with all its outputs removed leaves the batch, rather than wait in the removed list"""
-		folder_targets = { os.path.normcase(os.path.normpath(path)) for path in self.folder_targets() }
-		runs = self.runs()
-		for target in list(self.target_files):
-			if os.path.normcase(target) in folder_targets:
-				continue
-			if all(self.run_key(run) in self.removed for run in runs if run.get('target') == target):
-				self.target_files.remove(target)
-				self.removed = { key for key in self.removed if key[1] != target }
 
 	def add_target_files(self, paths : List[str]) -> None:
 		if self.running:

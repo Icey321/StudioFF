@@ -131,10 +131,12 @@ class SourceSelection:
 
 	the page sets session and source_card, and gets on_sources_changed('list' | 'names' | 'selection' | 'groups') after each change
 	"""
-	SOURCE_KEYS = ('source_paths', 'unused_source_paths', 'source_names', 'source_groups')
+	SOURCE_KEYS = ('source_paths', 'unused_source_paths', 'source_names', 'source_groups', 'removed_sources')
+	# at most this many removed sources are kept for the Restore button
+	REMOVED_SOURCES_LIMIT = 200
 
 	def load_sources(self) -> None:
-		paths_key, unused_key, names_key, groups_key = self.SOURCE_KEYS
+		paths_key, unused_key, names_key, groups_key, removed_key = self.SOURCE_KEYS
 		config = self.session.config
 		self.source_paths : List[str] = [ path for path in config.get(paths_key) or [] if os.path.exists(path) ]
 		self.unused_sources : List[str] = [ path for path in config.get(unused_key) or [] if path in self.source_paths ]
@@ -142,15 +144,18 @@ class SourceSelection:
 		self.source_names : Dict[str, str] = { path: name for path, name in (config.get(names_key) or {}).items() if path in self.source_paths }
 		# faces grouped with the Group button, {id, name, paths}, the id stays when the group is renamed so a face mapping keeps it
 		self.source_groups : List[dict] = [ dict(group) for group in config.get(groups_key) or [] ]
+		# sources the user took out, {path, index, name, used, groups}, the Restore button puts them back as they were, also after a restart
+		self.removed_sources : List[dict] = [ dict(entry) for entry in config.get(removed_key) or [] if entry.get('path') not in self.source_paths and os.path.exists(entry.get('path') or '') ]
 		self.prune_groups()
 		self.source_anchor = ''
 
 	def store_sources(self) -> None:
-		paths_key, unused_key, names_key, groups_key = self.SOURCE_KEYS
+		paths_key, unused_key, names_key, groups_key, removed_key = self.SOURCE_KEYS
 		self.session.config.set(paths_key, self.source_paths)
 		self.session.config.set(unused_key, self.unused_sources)
 		self.session.config.set(names_key, self.source_names)
 		self.session.config.set(groups_key, self.source_groups)
+		self.session.config.set(removed_key, self.removed_sources[:self.REMOVED_SOURCES_LIMIT])
 
 	def prune_groups(self) -> None:
 		"""a removed source leaves its groups, a group with no face left goes"""
@@ -229,6 +234,9 @@ class SourceSelection:
 		self.set_sources([ source for source in self.source_paths if source != path ])
 
 	def set_sources(self, paths : List[str]) -> None:
+		# what leaves the list is remembered with its place, name, use and groups, the newest first
+		gone = [ dict(path = path, index = index, name = self.source_names.get(path, ''), used = path not in self.unused_sources, groups = [ dict(group) for group in self.source_groups if path in (group.get('paths') or []) ]) for index, path in enumerate(self.source_paths) if path not in paths ]
+		self.removed_sources = [ entry for entry in gone + self.removed_sources if entry.get('path') not in paths ][:self.REMOVED_SOURCES_LIMIT]
 		self.source_paths = paths
 		self.unused_sources = [ path for path in self.unused_sources if path in paths ]
 		self.source_names = { path: name for path, name in self.source_names.items() if path in paths }
@@ -236,6 +244,31 @@ class SourceSelection:
 		self.store_sources()
 		self.source_card.refresh(paths)
 		self.on_sources_changed('list')
+
+	def restore_removed_sources(self) -> None:
+		"""puts the removed sources back where they were, with their names, use and groups"""
+		entries = []
+		for entry in self.removed_sources:
+			if entry.get('path') not in self.source_paths and os.path.exists(entry.get('path') or '') and entry.get('path') not in [ known.get('path') for known in entries ]:
+				entries.append(entry)
+		paths = list(self.source_paths)
+		# newest removal first, each goes back to the place it left, which undoes the removals in turn
+		for entry in entries:
+			path = entry.get('path')
+			paths.insert(min(entry.get('index') or 0, len(paths)), path)
+			if entry.get('name'):
+				self.source_names[path] = entry.get('name')
+			if not entry.get('used'):
+				self.unused_sources.append(path)
+			for snapshot in entry.get('groups') or []:
+				group = next((group for group in self.source_groups if group.get('id') == snapshot.get('id')), None)
+				if group is None:
+					# a group that went with its last face comes back too
+					group = dict(snapshot, paths = [])
+					self.source_groups.append(group)
+				if path not in group['paths']:
+					group['paths'] = group['paths'] + [ path ]
+		self.set_sources(paths)
 
 	def source_name(self, path : str) -> str:
 		return self.source_names.get(path) or os.path.splitext(os.path.basename(path))[0]
@@ -308,10 +341,13 @@ class SourceCard(SimpleCardWidget):
 		self.select_button.clicked.connect(self.page.toggle_all_sources)
 		add_button = tool_button(FluentIcon.ADD, 'Add face images or audio', self)
 		add_button.clicked.connect(self.browse)
+		self.restore_button = tool_button(FluentIcon.RETURN, 'Restore removed sources', self)
+		self.restore_button.clicked.connect(self.page.restore_removed_sources)
 		clear_button = tool_button(FluentIcon.DELETE, 'Remove all sources', self)
 		clear_button.clicked.connect(lambda: self.page.set_sources([]))
 		header.addWidget(self.select_button)
 		header.addWidget(add_button)
+		header.addWidget(self.restore_button)
 		header.addWidget(clear_button)
 		layout.addLayout(header)
 
@@ -370,6 +406,9 @@ class SourceCard(SimpleCardWidget):
 		self.empty.setVisible(not paths)
 		self.strip_scroll.setVisible(bool(paths))
 		self.select_button.setVisible(len(paths) > 1)
+		removed = len(self.page.removed_sources)
+		self.restore_button.setVisible(bool(removed))
+		self.restore_button.setToolTip('Restore removed sources (%d)' % removed)
 		self.group_button.setVisible(len([ path for path in paths if media_kind(path) == 'image' ]) > 1)
 		self.refresh_groups()
 		self.strip_scroll.fit()
