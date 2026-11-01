@@ -9,6 +9,7 @@ from PySide6.QtWidgets import QApplication, QWidget
 
 from ffstudio import APP_NAME, APP_VERSION
 from ffstudio.config import APP_DIR, AppConfig, DATA_DIR
+from ffstudio.platforms import UI_FONT
 
 # when each step finished on the last start, so the bar fills at the real pace this time
 STARTUP_FILE = os.path.join(DATA_DIR, 'startup.json')
@@ -77,12 +78,12 @@ class Splash(QWidget):
 		if not self.icon.isNull():
 			painter.drawPixmap(32, 40, 72, 72, self.icon)
 		# not the variable display face, windows takes a second to load that one the first time
-		title_font = QFont('Segoe UI', 20)
+		title_font = QFont(UI_FONT, 20)
 		title_font.setWeight(QFont.Weight.DemiBold)
 		painter.setFont(title_font)
 		painter.setPen(text)
 		painter.drawText(QRectF(124, 42, 320, 40), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, APP_NAME)
-		painter.setFont(QFont('Segoe UI', 10))
+		painter.setFont(QFont(UI_FONT, 10))
 		painter.setPen(dim)
 		painter.drawText(QRectF(125, 82, 320, 24), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, 'Version ' + APP_VERSION)
 

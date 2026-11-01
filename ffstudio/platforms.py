@@ -8,11 +8,16 @@ from typing import Dict, List, Tuple
 
 IS_WINDOWS = sys.platform == 'win32'
 IS_MAC = sys.platform == 'darwin'
+IS_LINUX = not IS_WINDOWS and not IS_MAC
 # subprocess takes creationflags only on windows, 0 is the one value it accepts elsewhere
 CREATE_NO_WINDOW = 0x08000000 if IS_WINDOWS else 0
 # a python environment keeps its programs in Scripts on windows and in bin elsewhere
 ENV_BIN = 'Scripts' if IS_WINDOWS else 'bin'
 PYTHON_NAME = 'python.exe' if IS_WINDOWS else 'python'
+# linux and macos have no segoe ui, qt picks the desktop's own font for sans-serif
+UI_FONT = 'Segoe UI' if IS_WINDOWS else 'sans-serif'
+# the gpu choice of the Install card besides cuda: directml only exists on windows, migraphx is amd's on linux
+GPU_ONNXRUNTIME = ('directml', 'DirectML — any DirectX 12 GPU') if IS_WINDOWS else ('migraphx', 'MIGraphX — AMD GPU (ROCm)') if not IS_MAC else None
 
 
 def data_root() -> str:
@@ -64,7 +69,44 @@ def show_in_folder(path : str) -> None:
 	elif IS_MAC:
 		subprocess.Popen([ 'open', '-R', path ])
 	else:
-		subprocess.Popen([ 'xdg-open', os.path.dirname(path) or '.' ])
+		from PySide6.QtCore import QUrl
+		from PySide6.QtDBus import QDBusConnection, QDBusMessage
+
+		# most linux file managers (dolphin, nautilus, nemo, thunar) pick a file through the FileManager1 interface. from tokenwizard's linux fork
+		message = QDBusMessage.createMethodCall('org.freedesktop.FileManager1', '/org/freedesktop/FileManager1', 'org.freedesktop.FileManager1', 'ShowItems')
+		message.setArguments([ [ QUrl.fromLocalFile(path).toEncoded().data().decode() ], '' ])
+		reply = QDBusConnection.sessionBus().call(message, timeout = 2000)
+		if reply.type() == QDBusMessage.MessageType.ErrorMessage:
+			subprocess.Popen([ 'xdg-open', os.path.dirname(path) or '.' ])
+
+
+def package_install_hint(keys : List[str]) -> str:
+	"""linux and macos: the command that installs these programs (git, uv, ffmpeg, curl) with the package manager found here"""
+	packages = [ key for key in keys if key != 'uv' ]
+	commands = []
+	if packages:
+		import shutil
+		for manager, command in [ ('brew', 'brew install'), ('apt', 'sudo apt install'), ('dnf', 'sudo dnf install'), ('pacman', 'sudo pacman -S'), ('zypper', 'sudo zypper install') ]:
+			if shutil.which(manager):
+				commands.append('%s %s' % (command, ' '.join(packages)))
+				break
+		else:
+			commands.append('your package manager')
+	if 'uv' in keys:
+		# uv is in few distributions' packages, its own installer works everywhere
+		commands.append('curl -LsSf https://astral.sh/uv/install.sh | sh')
+	return ' and '.join(commands)
+
+
+def facefusion_library_path(prefix : str, is_conda : bool, current : str) -> str:
+	"""linux only: the LD_LIBRARY_PATH for FaceFusion. StudioFF sets ENVIRONMENT_READY, which skips FaceFusion's own setup_linux, so this adds
+	what that step would: the conda lib folder and tensorrt_libs, where cuda and cudnn are. from tokenwizard's linux fork"""
+	# this app's opencv adds its own folder and an empty entry (the working directory) when imported, FaceFusion gets neither
+	paths = [ path for path in current.split(os.pathsep) if path and not os.path.abspath(path).startswith(sys.prefix + os.sep) ]
+	if is_conda:
+		import glob
+		paths = [ path for path in [ os.path.join(prefix, 'lib') ] + glob.glob(os.path.join(prefix, 'lib', 'python3*', 'site-packages', 'tensorrt_libs')) if os.path.isdir(path) ] + paths
+	return os.pathsep.join(paths)
 
 
 def read_os_version() -> str:

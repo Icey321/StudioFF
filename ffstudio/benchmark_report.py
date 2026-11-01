@@ -3,6 +3,8 @@ from typing import Any, Dict, List, Optional
 from PySide6.QtCore import QRectF, Qt
 from PySide6.QtGui import QColor, QFont, QFontMetricsF, QImage, QPainter, QPainterPath
 
+from ffstudio.platforms import UI_FONT
+
 WIDTH = 900
 SCALE = 2
 PADDING = 32
@@ -20,7 +22,7 @@ RESOLUTIONS = [ '240p', '360p', '540p', '720p', '1080p', '1440p', '2160p' ]
 
 def make_font(size : float, bold : bool = False) -> QFont:
 	# pixel sizes, so measuring and drawing agree whatever resolution the image reports
-	font = QFont('Segoe UI')
+	font = QFont(UI_FONT)
 	font.setPixelSize(round(size * 4 / 3))
 	font.setBold(bold)
 	return font

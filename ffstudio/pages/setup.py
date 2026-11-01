@@ -13,7 +13,7 @@ from ffstudio.environment import PREREQUISITES, check_dependencies, compare_gith
 from ffstudio.main_window import DEFAULT_ACCENT, apply_theme
 from ffstudio.option_panel import OptionPanel
 from ffstudio.pinokio import IS_PINOKIO
-from ffstudio.platforms import PYTHON_NAME, conda_env_python, read_os_version, refresh_path, script_command, venv_python
+from ffstudio.platforms import GPU_ONNXRUNTIME, IS_WINDOWS, PYTHON_NAME, conda_env_python, package_install_hint, read_os_version, refresh_path, script_command, venv_python
 from ffstudio.session import MINIMUM_PYTHON, Session
 from ffstudio.updater import download_release, is_git_checkout, start_helper
 from ffstudio.widgets import ChoiceButton
@@ -39,8 +39,9 @@ GIT_CHECKOUT_TIP = 'Pinokio installed this copy of the app, update it with Updat
 ONNXRUNTIME_CHOICES =\
 [
 	('cuda@12', 'CUDA 12 — NVIDIA GPU'),
-	('cuda@13', 'CUDA 13 — NVIDIA GPU, newest drivers'),
-	('directml', 'DirectML — any DirectX 12 GPU'),
+	('cuda@13', 'CUDA 13 — NVIDIA GPU, newest drivers')
+] + ([ GPU_ONNXRUNTIME ] if GPU_ONNXRUNTIME else []) +\
+[
 	('openvino', 'OpenVINO — Intel CPU / GPU'),
 	('default', 'CPU only')
 ]
@@ -469,7 +470,8 @@ class SetupPage(QWidget):
 		self.onnx_combo = ComboBox(card)
 		for key, label in ONNXRUNTIME_CHOICES:
 			self.onnx_combo.addItem(label, userData = key)
-		self.onnx_combo.setCurrentIndex(0 if has_nvidia_gpu() else 2)
+		# without nvidia, directml on windows and cpu only elsewhere, migraphx needs rocm set up by hand
+		self.onnx_combo.setCurrentIndex(0 if has_nvidia_gpu() else 2 if IS_WINDOWS else len(ONNXRUNTIME_CHOICES) - 1)
 		self.onnx_combo.currentIndexChanged.connect(self.refresh_cuda_option)
 		layout.addLayout(form_row('Acceleration', [ self.onnx_combo ], card))
 
@@ -534,8 +536,12 @@ class SetupPage(QWidget):
 
 		missing = find_missing_prerequisites(env_kind == 'uv', not is_facefusion_root(folder))
 		if missing:
+			names = ', '.join(PREREQUISITES[key][1] for key in missing)
+			if not IS_WINDOWS:
+				# the app does not run sudo, the package manager is the user's own
+				self.session.notify.emit('error', 'Missing programs', 'Install %s first with %s, then press Install again.' % (names, package_install_hint(missing)))
+				return
 			if not shutil.which('winget'):
-				names = ', '.join(PREREQUISITES[key][1] for key in missing)
 				self.session.notify.emit('error', 'Missing programs', 'Install %s first (winget is not available here to do it for you), then press Install again.' % names)
 				return
 			lines = '\n'.join('•  %s: %s' % (PREREQUISITES[key][1], PREREQUISITES[key][2]) for key in missing)

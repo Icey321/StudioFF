@@ -79,22 +79,24 @@ Update StudioFF with Pinokio's **Update** button. FaceFusion is updated from Stu
 
 ### Linux and macOS (without Pinokio)
 
-StudioFF is made and tested on Windows. The Linux and macOS code is in place but has not been tried on a real computer yet,
-so Pinokio is the easier way for now.
+StudioFF is made and tested on Windows. The Linux support comes from
+[tokenwizard's Linux fork](https://github.com/tokenwizard/StudioFF), tested there on CachyOS with an NVIDIA card. macOS
+has not been tried on a real computer yet, so Pinokio is the easier way there.
 
-1. Install Python 3.12 or newer, Git, FFmpeg and curl with your package manager (`apt`, `dnf` or `brew`).
-2. Get the code and set up the app's environment:
+1. Install Python 3.12 or newer, Git, FFmpeg and curl with your package manager (`apt`, `dnf`, `pacman` or `brew`), and
+   conda or [uv](https://docs.astral.sh/uv/) for FaceFusion's own environment.
+2. Get the code and run the installer, which sets up the app's environment and, on Linux, adds StudioFF to your app launcher:
 
    ```bash
    git clone https://github.com/Icey321/StudioFF.git
    cd StudioFF
-   python3 -m venv .venv
-   .venv/bin/pip install -r requirements.txt
+   ./install.sh
    ```
 
-3. Start it with `.venv/bin/python -m ffstudio`.
-4. Point the **FaceFusion** page at a FaceFusion v4 you installed yourself (its folder and its Python 3.13 environment). The
-   page's **Install FaceFusion v4** button uses winget, which is Windows only.
+3. Start **StudioFF** from the app launcher, or run `./StudioFF.sh`.
+4. On the **FaceFusion** page, press **Install FaceFusion v4**, or pick a FaceFusion v4 you installed yourself (its folder
+   and the `bin/python` of its Python 3.13 environment). Without an NVIDIA card, Linux offers MIGraphX for AMD cards
+   (ROCm must be set up first) or CPU only.
 
 Update with `git pull` in the StudioFF folder.
 
@@ -117,11 +119,19 @@ Update with `git pull` in the StudioFF folder.
 | `ffstudio/monitor.py` | Talks to `system_monitor.py` and shows its numbers in the title bar |
 | `ffstudio/pages/*` | Studio, Batch, Models, Benchmark, Console, FaceFusion and Settings |
 
-App data (settings, cached schema, preview frames) lives in `%APPDATA%\StudioFF` (versions before v0.40 used `%APPDATA%\FaceFusionStudio`,
+App data (settings, cached schema, preview frames) lives in `%APPDATA%\StudioFF` on Windows, `~/.config/StudioFF` on Linux
+and `~/Library/Application Support/StudioFF` on macOS (versions before v0.40 used `%APPDATA%\FaceFusionStudio`,
 which is moved over on the first start). The preview
 folder only ever holds the latest frame and result (overwritten each time) and is deleted when the app
 closes. After **Stop** or a failed run, FaceFusion's temp folder for this machine is cleared too.
 Set `FFSTUDIO_DATA_DIR` to use a different folder.
+
+## Thanks
+
+- [tokenwizard](https://github.com/tokenwizard) made StudioFF run on Linux in [a fork](https://github.com/tokenwizard/StudioFF)
+  and tested it there. Those fixes are in this version: the CUDA library paths FaceFusion needs on Linux, `install.sh` and
+  `StudioFF.sh` with the app launcher entry, Open Folder in Linux file managers, Linux paths colored in the Console, the system font
+  and MIGraphX for AMD cards.
 
 ## AI tools used
 

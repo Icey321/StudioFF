@@ -1515,7 +1515,7 @@ class StudioPage(SourceSelection, QWidget):
 		output_path = self.suggest_output_path()
 		# facefusion only finds out at the very end, after processing the whole target
 		if not folder_is_writable(os.path.dirname(output_path)):
-			self.session.notify.emit('error', 'Cannot save to this folder', 'Windows does not allow saving to %s. Choose another output folder, such as Videos or Documents.' % os.path.dirname(output_path))
+			self.session.notify.emit('error', 'Cannot save to this folder', 'StudioFF cannot save to %s. Choose another output folder, such as Videos or Documents.' % os.path.dirname(output_path))
 			return
 		info = { 'target': self.target_path, 'trim_start': int(self.session.values.get('trim_frame_start') or 0) }
 		passes = self.mapping_passes()
@@ -1608,7 +1608,7 @@ class StudioPage(SourceSelection, QWidget):
 				self.end_pause()
 				self.run_clock.start()
 				self.progress_bar.resume()
-				self.session.notify.emit('warning', 'Could not pause', 'Windows did not let FaceFusion be paused. Stop ends the run.')
+				self.session.notify.emit('warning', 'Could not pause', 'FaceFusion could not be paused. Stop ends the run.')
 				self.refresh_run_buttons()
 				return
 			self.status_label.setText('Pausing after this step  ·  ' + self.session.task)

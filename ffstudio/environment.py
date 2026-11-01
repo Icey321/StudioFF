@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from PySide6.QtCore import QProcessEnvironment
 
-from ffstudio.platforms import CREATE_NO_WINDOW, ENV_BIN, conda_candidates, conda_env_python, python_patterns
+from ffstudio.platforms import CREATE_NO_WINDOW, ENV_BIN, IS_LINUX, conda_candidates, conda_env_python, facefusion_library_path, python_patterns
 
 
 def is_facefusion_root(path : str) -> bool:
@@ -162,8 +162,9 @@ def is_conda_env(python_path : str) -> bool:
 
 
 def find_conda() -> Optional[str]:
-	conda = shutil.which('conda') or shutil.which('conda.bat')
-	if conda:
+	# CONDA_EXE is set by conda's shell hook, where conda itself is only a shell function
+	conda = shutil.which('conda') or shutil.which('conda.bat') or os.environ.get('CONDA_EXE')
+	if conda and os.path.isfile(conda):
 		return conda
 	for candidate in conda_candidates():
 		if os.path.isfile(candidate):
@@ -247,6 +248,14 @@ def create_process_environment(python_path : str) -> QProcessEnvironment:
 
 	path_parts = [ path for path in path_parts if os.path.isdir(path) ]
 	environment.insert('PATH', os.pathsep.join(path_parts + [ environment.value('PATH') ]))
+	if IS_LINUX:
+		library_path = facefusion_library_path(prefix, is_conda_env(python_path), environment.value('LD_LIBRARY_PATH'))
+		if library_path:
+			environment.insert('LD_LIBRARY_PATH', library_path)
+		else:
+			environment.remove('LD_LIBRARY_PATH')
+		# also from facefusion's setup_linux, it keeps glibc from holding on to memory
+		environment.insert('MALLOC_ARENA_MAX', '4')
 	# skip facefusion's self re-spawn so stop() can terminate a single process tree
 	environment.insert('ENVIRONMENT_READY', '1')
 	environment.insert('OMP_NUM_THREADS', '1')

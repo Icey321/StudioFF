@@ -1326,7 +1326,7 @@ class BatchPage(SourceSelection, QWidget):
 			self.session.notify.emit('warning', 'Busy', 'FaceFusion is already running: %s. Try again once it has finished.' % self.session.task)
 			return
 		if not self.running and not folder_is_writable(folder):
-			self.session.notify.emit('error', 'Cannot save to this folder', 'Windows does not allow saving to %s. Choose another output folder, such as Videos or Documents.' % folder)
+			self.session.notify.emit('error', 'Cannot save to this folder', 'StudioFF cannot save to %s. Choose another output folder, such as Videos or Documents.' % folder)
 			return
 		if os.path.isfile(item.get('output')) and not self.confirm_replace([ item ]):
 			return
@@ -2172,7 +2172,7 @@ class BatchPage(SourceSelection, QWidget):
 		# with Sub-Folders on every source has its own folder, each is checked and created here
 		for folder in sorted({ os.path.dirname(item.get('output')) for item in items }):
 			if not folder_is_writable(folder):
-				self.session.notify.emit('error', 'Cannot save to this folder', 'Windows does not allow saving to %s. Choose another output folder, such as Videos or Documents.' % folder)
+				self.session.notify.emit('error', 'Cannot save to this folder', 'StudioFF cannot save to %s. Choose another output folder, such as Videos or Documents.' % folder)
 				return
 		replacing = [ item for item in items if os.path.isfile(item.get('output')) and self.item_status(item) != 'skip' ]
 		if replacing and not self.confirm_replace(replacing):

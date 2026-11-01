@@ -43,7 +43,7 @@ def explain_error(line : str) -> Optional[str]:
 	"""a plain hint for the errors people can fix themselves"""
 	lowered = line.lower()
 	if line.startswith('PermissionError') or '[errno 13]' in lowered:
-		return 'Windows did not allow saving there. Choose another output folder, such as Videos or Documents, or close the file if it is open in another app.'
+		return 'Saving there was not allowed. Choose another output folder, such as Videos or Documents, or close the file if it is open in another app.'
 	if '[errno 28]' in lowered or 'no space left' in lowered:
 		return 'The drive is full. Free some space or choose an output folder on another drive.'
 	if 'out of memory' in lowered or 'failed to allocate' in lowered or 'bad allocation' in lowered or line.startswith('MemoryError'):
