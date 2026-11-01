@@ -1,4 +1,4 @@
-# <img src="ffstudio/assets/icon.png" width="44" height="44" align="center" alt="StudioFF icon"> StudioFF
+# <img src="ffstudio/assets/icon.png" width="44" height="44" align="top" alt="StudioFF icon"> StudioFF
 
 A desktop app for the [FaceFusion v4](https://github.com/facefusion/facefusion/tree/v4) face swapper. Not made or endorsed by the FaceFusion team.
 
