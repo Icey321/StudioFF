@@ -14,7 +14,7 @@ from qfluentwidgets import Action, BodyLabel, CaptionLabel, FlowLayout, FluentIc
 
 from ffstudio.config import APP_DIR, PREVIEW_DIR
 from ffstudio.face_mapping import FACE_PROCESSORS, FRAME_PROCESSORS, GROUP_PREFIX, LEAVE, PEOPLE_FILE, SELECTED, FaceMappingCard, box_overlap, face_map, group_images, group_value, is_kept, is_mapped, merge_people, people_dir, person_color, person_name, plan_passes
-from ffstudio.faces import FACE_GROUPS, MASK_GROUPS, FaceProbe, describe_faces, describe_landmarks, describe_mask, face_landmarks, face_tag, faces_text_color, no_face, read_mask
+from ffstudio.faces import FACE_CHECK_SAMPLES, FACE_GROUPS, MASK_GROUPS, FaceProbe, describe_faces, describe_landmarks, describe_mask, face_landmarks, face_tag, faces_text_color, no_face, read_mask
 from ffstudio.media import VideoReader, animation_extension, browse_dir, is_animated_webp, is_animation, format_length, format_seconds, format_timecode, media_kind, needs_conversion, read_frame, read_image, thumbnail, to_pixmap, usable_path, write_image
 from ffstudio.nsfw import BLOCKED_STATUS, NsfwDialog, describe_result, show_blocked_bar
 from ffstudio.option_panel import FavoritesPanel, OptionPanel
@@ -977,6 +977,9 @@ class StudioPage(SourceSelection, QWidget):
 		self.check_after_run = False
 		self.check_target_is_frame = False
 		self.check_path = ''
+		# Pre-Check looks for faces once the nsfw check lets the target through, and keeps that check's words for its message
+		self.precheck = False
+		self.precheck_words = ''
 		# each target is checked once when it is loaded, a check that has to wait for a running task follows it
 		self.checked_targets : set = set()
 		self.auto_check = False
@@ -1215,10 +1218,10 @@ class StudioPage(SourceSelection, QWidget):
 		self.free_button = tool_button(FluentIcon.BROOM, 'Free Memory: end the paused run so its memory is free for other programs. Resume makes the result again from the start, a face mapping run only the step it was on.', card)
 		self.free_button.setEnabled(False)
 		self.free_button.clicked.connect(self.free_memory)
-		self.check_button = PushButton(FluentIcon.CERTIFICATE, 'NSFW Check', card)
-		self.check_button.setToolTip("Run FaceFusion's NSFW filter on the target (only the trimmed part of a video) without processing it, to find out before a long run whether it will be refused")
+		self.check_button = PushButton(FluentIcon.CERTIFICATE, 'Pre-Check', card)
+		self.check_button.setToolTip("Run FaceFusion's NSFW filter on the target (only the trimmed part of a video) and look for faces in it, without processing it, to find out before a long run whether it will be refused or left unchanged")
 		self.check_button.installEventFilter(ToolTipFilter(self.check_button))
-		self.check_button.clicked.connect(lambda: self.check_content(False))
+		self.check_button.clicked.connect(self.pre_check)
 		layout.addWidget(self.start_button)
 		layout.addWidget(self.stop_button)
 		layout.addWidget(self.free_button)
@@ -2146,6 +2149,9 @@ class StudioPage(SourceSelection, QWidget):
 			self.mapping_card.on_find_clicked()
 
 	def on_people_found(self, result : dict) -> None:
+		if isinstance(result.get('tag'), tuple) and result.get('tag')[0] == 'pre-check':
+			self.on_target_faces_checked(result)
+			return
 		if result.get('tag') != self.target_path:
 			return
 		if result.get('error'):
@@ -2427,9 +2433,14 @@ class StudioPage(SourceSelection, QWidget):
 		if not running and self.auto_check_pending:
 			QTimer.singleShot(0, self.auto_check_content)
 
-	def check_content(self, after_run : bool, target : str = '', auto : bool = False) -> None:
+	def pre_check(self) -> None:
+		"""Pre-Check: the nsfw filter first, then a look for faces in the target when it lets it through"""
+		self.check_content(False, precheck = True)
+
+	def check_content(self, after_run : bool, target : str = '', auto : bool = False, precheck : bool = False) -> None:
 		"""runs facefusion's nsfw filter on the target, or on the given file (a preview frame), without processing it"""
 		target = target or self.target_path
+		self.precheck = precheck
 		if not target:
 			self.session.notify.emit('warning', 'No target', 'Choose a target image or video first.')
 			return
@@ -2448,6 +2459,7 @@ class StudioPage(SourceSelection, QWidget):
 			return
 		result = results[0] if results else None
 		live_after_check, self.live_after_check = self.live_after_check, False
+		precheck, self.precheck = self.precheck, False
 		if self.check_path != self.target_path:
 			# the target changed while it was checked, the new target gets its own check
 			self.status_label.setText('Ready')
@@ -2496,6 +2508,9 @@ class StudioPage(SourceSelection, QWidget):
 			self.status_label.setText('Failed: FaceFusion stopped without a reason')
 			self.detail_label.setText('The NSFW check found nothing')
 			self.session.notify.emit('error', 'FaceFusion failed', "It stopped without giving a reason, and its NSFW filter found nothing in the target. See Console for the full log.")
+		elif precheck and self.session.is_configured() and self.session.schema:
+			self.precheck_words = message
+			self.check_target_faces()
 		else:
 			self.progress_bar.setValue(1000)
 			self.status_label.setText('✓ ' + title)
@@ -2503,6 +2518,46 @@ class StudioPage(SourceSelection, QWidget):
 			# the automatic check on loading only speaks up when something was flagged
 			if not self.auto_check or result.get('flagged'):
 				self.session.notify.emit('success' if not result.get('flagged') else 'info', title, message)
+
+	def check_target_faces(self) -> None:
+		"""Pre-Check's second half: looks for faces in the target (the trimmed part of a video) with the face settings"""
+		if not self.target_path:
+			return
+		if not self.session.facefusion_video_ready(self.target_path):
+			self.session.prepare_facefusion_video(self.target_path, self.check_target_faces)
+			return
+		start = end = None
+		if media_kind(self.target_path) == 'video':
+			start = self.session.values.get('trim_frame_start')
+			end = self.session.values.get('trim_frame_end')
+		path = self.session.facefusion_video(self.target_path)
+		if not path:
+			self.status_label.setText('Face check failed')
+			self.session.notify.emit('error', 'Pre-Check', 'Could not turn %s into a video. Check that ffmpeg is installed.' % os.path.basename(self.target_path))
+			return
+		self.progress_bar.setValue(500)
+		self.status_label.setText('Looking for faces in the target…')
+		self.detail_label.setText('')
+		self.face_probe.find_people(path, start, end, self.session.option_args(groups = FACE_GROUPS), '', tag = ('pre-check', self.target_path), samples = FACE_CHECK_SAMPLES)
+
+	def on_target_faces_checked(self, result : dict) -> None:
+		if result.get('tag')[1] != self.target_path:
+			return
+		self.progress_bar.setValue(1000)
+		if result.get('error'):
+			self.progress_bar.error()
+			self.status_label.setText('Face check failed')
+			self.session.notify.emit('error', 'Pre-Check', result.get('error'))
+			return
+		people = len(result.get('people') or [])
+		if not people:
+			self.progress_bar.error()
+			self.status_label.setText('⚠ No face detected in the target')
+			self.session.notify.emit('warning', 'No face detected', "No NSFW content, but FaceFusion found no face in the target with these face settings, so a run would leave it unchanged. Try a lower Face detector Score or another Model.")
+			return
+		found = '(%d) %s found' % (people, 'person' if people == 1 else 'people')
+		self.status_label.setText('✓ Pre-Check passed: no NSFW content, %s' % found)
+		self.session.notify.emit('success', 'Pre-Check passed', '%s Faces: %s.' % (self.precheck_words, found))
 
 	def show_content_result(self) -> None:
 		if self.content_result:

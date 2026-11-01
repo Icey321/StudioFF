@@ -18,6 +18,8 @@ FACES_DIR = os.path.join(PREVIEW_DIR, 'faces')
 FACE_GROUPS = [ 'face_detector', 'face_aligner', 'face_selector', 'face_tracker', 'execution' ]
 # the groups that change the face mask, face_swapper picks the crop the mask padding is measured on
 MASK_GROUPS = [ 'face_masker', 'face_swapper' ]
+# the frames of a video Pre-Check and Run Batch look for faces in, a target with none in any of them has no face
+FACE_CHECK_SAMPLES = 16
 
 
 class FaceProbe(QObject):
