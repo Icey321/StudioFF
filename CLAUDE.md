@@ -8,6 +8,10 @@
 - StudioFF supports only FaceFusion's v4 branch from commit e7a2848 (2026-10-30, `--face-selector-map`)
   on. Do not add or keep fallbacks for older FaceFusion commits (Nik, 2026-10-30).
 
+- Every GitHub release's notes start with the FaceFusion it needs, in bold:
+  "**Needs FaceFusion v4 from commit <7-char> (<date>) or newer.**" (Nik, 2026-11-01).
+  FaceFusion v4 reports no version number, so the commit is the version.
+
 - Nik works on this project only on his home PC, so the to-do list stays in Claude's
   memory (`deferred-features-oct-2026.md`), not in a file in the project.
 
