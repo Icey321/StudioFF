@@ -9,6 +9,10 @@ from ffstudio.schema import Schema, format_scalar, same_value
 from ffstudio.widgets import ChoiceButton, DecimalBox, DisabledToolTipFilter, InfoButton, NumberBox, RangeSlider, ResetButton, StarButton, guard_wheel
 
 AUTO_TEXT = 'Auto'
+# options where nothing means any face and facefusion's 'auto' means the one of the largest source face
+SOURCE_MATCH_OPTIONS = [ 'face_selector_gender', 'face_selector_race' ]
+ANY_TEXT = 'Any'
+SOURCE_MATCH_TEXT = 'Same as Source'
 LABEL_WIDTH = 210
 # options with a few short choices, shown as a row of buttons instead of a drop down
 BUTTON_CHOICES = [ 'face_selector_gender', 'face_selector_mode', 'workflow_strategy' ]
@@ -118,6 +122,16 @@ def pretty_choice(value : Any) -> str:
 	return str(value)
 
 
+def choice_text(option : Dict[str, Any], value : Any) -> str:
+	"""the text of one choice, nothing shows as Auto, or as Any for gender and race where 'auto' is Same as Source"""
+	if option.get('dest') in SOURCE_MATCH_OPTIONS:
+		if value is None:
+			return ANY_TEXT
+		if value == 'auto':
+			return SOURCE_MATCH_TEXT
+	return AUTO_TEXT if value is None else pretty_choice(value)
+
+
 class OptionControl(QWidget):
 	changed = Signal(object)
 
@@ -141,9 +155,10 @@ class OptionControl(QWidget):
 
 
 def choices_without_auto(option : Dict[str, Any]) -> List[Any]:
-	# facefusion lists 'auto' as a choice of some options that default to nothing, both mean the same, so it shows once
+	# facefusion lists 'auto' as a choice of some options that default to nothing, both mean the same, so it shows once.
+	# not for gender and race, there nothing is any face and 'auto' is the source face's
 	choices = option.get('choices') or []
-	if option.get('default') is None:
+	if option.get('default') is None and option.get('dest') not in SOURCE_MATCH_OPTIONS:
 		return [ choice for choice in choices if choice != 'auto' ]
 	return choices
 
@@ -165,10 +180,10 @@ class ChoiceControl(OptionControl):
 		self.items : List[Any] = []
 		if self.option.get('default') is None:
 			self.items.append(None)
-			self.combo.addItem(AUTO_TEXT)
+			self.combo.addItem(choice_text(self.option, None))
 		for choice in choices_without_auto(self.option):
 			self.items.append(choice)
-			self.combo.addItem(pretty_choice(choice))
+			self.combo.addItem(choice_text(self.option, choice))
 		self.updating = False
 
 	def value(self) -> Any:
@@ -193,7 +208,14 @@ class ChoiceControl(OptionControl):
 
 class ButtonChoiceControl(OptionControl):
 	"""a row of buttons for short choices, the face selector gender ones with an icon each"""
-	ICONS = { 'auto': ('Auto', None, FluentIcon.PEOPLE), 'male': ('Male', 'male', None), 'female': ('Female', 'female', None) }
+	ICONS = { None: (ANY_TEXT, None, FluentIcon.PEOPLE), 'auto': (SOURCE_MATCH_TEXT, None, FluentIcon.LINK), 'male': ('Male', 'male', None), 'female': ('Female', 'female', None) }
+	# what each gender choice does, the tooltips of the buttons
+	TIPS =	{
+		None: 'Any: faces of any gender.',
+		'auto': 'Same as Source: only faces of the same gender as the largest source face.',
+		'male': 'Male: only faces read as male.',
+		'female': 'Female: only faces read as female.'
+	}
 
 	def __init__(self, option : Dict[str, Any], parent : Optional[QWidget] = None) -> None:
 		super().__init__(option, parent)
@@ -206,9 +228,12 @@ class ButtonChoiceControl(OptionControl):
 		choices = sorted(choices_without_auto(option), key = lambda choice: order.index(choice) if choice in order else len(order))
 		self.items : List[Any] = ([ None ] if option.get('default') is None else []) + choices
 		for index, item in enumerate(self.items):
-			text, symbol, icon = self.ICONS.get(item or 'auto', (str(item).capitalize(), None, None))
+			text, symbol, icon = self.ICONS.get(item, (str(item).capitalize(), None, None))
 			button = ChoiceButton(text, symbol, icon, self)
 			button.setCheckable(True)
+			if option.get('dest') == 'face_selector_gender':
+				button.setToolTip(self.TIPS.get(item, ''))
+				button.installEventFilter(DisabledToolTipFilter(button))
 			if item in MODE_TIPS and option.get('dest') == 'face_selector_mode':
 				button.setToolTip(MODE_TIPS.get(item))
 				# also while the row is grayed out, the tip still says what the mode does
@@ -224,7 +249,9 @@ class ButtonChoiceControl(OptionControl):
 
 	def set_value(self, value : Any) -> None:
 		self.updating = True
-		matches = [ index for index, item in enumerate(self.items) if format_scalar(item) == format_scalar(value) ] if value not in (None, 'auto') else [ 0 ]
+		if value == 'auto' and 'auto' not in self.items:
+			value = None
+		matches = [ index for index, item in enumerate(self.items) if same_value(item, value) ]
 		if not matches and self.option.get('default') in self.items:
 			matches = [ self.items.index(self.option.get('default')) ]
 		self.group.button(matches[0] if matches else 0).setChecked(True)
@@ -559,10 +586,12 @@ class OptionRow(QFrame):
 	with group_caption set the name of the option's group shows in small capitals underneath, for the favorites box where groups mix
 	"""
 
-	def __init__(self, schema : Schema, option : Dict[str, Any], values : Dict[str, Any], on_change : Callable[[str, Any], None], parent : Optional[QWidget] = None, on_favorite : Optional[Callable[[str], None]] = None, context : str = '', info_icon : bool = False, short_label : bool = False, group_caption : bool = False) -> None:
+	def __init__(self, schema : Schema, option : Dict[str, Any], values : Dict[str, Any], on_change : Callable[[str, Any], None], parent : Optional[QWidget] = None, on_favorite : Optional[Callable[[str], None]] = None, context : str = '', info_icon : bool = False, short_label : bool = False, group_caption : bool = False, defaults : Optional[Dict[str, Any]] = None) -> None:
 		super().__init__(parent)
 		self.schema = schema
 		self.dest = option.get('dest')
+		# the page's own defaults in place of facefusion's, for Reset and the changed dot
+		self.defaults : Dict[str, Any] = defaults or {}
 		# the upper option of a pair shown on this row, Age start carries Age end
 		self.partner, paired_help = PAIRED_OPTIONS.get(self.dest, (None, ''))
 		self.values = values
@@ -719,7 +748,7 @@ class OptionRow(QFrame):
 		return tuple(stored) if self.partner else stored[0]
 
 	def default_value(self) -> Any:
-		defaults = [ self.schema.resolve(dest, self.values).get('default') for dest in self.dests() ]
+		defaults = [ self.defaults.get(dest, self.schema.resolve(dest, self.values).get('default')) for dest in self.dests() ]
 		return tuple(defaults) if self.partner else defaults[0]
 
 	def shows(self, value : Any) -> bool:

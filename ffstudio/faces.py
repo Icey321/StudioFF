@@ -1,6 +1,7 @@
 import json
+import math
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import cv2
 import numpy
@@ -228,6 +229,21 @@ def describe_faces(result : Dict[str, Any], reference_index : Optional[int] = No
 		nearest = ' The closest is %.2f.' % min(distances) if distances else ''
 		return found + ', but none will be processed: none is closer to the face in reference frame%s than the Reference face Distance (%.2f).%s Raise the Distance or pick another reference frame.' % (frame, result.get('reference_distance') or 0, nearest)
 	return found + ', but none will be processed: the face selector Gender, Race or Age filter skips them.'
+
+
+def alike_faces(result : Dict[str, Any], schema = None) -> Tuple[int, str]:
+	"""how many faces Reference mode processes because they look alike, and how to process only one: a Reference face Distance
+	below the second closest leaves only the reference itself, rounded down to the slider's steps. (0, '') with one face or none"""
+	option = schema.options.get('reference_face_distance', {}) if schema else {}
+	step = (option.get('range') or {}).get('step') or 0.05
+	selected = [ face for face in result.get('faces') or [] if face.get('selected') ]
+	if result.get('error') or result.get('mode') != 'reference' or len(selected) < 2:
+		return 0, ''
+	distances = sorted(face.get('distance') for face in selected if face.get('distance') is not None)
+	lower = math.ceil(distances[1] / step - 1) * step if len(distances) > 1 else 0
+	if lower > distances[0]:
+		return len(selected), 'Set Distance to %.2f or lower to change one' % lower
+	return len(selected), 'Too alike for Distance to tell apart'
 
 
 def no_face(result : Dict[str, Any]) -> bool:

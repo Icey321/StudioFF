@@ -1,7 +1,7 @@
 import math
 import os
 import textwrap
-from typing import Callable, List, Optional, Tuple
+from typing import Callable, Iterable, List, Optional, Tuple, Union
 
 import cv2
 import numpy
@@ -670,6 +670,8 @@ class PreviewView(QWidget):
 	clicked = Signal()
 	# a right click on a face box: its index in faces and the global position for a menu
 	face_menu_requested = Signal(int, QPoint)
+	# a left click on a face box: its index in faces
+	face_clicked = Signal(int)
 
 	def __init__(self, hint : str = '', parent : Optional[QWidget] = None) -> None:
 		super().__init__(parent)
@@ -712,7 +714,8 @@ class PreviewView(QWidget):
 		self.pixmap = after
 		self.compare_pixmap = before
 		self.compare_labels = labels
-		self.setCursor(Qt.CursorShape.SplitHCursor)
+		# the cursor shows the divider is draggable only over its grip, see refresh_cursor
+		self.setMouseTracking(True)
 		self.update()
 
 	def is_comparing(self) -> bool:
@@ -782,11 +785,29 @@ class PreviewView(QWidget):
 
 	def face_at(self, position : QPointF) -> int:
 		"""the face box under a point, the smallest one where boxes overlap, -1 for none"""
-		if not self.faces or not self.faces_size[0] or self.pixmap.isNull() or self.is_comparing():
+		if not self.faces or not self.faces_size[0] or self.pixmap.isNull() or self.on_divider(position):
 			return -1
 		image_rect = self.image_rect()
 		hits = [ (rect.width() * rect.height(), index) for index, rect in ((index, self.face_rect(face[0], image_rect)) for index, face in enumerate(self.faces)) if rect.contains(position) ]
 		return min(hits)[1] if hits else -1
+
+	def on_divider(self, position : QPointF) -> bool:
+		"""whether a point is on the compare divider's round grip or its line, the only places that move it,
+		so a click elsewhere on the picture can pick a face"""
+		if not self.is_comparing():
+			return False
+		image_rect = self.image_rect()
+		split_x = self.split_x(image_rect)
+		grip = QPointF(split_x, image_rect.center().y()) - position
+		return math.hypot(grip.x(), grip.y()) <= GRIP_RADIUS + 4 or (abs(position.x() - split_x) <= 5 and image_rect.top() <= position.y() <= image_rect.bottom())
+
+	def refresh_cursor(self, position : QPointF) -> None:
+		if self.on_divider(position):
+			self.setCursor(Qt.CursorShape.SplitHCursor)
+		elif self.is_comparing() and self.face_at(position) < 0:
+			self.setCursor(Qt.CursorShape.ArrowCursor)
+		else:
+			self.setCursor(Qt.CursorShape.PointingHandCursor)
 
 	def contextMenuEvent(self, event) -> None:
 		index = self.face_at(QPointF(event.pos()))
@@ -794,16 +815,17 @@ class PreviewView(QWidget):
 			self.face_menu_requested.emit(index, event.globalPos())
 
 	def mousePressEvent(self, event) -> None:
-		if self.is_comparing() and event.button() == Qt.MouseButton.LeftButton:
+		if event.button() == Qt.MouseButton.LeftButton and self.on_divider(event.position()):
 			self.dragging = True
-			self.move_split(event.position().x())
 
 	def mouseMoveEvent(self, event) -> None:
 		if self.dragging:
 			self.move_split(event.position().x())
+		else:
+			self.refresh_cursor(event.position())
 
 	def mouseDoubleClickEvent(self, event) -> None:
-		if self.is_comparing():
+		if self.on_divider(event.position()):
 			self.split = 0.0 if self.split > 0.0 else 0.5
 			self.update()
 
@@ -813,6 +835,9 @@ class PreviewView(QWidget):
 			return
 		if event.button() == Qt.MouseButton.LeftButton:
 			self.click_modifiers = event.modifiers()
+			index = self.face_at(event.position())
+			if index >= 0:
+				self.face_clicked.emit(index)
 			self.clicked.emit()
 
 	def dragEnterEvent(self, event : QDragEnterEvent) -> None:
@@ -1312,6 +1337,97 @@ class FaceComboBox(ComboBox):
 			FluentIcon.ARROW_DOWN.render(painter, rect)
 		else:
 			FluentIcon.ARROW_DOWN.render(painter, rect, fill = '#646464')
+
+
+class FaceDot(QWidget):
+	"""one face found in a target as a circle, ringed in the accent color while it is the picked one"""
+	clicked = Signal(int)
+
+	SIZE = 40
+
+	def __init__(self, position : int, pixmap : QPixmap, parent : Optional[QWidget] = None) -> None:
+		super().__init__(parent)
+		self.position = position
+		self.picture = round_pixmap(pixmap, self.SIZE)
+		self.chosen = False
+		self.hovered = False
+		self.setFixedSize(self.SIZE + 8, self.SIZE + 8)
+		self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+	def set_chosen(self, chosen : bool) -> None:
+		if chosen != self.chosen:
+			self.chosen = chosen
+			self.update()
+
+	def paintEvent(self, event) -> None:
+		painter = QPainter(self)
+		painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+		painter.drawPixmap(4, 4, self.picture)
+		if self.chosen or self.hovered:
+			shade = 255 if isDarkTheme() else 0
+			painter.setPen(QPen(themeColor(), 3) if self.chosen else QPen(QColor(shade, shade, shade, 90), 2))
+			painter.setBrush(Qt.BrushStyle.NoBrush)
+			painter.drawEllipse(QRectF(self.rect()).adjusted(1.5, 1.5, -1.5, -1.5))
+
+	def enterEvent(self, event) -> None:
+		self.hovered = True
+		self.update()
+
+	def leaveEvent(self, event) -> None:
+		self.hovered = False
+		self.update()
+
+	def mouseReleaseEvent(self, event) -> None:
+		if event.button() == Qt.MouseButton.LeftButton and self.rect().contains(event.position().toPoint()):
+			self.clicked.emit(self.position)
+
+
+class FacePicker(QWidget):
+	"""the faces of a frame as one row of circles to pick one from, after a title and before a line about the pick.
+	one short row, so it fits under a preview in a low window"""
+	picked = Signal(int)
+
+	def __init__(self, title : str, parent : Optional[QWidget] = None) -> None:
+		super().__init__(parent)
+		self.row = QHBoxLayout(self)
+		self.row.setContentsMargins(0, 2, 0, 0)
+		self.row.setSpacing(4)
+		label = StrongBodyLabel(title, self)
+		self.row.addWidget(label)
+		self.row.addSpacing(6)
+		self.hint = CaptionLabel('', self)
+		self.hint.setTextColor('#707070', '#9a9a9a')
+		# a long hint gets clipped, it must not widen the window, and wrapping would make the page taller
+		self.hint.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+		self.hint.setMinimumWidth(0)
+		self.row.addSpacing(6)
+		self.row.addWidget(self.hint, 1)
+		self.dots : List[FaceDot] = []
+
+	def set_faces(self, faces : List[Tuple[int, QPixmap]], chosen : Union[int, Iterable[int], None]) -> None:
+		"""the faces as (position, picture), in the order given, chosen one position or several"""
+		for dot in self.dots:
+			dot.deleteLater()
+		self.dots = []
+		for position, pixmap in faces:
+			dot = FaceDot(position, pixmap, self)
+			dot.setToolTip('Click to change this face')
+			dot.installEventFilter(ToolTipFilter(dot))
+			dot.clicked.connect(self.picked.emit)
+			# after the title and its spacing, before the hint
+			self.row.insertWidget(2 + len(self.dots), dot)
+			self.dots.append(dot)
+		self.set_chosen(chosen)
+
+	def set_chosen(self, chosen : Union[int, Iterable[int], None]) -> None:
+		chosen = { chosen } if isinstance(chosen, int) else set(chosen or [])
+		for dot in self.dots:
+			dot.set_chosen(dot.position in chosen)
+
+	def set_hint(self, text : str) -> None:
+		self.hint.setText(text)
+		# the whole text, when the row clips it
+		self.hint.setToolTip(text)
 
 
 class GroupChip(QWidget):

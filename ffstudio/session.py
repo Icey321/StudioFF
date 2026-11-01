@@ -498,12 +498,14 @@ class OptionStore(QObject):
 	# the values were loaded again, panels rebuild their rows
 	schema_changed = Signal()
 
-	def __init__(self, session : Session, values_key : str, order_key : str) -> None:
+	def __init__(self, session : Session, values_key : str, order_key : str, defaults : Optional[Dict[str, Any]] = None) -> None:
 		super().__init__(session)
 		self.session = session
 		self.config = session.config
 		self.values_key = values_key
 		self.ORDER_KEY = order_key
+		# the page's own defaults in place of facefusion's, Batch starts in Many mode
+		self.defaults : Dict[str, Any] = dict(defaults or {})
 		self.favorites_changed = session.favorites_changed
 		self.values : Dict[str, Any] = {}
 		self.init_values()
@@ -514,9 +516,9 @@ class OptionStore(QObject):
 		return self.session.schema
 
 	def init_values(self) -> None:
-		# the first time they start as a copy of the session's values
+		# the first time they start as a copy of the session's values, with the page's own defaults
 		stored = self.config.get(self.values_key)
-		self.load(stored if stored is not None else self.session.values)
+		self.load(stored if stored is not None else dict(self.session.values, **self.defaults))
 
 	def load(self, values : Dict[str, Any]) -> None:
 		# rows keep a reference to this dict, so it is filled again rather than replaced
@@ -529,7 +531,8 @@ class OptionStore(QObject):
 		self.schema_changed.emit()
 
 	def copy_from(self, values : Dict[str, Any], order : List[str]) -> None:
-		self.load(values)
+		# the options with a page default of their own stay as they are, Studio's Reference mode would not suit a batch
+		self.load(dict(values, **{ dest: self.values.get(dest) for dest in self.defaults if dest in self.values }))
 		self.config.set(self.ORDER_KEY, list(order))
 		self.schema_changed.emit()
 

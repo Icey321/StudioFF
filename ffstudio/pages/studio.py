@@ -14,7 +14,7 @@ from qfluentwidgets import Action, BodyLabel, CaptionLabel, FlowLayout, FluentIc
 
 from ffstudio.config import APP_DIR, PREVIEW_DIR
 from ffstudio.face_mapping import FACE_PROCESSORS, FRAME_PROCESSORS, GROUP_PREFIX, LEAVE, PEOPLE_FILE, SELECTED, FaceMappingCard, box_overlap, face_map, group_images, group_value, is_kept, is_mapped, merge_people, people_dir, person_color, person_name, plan_passes
-from ffstudio.faces import FACE_CHECK_SAMPLES, FACE_GROUPS, MASK_GROUPS, FaceProbe, describe_faces, describe_landmarks, describe_mask, face_landmarks, face_tag, faces_text_color, no_face, read_mask
+from ffstudio.faces import FACE_CHECK_SAMPLES, FACE_GROUPS, MASK_GROUPS, FaceProbe, alike_faces, describe_faces, describe_landmarks, describe_mask, face_landmarks, face_tag, faces_text_color, no_face, read_mask
 from ffstudio.media import VideoReader, animation_extension, browse_dir, is_animated_webp, is_animation, format_length, format_seconds, format_timecode, media_kind, needs_conversion, read_frame, read_image, thumbnail, to_pixmap, usable_path, write_image
 from ffstudio.nsfw import BLOCKED_STATUS, NsfwDialog, describe_result, show_blocked_bar
 from ffstudio.option_panel import FavoritesPanel, OptionPanel
@@ -2124,6 +2124,9 @@ class StudioPage(SourceSelection, QWidget):
 		else:
 			reference_index = int(self.session.values.get('reference_frame_index') or 0) if card.reader else None
 			lines.append(describe_faces(result, reference_index))
+			count, fix = alike_faces(result, self.session.schema)
+			if count:
+				lines.append('(%d) faces look alike. %s.' % (count, fix))
 			problem = problem or not any(face.get('selected') for face in result.get('faces') or [])
 		if card.mask_button.isChecked() and not result.get('error'):
 			schema = self.session.schema

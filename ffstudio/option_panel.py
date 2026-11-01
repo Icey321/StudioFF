@@ -32,6 +32,12 @@ GROUP_ICONS =\
 PROCESSOR_ICON = FluentIcon.ROBOT
 
 
+def page_default(store : Any, dest : str) -> Any:
+	"""the option's default on the page, its own one (Batch's Many mode) before facefusion's"""
+	defaults = getattr(store, 'defaults', None) or {}
+	return defaults[dest] if dest in defaults else store.schema.resolve(dest, store.values).get('default')
+
+
 def merge_order(groups : List[str], saved : List[str]) -> List[str]:
 	"""the groups in the saved order, a group missing from it goes right after the group in front of it in groups"""
 	order = [ group for group in saved if group in groups ]
@@ -335,7 +341,7 @@ class OptionPanel(QWidget):
 
 	def create_row(self, option : Dict[str, Any], card : CollapsibleCard, context : str = '') -> OptionRow:
 		splash.step()
-		return OptionRow(self.session.schema, option, self.session.values, self.session.set_value, card.body, on_favorite = self.toggle_favorite if self.favorites else None, context = context, info_icon = self.info_icons, short_label = self.short_labels, group_caption = self.group_captions)
+		return OptionRow(self.session.schema, option, self.session.values, self.session.set_value, card.body, on_favorite = self.toggle_favorite if self.favorites else None, context = context, info_icon = self.info_icons, short_label = self.short_labels, group_caption = self.group_captions, defaults = getattr(self.session, 'defaults', None))
 
 	def toggle_favorite(self, dest : str) -> None:
 		"""a paired row is one favorite, a star on either of its options counts for both"""
@@ -408,7 +414,7 @@ class OptionPanel(QWidget):
 			options = schema.group_options(group)
 			for option in options:
 				dest = option.get('dest')
-				if not same_value(self.session.values.get(dest), schema.resolve(dest, self.session.values).get('default')):
+				if not same_value(self.session.values.get(dest), page_default(self.session, dest)):
 					changed += 1
 			card.set_subtitle('%d options' % len(options) + (' · %d changed' % changed if changed else ''))
 
@@ -499,6 +505,6 @@ class FavoritesPanel(OptionPanel):
 		card = self.cards.get('favorites')
 		if not schema or not card:
 			return
-		changed = len([ dest for dest in self.rows if not same_value(self.session.values.get(dest), schema.resolve(dest, self.session.values).get('default')) ])
+		changed = len([ dest for dest in self.rows if not same_value(self.session.values.get(dest), page_default(self.session, dest)) ])
 		count = len(set(self.rows.values()))
 		card.set_subtitle(('%d option%s' % (count, '' if count == 1 else 's') + (' · %d changed' % changed if changed else '')) if count else 'none yet')

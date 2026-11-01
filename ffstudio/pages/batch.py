@@ -12,7 +12,7 @@ from PySide6.QtWidgets import QAbstractItemView, QApplication, QFileDialog, QHBo
 from qfluentwidgets import Action, BodyLabel, CaptionLabel, ComboBox, FluentIcon, Flyout, FlyoutAnimationType, LineEdit, ListItemDelegate, ListWidget, MessageBox, PrimaryPushButton, ProgressBar, PushButton, RoundMenu, SegmentedWidget, SimpleCardWidget, Slider, StrongBodyLabel, SubtitleLabel, TogglePushButton, ToggleToolButton, ToolTipFilter, TransparentPushButton, getFont, isDarkTheme, themeColor
 
 from ffstudio.config import APP_DIR, PREVIEW_DIR
-from ffstudio.faces import FACE_CHECK_SAMPLES, FACE_GROUPS, MASK_GROUPS, FaceProbe, describe_faces, describe_landmarks, describe_mask, face_landmarks, face_tag, faces_text_color, no_face, read_mask
+from ffstudio.faces import FACE_CHECK_SAMPLES, FACE_GROUPS, MASK_GROUPS, FaceProbe, alike_faces, describe_faces, describe_landmarks, describe_mask, face_landmarks, face_tag, faces_text_color, no_face, read_mask
 from ffstudio.media import VideoReader, animation_extension, browse_dir, extension, is_animation, format_length, format_seconds, format_timecode, media_kind, needs_conversion, read_frame, thumbnail, to_pixmap, usable_path, video_length, write_image
 from ffstudio.nsfw import BLOCKED_TITLE, NsfwDialog, show_blocked_bar
 from ffstudio.option_widgets import setting_locks, unused_locks
@@ -22,7 +22,7 @@ from ffstudio.pages.setup import SYSTEM_GROUPS, form_row, section_card
 from ffstudio.platforms import show_in_folder
 from ffstudio.pages.studio import LOCK_DRIVERS, LIVE_IGNORED_GROUPS, PREVIEW_MAX_SIDE, NameTagsView, SettingsColumn, SourceCard, SourceSelection, StudioPage, elastic, estimated_progress, preview_step_floor, run_tag_values, tool_button
 from ffstudio.session import OptionStore, Session, describe_error, folder_is_writable
-from ffstudio.widgets import DriveLabel, IconCountButton, PreviewView, Splitter, add_edit_button, attach_landmarks_cycle, collect_drop_paths, guard_wheel, landmarks_mode, with_drive_bar
+from ffstudio.widgets import DriveLabel, FacePicker, IconCountButton, PreviewView, Splitter, add_edit_button, attach_landmarks_cycle, collect_drop_paths, guard_wheel, landmarks_mode, with_drive_bar
 
 TARGET_FILTERS = [ ('*.*', 'All files'), ('*.mp4', 'MP4 videos'), ('*.jpg', 'JPG images'), ('*.png', 'PNG images'), ('*.mov', 'MOV videos'), ('*.webm', 'WebM videos'), ('*.gif', 'GIF animations') ]
 DEFAULT_TEMPLATE = '{target}_{source}'
@@ -76,7 +76,7 @@ PREVIEW_MIN_WIDTH = 280
 # at most this many removed runs and picked video frames are kept across restarts
 REMOVED_LIMIT = 2000
 FRAMES_LIMIT = 2000
-# every face of each target, a batch has no reference frame to pick one person by
+# Batch starts in Many mode, every face of each target: one reference face picked for all targets fits few of them
 BATCH_SELECTOR_MODE = 'many'
 
 
@@ -620,7 +620,11 @@ class BatchPage(SourceSelection, QWidget):
 		self.removed_count = 0
 		self.load_sources()
 		# the batch has its own processors and options, the system settings from Setup are shared
-		self.store = OptionStore(session, 'batch_options', 'batch_processor_order')
+		self.store = OptionStore(session, 'batch_options', 'batch_processor_order', { 'face_selector_mode': BATCH_SELECTOR_MODE })
+		if not session.config.get('batch_mode_unlocked'):
+			# Batch ran in Many mode whatever was stored before the mode could be chosen, it keeps doing that
+			session.config.set('batch_mode_unlocked', True)
+			self.store.set_value('face_selector_mode', BATCH_SELECTOR_MODE)
 		stored = session.config.get('batch') or {}
 		# runs the user took out of the list, they stay out until restored, also after a restart
 		self.removed : set = { (tuple(sources), target) for sources, target in stored.get('removed') or [] }
@@ -628,6 +632,12 @@ class BatchPage(SourceSelection, QWidget):
 		self.target_files : List[str] = [ path for path in stored.get('target_files') or [] if isinstance(path, str) ]
 		# the frame of each video target the preview shows, picked on the timeline under the preview, also after a restart
 		self.preview_frames : Dict[str, int] = { target: index for target, index in (stored.get('preview_frames') or {}).items() if isinstance(index, int) and index > 0 }
+		# the reference face picked for each target in Reference mode, [frame, position], also after a restart
+		self.reference_picks : Dict[str, List[int]] = { target: [ int(pick[0]), int(pick[1]) ] for target, pick in (stored.get('reference_picks') or {}).items() if isinstance(pick, list) and len(pick) == 2 }
+		# on another frame of a video than the picked one: the position of the face closest to the picked person there
+		self.reference_matches : Dict[Tuple[str, int], int] = {}
+		# the faces the last face scan found, the boxes on the preview are in this order
+		self.scanned_faces : List[Dict[str, Any]] = []
 		self.timeline_target = ''
 		self.timeline_reader : Optional[VideoReader] = None
 		self.preview_frame_key : Optional[Tuple[str, int]] = None
@@ -958,10 +968,9 @@ class BatchPage(SourceSelection, QWidget):
 		return self.settings_column
 
 	def refresh_locks(self) -> None:
-		"""run_values always runs in many mode, the mode buttons show it and the rows it does not read are grayed out, so
-		are the rows the processors and models leave unused. the targets are a mix of images and videos, those count"""
-		locks = unused_locks(BATCH_SELECTOR_MODE)
-		locks['face_selector_mode'] = (BATCH_SELECTOR_MODE, 'Batch always uses Many')
+		"""the rows the chosen face selector mode does not read are grayed out, so are the rows the processors and models
+		leave unused. the targets are a mix of images and videos, those count"""
+		locks = unused_locks(self.store.values.get('face_selector_mode') or BATCH_SELECTOR_MODE)
 		if self.store.schema:
 			locks.update(setting_locks(self.store.schema, self.store.values))
 		self.settings_column.set_locks(locks)
@@ -1012,6 +1021,12 @@ class BatchPage(SourceSelection, QWidget):
 		self.preview_view.setAcceptDrops(False)
 		self.preview_view.setMinimumHeight(180)
 		column.addWidget(self.preview_view, 1)
+		self.preview_view.face_clicked.connect(self.on_preview_face_clicked)
+		# in Reference mode: the faces of the shown frame, a click picks the person to change in this target
+		self.face_picker = FacePicker('Reference Face', card)
+		self.face_picker.picked.connect(self.pick_reference)
+		self.face_picker.hide()
+		column.addWidget(self.face_picker)
 		# steps the preview through the outputs the tab shows, past the last one comes the first again
 		step_row = QHBoxLayout()
 		step_row.addStretch(1)
@@ -1075,7 +1090,8 @@ class BatchPage(SourceSelection, QWidget):
 		order = self.session.config.get(Session.ORDER_KEY) or self.session.processors()
 		schema = self.session.schema
 		# the system settings are shared already, only the batch's own options would change
-		changed = [ dest for dest, value in self.session.values.items() if (not schema or schema.options.get(dest, {}).get('group') not in SYSTEM_GROUPS) and self.store.values.get(dest) != value ]
+		# the face selector mode stays Batch's own, copying keeps it
+		changed = [ dest for dest, value in self.session.values.items() if (not schema or schema.options.get(dest, {}).get('group') not in SYSTEM_GROUPS) and dest not in self.store.defaults and self.store.values.get(dest) != value ]
 		if not changed and list(order) == list(self.session.config.get(self.store.ORDER_KEY) or order):
 			self.session.notify.emit('info', 'Already the same', 'Batch already uses the same processors and options as Studio.')
 			return
@@ -1106,8 +1122,6 @@ class BatchPage(SourceSelection, QWidget):
 		schema = self.session.schema
 		values = dict(self.session.values)
 		values.update({ dest: value for dest, value in self.store.values.items() if not schema or schema.options.get(dest, {}).get('group') not in SYSTEM_GROUPS })
-		# every face of each target: reference mode would only take the largest face of its first frame and its look-alikes
-		values['face_selector_mode'] = BATCH_SELECTOR_MODE
 		return values
 
 	def on_sources_changed(self, change : str) -> None:
@@ -1124,6 +1138,8 @@ class BatchPage(SourceSelection, QWidget):
 			self.schedule_face_scan()
 		if dest in LOCK_DRIVERS or dest.endswith('_model'):
 			self.refresh_locks()
+		if dest == 'face_selector_mode' and not self.reference_mode():
+			self.face_picker.hide()
 
 	def open_output_folder(self) -> None:
 		StudioPage.open_folder(self.output_dir())
@@ -1554,10 +1570,10 @@ class BatchPage(SourceSelection, QWidget):
 		self.schedule_preview()
 		self.schedule_face_scan()
 
-	def scaled_frame(self, item : Dict[str, Any]) -> Optional[Any]:
-		"""the picked frame of the item's target (the first one until a frame is picked), scaled down to the preview size"""
+	def scaled_frame(self, item : Dict[str, Any], index : Optional[int] = None) -> Optional[Any]:
+		"""the picked frame of the item's target (the first one until a frame is picked), or the given one, scaled down to the preview size"""
 		target = item.get('target')
-		index = self.preview_frame_index(target)
+		index = self.preview_frame_index(target) if index is None else index
 		frame = self.timeline_reader.read(index) if self.timeline_reader and target == self.timeline_target else read_frame(target, index)
 		if frame is None:
 			return None
@@ -1614,6 +1630,7 @@ class BatchPage(SourceSelection, QWidget):
 		write_image(frame_path, run_frame)
 		values = self.run_values()
 		values.update({ 'reference_frame_index': 0, 'trim_frame_start': None, 'trim_frame_end': None, 'workflow_mode': 'auto' })
+		values.update(self.reference_values(item, True))
 		# a single frame has no sound to sync lips to
 		processors = list(values.get('processors') or [])
 		values['processors'] = [ processor for processor in processors if processor != 'lip_syncer' ]
@@ -1721,6 +1738,7 @@ class BatchPage(SourceSelection, QWidget):
 		item = self.shown_item()
 		if not item:
 			self.preview_view.set_warning(False)
+			self.face_picker.hide()
 			self.faces_label.setText('Select an output first, the faces and the mask are drawn over its frame.')
 			return
 		if not self.session.is_configured() or not self.session.schema:
@@ -1731,8 +1749,112 @@ class BatchPage(SourceSelection, QWidget):
 			return
 		mask = self.mask_button.isChecked()
 		sources = [ path for path in item.get('sources') if media_kind(path) == 'image' ]
-		args = self.session.option_args(self.run_values(), FACE_GROUPS + (MASK_GROUPS if mask else []))
-		self.face_probe.scan(frame, None, sources, args, tag = self.faces_tag(item), mask = mask)
+		values = self.run_values()
+		reference = None
+		pick = self.reference_pick(item.get('target'))
+		if self.reference_mode() and pick:
+			# the picked face, looked for in the shown frame. picked on another frame, that frame is the reference
+			values.update({ 'reference_frame_index': 0, 'reference_face_position': pick[1] })
+			if pick[0] != self.preview_frame_index(item.get('target')):
+				reference = self.scaled_frame(item, pick[0])
+		args = self.session.option_args(values, FACE_GROUPS + (MASK_GROUPS if mask else []))
+		self.face_probe.scan(frame, reference, sources, args, tag = self.faces_tag(item), mask = mask)
+
+	def reference_mode(self) -> bool:
+		return self.store.values.get('face_selector_mode') == 'reference'
+
+	def reference_pick(self, target : str) -> Optional[List[int]]:
+		return self.reference_picks.get(target)
+
+	def reference_values(self, item : Dict[str, Any], preview : bool = False) -> Dict[str, Any]:
+		"""the reference frame and position of the target's picked face, nothing when none is picked or the mode is not Reference.
+		a preview runs on its one frame: the picked face there, or the one closest to it when it was picked on another frame"""
+		target = item.get('target')
+		pick = self.reference_pick(target)
+		if not self.reference_mode() or not pick:
+			return {}
+		if not preview:
+			return { 'reference_frame_index': pick[0], 'reference_face_position': pick[1] }
+		index = self.preview_frame_index(target)
+		position = pick[1] if pick[0] == index else self.reference_matches.get((target, index), pick[1])
+		return { 'reference_frame_index': 0, 'reference_face_position': position }
+
+	def pick_reference(self, position : int) -> None:
+		"""the face at position in the shown frame becomes the target's reference face, picking it again unpicks it"""
+		item = self.shown_item()
+		if not item:
+			return
+		target = item.get('target')
+		pick = [ self.preview_frame_index(target), position ]
+		# set again at the end, so the newest picks are the ones kept
+		if self.reference_picks.pop(target, None) != pick:
+			self.reference_picks[target] = pick
+		self.reference_matches = { key: value for key, value in self.reference_matches.items() if key[0] != target }
+		self.save()
+		self.face_picker.set_chosen(position if self.reference_picks.get(target) == pick else self.default_position())
+		self.schedule_face_scan()
+		self.schedule_preview()
+
+	def default_position(self) -> int:
+		"""the face a target without a pick gets changed, the Position option counting largest first"""
+		return int(self.store.values.get('reference_face_position') or 0)
+
+	def on_preview_face_clicked(self, index : int) -> None:
+		if self.reference_mode() and 0 <= index < len(self.scanned_faces) and self.scanned_faces[index].get('position', -1) >= 0:
+			self.pick_reference(self.scanned_faces[index].get('position'))
+
+	def refresh_face_picker(self, item : Dict[str, Any], result : dict) -> None:
+		"""round crops of the faces in the shown frame, largest first, the one that gets changed ringed: the picked one,
+		the closest to it when it was picked on another frame, or the one at Position before anything is picked"""
+		if not self.reference_mode() or result.get('error'):
+			self.face_picker.hide()
+			return
+		target = item.get('target')
+		index = self.preview_frame_index(target)
+		pick = self.reference_pick(target)
+		faces = sorted((face for face in result.get('faces') or [] if face.get('position', -1) >= 0), key = lambda face: face.get('position'))
+		if pick and pick[0] != index:
+			# the face that looks most like the picked person, a preview of this frame changes that one
+			matches = [ face for face in faces if face.get('selected') ]
+			if matches:
+				self.reference_matches[(target, index)] = min(matches, key = lambda face: face.get('distance', 1.0)).get('position')
+		frame = self.scaled_frame(item)
+		crops = []
+		if frame is not None and result.get('width'):
+			scale = frame.shape[1] / result.get('width')
+			height, width = frame.shape[:2]
+			for face in faces:
+				x1, y1, x2, y2 = [ value * scale for value in face.get('box') ]
+				margin = 0.25 * max(x2 - x1, y2 - y1)
+				crop = frame[int(max(0, y1 - margin)):int(min(height, y2 + margin)), int(max(0, x1 - margin)):int(min(width, x2 + margin))]
+				if crop.size:
+					crops.append((face.get('position'), to_pixmap(crop.copy())))
+		name = os.path.basename(target)
+		if pick and pick[0] == index:
+			ringed = pick[1]
+		elif pick:
+			ringed = self.reference_matches.get((target, index), -1)
+		else:
+			ringed = self.default_position()
+		# every face within the Distance of the reference is changed, not just the closest one
+		count, fix = alike_faces(result, self.session.schema)
+		if count:
+			ringed = [ face.get('position') for face in faces if face.get('selected') ]
+			# two lines, one would clip the fix
+			hint = '(%d) faces look alike\n%s' % (count, fix)
+		elif not crops:
+			hint = 'No faces in this frame to pick from'
+		elif pick and pick[0] == index:
+			hint = 'The ringed face is changed in %s · click it again to unpick' % name
+		elif pick:
+			hint = 'Picked on frame %d, the ringed face looks most like it · click a face to pick it here instead' % pick[0]
+		elif len(crops) == 1:
+			hint = 'The only face in %s is changed' % name
+		else:
+			hint = 'The ringed face is changed in %s (Position %d) · click another person to change them instead' % (name, ringed)
+		self.face_picker.set_faces(crops, ringed)
+		self.face_picker.set_hint(hint)
+		self.face_picker.show()
 
 	def shown_item(self) -> Optional[Dict[str, Any]]:
 		"""the output whose target or preview the preview shows, with Auto off that is its target before any preview is made"""
@@ -1755,6 +1877,8 @@ class BatchPage(SourceSelection, QWidget):
 		if not item or result.get('tag') != self.faces_tag(item):
 			return
 		faces = (result.get('faces') or []) if self.faces_button.isChecked() else []
+		self.scanned_faces = faces
+		self.refresh_face_picker(item, result)
 		mask = read_mask(result.get('mask')) if self.mask_button.isChecked() else None
 		boxes = [ (face.get('box'), face_tag(index, face), bool(face.get('selected'))) for index, face in enumerate(faces) ]
 		self.preview_view.set_faces(boxes, (result.get('width') or 0, result.get('height') or 0), mask, face_landmarks(result, self.landmarks_button.landmarks_mode) if self.landmarks_button.isChecked() else None)
@@ -2210,7 +2334,8 @@ class BatchPage(SourceSelection, QWidget):
 			'subfolders': self.subfolders_button.isChecked(),
 			'removed': [ [ list(sources), target ] for sources, target in list(self.removed)[:REMOVED_LIMIT] ],
 			# the first frame needs no entry, the newest picks are kept
-			'preview_frames': dict([ (target, index) for target, index in self.preview_frames.items() if index > 0 ][-FRAMES_LIMIT:])
+			'preview_frames': dict([ (target, index) for target, index in self.preview_frames.items() if index > 0 ][-FRAMES_LIMIT:]),
+			'reference_picks': dict(list(self.reference_picks.items())[-FRAMES_LIMIT:])
 		})
 
 	# running, one facefusion run per output so a refused target only fails its own output
@@ -2508,6 +2633,7 @@ class BatchPage(SourceSelection, QWidget):
 			args += [ '-s' ] + item.get('sources')
 		values = self.run_values()
 		values.update({ 'reference_frame_index': 0, 'trim_frame_start': None, 'trim_frame_end': None })
+		values.update(self.reference_values(item))
 		script = 'facefusion.py'
 		if is_animation(item.get('target'), item.get('output')):
 			# facefusion has no gif or animated webp support, the helper converts to video and back around the run
