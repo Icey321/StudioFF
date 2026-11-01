@@ -44,9 +44,9 @@ FaceFusion itself is not included: install FaceFusion v4 separately, then point 
 
 Pick the section for your system. Every way needs an internet connection and a few GB of free space for FaceFusion and its models.
 
-> **Tested on Windows 11**, both the Windows install and Pinokio (with an NVIDIA card). Linux and macOS, with or without
-> Pinokio, are **experimental and untested**: the scripts are written, but StudioFF has not been run there yet. Please
-> report what happens in an [issue](https://github.com/Icey321/StudioFF/issues).
+> **Tested on Windows 11** (with an NVIDIA card). Linux and macOS are **experimental and untested**: the scripts are
+> written, but StudioFF has not been run there yet. Please report what happens in an
+> [issue](https://github.com/Icey321/StudioFF/issues).
 
 ### Windows 11
 
@@ -63,7 +63,7 @@ Pick the section for your system. Every way needs an internet connection and a f
    install and asks first; on yes it installs uv through winget, and uv downloads Python 3.12 for StudioFF only.
 3. Start **StudioFF**. The first time, it opens the **FaceFusion** page:
    - **Already have FaceFusion v4?** The app looks for it in the usual places (next to the StudioFF folder, your user folder,
-     Documents, Desktop, Downloads, the top of each local drive and Pinokio's apps) and fills in the folder and its Python.
+     Documents, Desktop, Downloads and the top of each local drive) and fills in the folder and its Python.
      Check them, or pick them yourself with **Browse** and **Detect**, then press **Save and load options**.
    - **No FaceFusion v4 yet?** Press **Install FaceFusion v4** on the same page. It lists any missing program it needs (Git, uv,
      FFmpeg, curl) and installs them through winget only after you agree. uv downloads Python 3.13 itself, so you don't have
@@ -71,25 +71,7 @@ Pick the section for your system. Every way needs an internet connection and a f
 
 StudioFF updates itself from **Settings** when a new release is out.
 
-### Pinokio (Windows tested; Linux and macOS experimental, untested)
-
-[Pinokio](https://pinokio.computer) installs everything for you, FaceFusion v4 included.
-
-1. Install Pinokio and open it.
-2. Click **Create** (or **Create App**), open the **Download** tab, paste `https://github.com/Icey321/StudioFF` into
-   **Git URL** and press **Import**.
-3. Press **Install** in StudioFF's menu, then **Install** again on the next page.
-   - Windows may ask whether Python, Git for Windows and uv may access the internet. Allow each one.
-   - If Pinokio lists programs it needs to install or update first (such as CUDA and Python), press **Install** there too.
-
-   It installs StudioFF with its own FaceFusion v4 (CUDA on an NVIDIA card, DirectML on other Windows graphics cards,
-   otherwise CPU) inside the Pinokio app folder. This downloads several GB and takes a while. Its settings stay apart from
-   any other StudioFF on the same computer.
-4. When Pinokio says StudioFF is installed, press **Start** to open the StudioFF window.
-
-Update StudioFF with Pinokio's **Update** button. FaceFusion is updated from StudioFF's **FaceFusion** page as usual.
-
-### Linux and macOS (without Pinokio) - experimental, untested
+### Linux and macOS - experimental, untested
 
 StudioFF is made and tested on Windows. The Linux support comes from
 [tokenwizard's Linux fork](https://github.com/tokenwizard/StudioFF), tested there on CachyOS with an NVIDIA card, but this

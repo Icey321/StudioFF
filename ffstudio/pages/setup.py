@@ -12,7 +12,6 @@ from ffstudio import APP_REPOSITORY, APP_VERSION, TESTED_FACEFUSION_COMMIT, TEST
 from ffstudio.environment import PREREQUISITES, check_dependencies, compare_github_commits, create_process_environment, fetch_github_build, fetch_latest_release, find_conda, find_conda_base, find_facefusion_folders, find_missing_prerequisites, find_python_candidates, has_nvidia_gpu, is_facefusion_root, is_newer_version, probe_python_version, read_facefusion_build, read_facefusion_version, switch_facefusion_commit, version_tuple, winget_install_args
 from ffstudio.main_window import DEFAULT_ACCENT, apply_theme
 from ffstudio.option_panel import OptionPanel
-from ffstudio.pinokio import IS_PINOKIO
 from ffstudio.platforms import GPU_ONNXRUNTIME, IS_WINDOWS, PYTHON_NAME, conda_env_python, package_install_hint, read_os_version, refresh_path, script_command, venv_python
 from ffstudio.session import MINIMUM_PYTHON, Session
 from ffstudio.updater import download_release, is_git_checkout, start_helper
@@ -35,7 +34,7 @@ FACEFUSION_BRANCH = 'v4'
 # the update card's labels are longer than the other cards'
 UPDATE_LABEL_WIDTH = 170
 CONDA_ENV_NAME = 'facefusion-v4'
-GIT_CHECKOUT_TIP = 'Pinokio installed this copy of the app, update it with Update in Pinokio' if IS_PINOKIO else 'This copy of the app is a git checkout, so it updates through git'
+GIT_CHECKOUT_TIP = 'This copy of the app is a git checkout, so it updates through git'
 ONNXRUNTIME_CHOICES =\
 [
 	('cuda@12', 'CUDA 12 — NVIDIA GPU'),

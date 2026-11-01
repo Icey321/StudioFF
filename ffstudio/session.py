@@ -54,7 +54,7 @@ def describe_error(line : str) -> Optional[Tuple[str, str]]:
 		module = missing_module.group(1).split('.')[0]
 		name = PACKAGE_NAMES.get(module)
 		return 'The Python environment is missing the "%s" package%s, so the FaceFusion install did not finish.' % (module, ' (%s)' % name if name and name != module else ''), \
-			'Install FaceFusion again: Install FaceFusion v4 on the FaceFusion page, or the Install button in Pinokio.'
+			'Install FaceFusion again: Install FaceFusion v4 on the FaceFusion page.'
 	if line.startswith('PermissionError') or '[errno 13]' in lowered:
 		return 'Saving there was not allowed.', 'Choose another output folder, such as Videos or Documents, or close the file if it is open in another app.'
 	if '[errno 28]' in lowered or 'no space left' in lowered:

@@ -20,13 +20,13 @@ def is_facefusion_root(path : str) -> bool:
 def search_bases(studio_root : str) -> List[str]:
 	"""folders whose subfolders may hold a FaceFusion checkout, the closest to StudioFF first"""
 	home = os.path.expanduser('~')
-	bases = [ os.path.dirname(studio_root), home ] + [ os.path.join(home, name) for name in [ 'Documents', 'Desktop', 'Downloads', os.path.join('pinokio', 'api') ] ]
+	bases = [ os.path.dirname(studio_root), home ] + [ os.path.join(home, name) for name in [ 'Documents', 'Desktop', 'Downloads' ] ]
 	if IS_WINDOWS:
 		import ctypes
 		import string
 		# fixed local drives only, a network drive can take long to answer
 		drives = [ letter + ':\\' for letter in string.ascii_uppercase if ctypes.windll.kernel32.GetDriveTypeW(letter + ':\\') == 3 ]
-		bases += drives + [ os.path.join(drive, 'pinokio', 'api') for drive in drives ]
+		bases += drives
 	else:
 		bases += [ '/opt', '/srv' ]
 	# compared lowercase on windows, the folder keeps its own spelling for the box
@@ -46,8 +46,8 @@ def find_facefusion_folders(studio_root : str) -> List[str]:
 		except OSError:
 			continue
 		for child in children:
-			# a pinokio app keeps facefusion one folder down
-			for candidate in [ child, os.path.join(child, 'facefusion'), os.path.join(child, 'app') ]:
+			# a folder of ai tools can keep facefusion one folder down
+			for candidate in [ child, os.path.join(child, 'facefusion') ]:
 				if is_facefusion_root(candidate) and candidate not in found:
 					found.append(candidate)
 	# the major number only, the v4 branch's metadata says just "v4"

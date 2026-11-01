@@ -2,8 +2,3 @@
 __pycache__/
 *.pyc
 .claude/settings.local.json
-# made by the Pinokio scripts in the app folder
-/env/
-/facefusion/
-/data/
-/logs/
