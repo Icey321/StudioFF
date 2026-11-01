@@ -55,10 +55,12 @@ Pick the section for your system. Every way needs an internet connection and a f
    ```
 
    This creates `.venv` for the app (PySide6, PySide6-Fluent-Widgets, OpenCV) and adds **StudioFF** shortcuts to the desktop
-   and the Start menu.
-3. Start **StudioFF** and open the **FaceFusion** page:
-   - **Already have FaceFusion v4?** Pick its folder and the `python.exe` of its environment, or press **Detect**, then press
-     **Save and load options**.
+   and the Start menu. If the PC has neither Python 3.10+ nor [uv](https://docs.astral.sh/uv/), it explains what it would
+   install and asks first; on yes it installs uv through winget, and uv downloads Python 3.12 for StudioFF only.
+3. Start **StudioFF**. The first time, it opens the **FaceFusion** page:
+   - **Already have FaceFusion v4?** The app looks for it in the usual places (next to the StudioFF folder, your user folder,
+     Documents, Desktop, Downloads, the top of each local drive and Pinokio's apps) and fills in the folder and its Python.
+     Check them, or pick them yourself with **Browse** and **Detect**, then press **Save and load options**.
    - **No FaceFusion v4 yet?** Press **Install FaceFusion v4** on the same page. It lists any missing program it needs (Git, uv,
      FFmpeg, curl) and installs them through winget only after you agree. uv downloads Python 3.13 itself, so you don't have
      to install Python. FaceFusion v4 needs **Python 3.13 or newer**, so a FaceFusion 3.x environment (Python 3.12) can't run it.

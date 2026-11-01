@@ -153,6 +153,8 @@ class MainWindow(FluentWindow):
 		if not self.session.is_configured():
 			self.switchTo(self.facefusion_page)
 			self.show_notification('info', 'Welcome', 'Point the app at your FaceFusion v4 folder, or install v4 from here.')
+			if not self.session.facefusion_root:
+				self.setup_page.find_existing_facefusion()
 			return
 		if self.session.config.get('show_system_monitor'):
 			self.system_monitor.start()

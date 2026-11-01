@@ -9,7 +9,7 @@ from PySide6.QtWidgets import QAbstractButton, QApplication, QButtonGroup, QFile
 from qfluentwidgets import BodyLabel, CaptionLabel, CheckBox, ColorPickerButton, ComboBox, EditableComboBox, FluentIcon, HyperlinkButton, IconWidget, InfoBarIcon, LineEdit, MessageBox, PrimaryPushButton, ProgressBar, PushButton, SearchLineEdit, SimpleCardWidget, SingleDirectionScrollArea, StrongBodyLabel, SubtitleLabel, SwitchButton, ToolTipFilter, TransparentToolButton, isDarkTheme
 
 from ffstudio import APP_REPOSITORY, APP_VERSION, TESTED_FACEFUSION_COMMIT, TESTED_FACEFUSION_DATE
-from ffstudio.environment import PREREQUISITES, check_dependencies, compare_github_commits, create_process_environment, fetch_github_build, fetch_latest_release, find_conda, find_conda_base, find_missing_prerequisites, find_python_candidates, has_nvidia_gpu, is_facefusion_root, is_newer_version, probe_python_version, read_facefusion_build, read_facefusion_version, switch_facefusion_commit, version_tuple, winget_install_args
+from ffstudio.environment import PREREQUISITES, check_dependencies, compare_github_commits, create_process_environment, fetch_github_build, fetch_latest_release, find_conda, find_conda_base, find_facefusion_folders, find_missing_prerequisites, find_python_candidates, has_nvidia_gpu, is_facefusion_root, is_newer_version, probe_python_version, read_facefusion_build, read_facefusion_version, switch_facefusion_commit, version_tuple, winget_install_args
 from ffstudio.main_window import DEFAULT_ACCENT, apply_theme
 from ffstudio.option_panel import OptionPanel
 from ffstudio.pinokio import IS_PINOKIO
@@ -190,6 +190,7 @@ class SetupPage(QWidget):
 	# probes that start python or git, they run on worker threads so the window keeps responding
 	python_probed = Signal(str, object)
 	pythons_detected = Signal(object, str)
+	facefusion_folders_found = Signal(object)
 	build_read = Signal(str, object)
 	facefusion_switched = Signal(str, object)
 	monitor_toggled = Signal(bool)
@@ -279,6 +280,7 @@ class SetupPage(QWidget):
 		self.studio_download_finished.connect(self.on_studio_download_finished)
 		self.python_probed.connect(self.on_python_probed)
 		self.pythons_detected.connect(self.on_pythons_detected)
+		self.facefusion_folders_found.connect(self.on_facefusion_folders_found)
 		self.build_read.connect(self.show_installed_build)
 		self.facefusion_switched.connect(self.on_facefusion_switched)
 		self.refresh_status()
@@ -380,6 +382,23 @@ class SetupPage(QWidget):
 		self.refresh_python_status()
 		if not found:
 			self.session.notify.emit('warning', 'No environments found', 'No conda or venv Python was found. Use "Install FaceFusion" below.')
+
+	def find_existing_facefusion(self) -> None:
+		"""on a first start, fills in a FaceFusion folder already on this PC, the user still checks it and saves"""
+		studio_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+		self.root_status.set_status('info', 'Looking for FaceFusion on this PC…')
+		threading.Thread(target = lambda: self.facefusion_folders_found.emit(find_facefusion_folders(studio_root)), daemon = True).start()
+
+	def on_facefusion_folders_found(self, found : List[str]) -> None:
+		# the user may have typed or browsed meanwhile
+		if self.root_edit.text().strip() or not found:
+			self.refresh_root_status()
+			return
+		self.root_edit.setText(found[0])
+		self.on_root_edited()
+		version = read_facefusion_version(found[0]) or 'of unknown version'
+		others = ' (%d) other FaceFusion folders were found too, use Browse to pick another one.' % (len(found) - 1) if len(found) > 1 else ''
+		self.session.notify.emit('success', 'FaceFusion found', 'FaceFusion %s is in %s. Check the Python below, then press "Save and load options".%s' % (version, found[0], others))
 
 	def refresh_root_status(self) -> None:
 		root = self.root_edit.text().strip()

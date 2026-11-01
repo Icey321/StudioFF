@@ -10,11 +10,49 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from PySide6.QtCore import QProcessEnvironment
 
-from ffstudio.platforms import CREATE_NO_WINDOW, ENV_BIN, IS_LINUX, conda_candidates, conda_env_python, facefusion_library_path, python_patterns
+from ffstudio.platforms import CREATE_NO_WINDOW, ENV_BIN, IS_LINUX, IS_WINDOWS,conda_candidates, conda_env_python, facefusion_library_path, python_patterns
 
 
 def is_facefusion_root(path : str) -> bool:
 	return bool(path) and os.path.isfile(os.path.join(path, 'facefusion.py')) and os.path.isdir(os.path.join(path, 'facefusion', 'processors'))
+
+
+def search_bases(studio_root : str) -> List[str]:
+	"""folders whose subfolders may hold a FaceFusion checkout, the closest to StudioFF first"""
+	home = os.path.expanduser('~')
+	bases = [ os.path.dirname(studio_root), home ] + [ os.path.join(home, name) for name in [ 'Documents', 'Desktop', 'Downloads', os.path.join('pinokio', 'api') ] ]
+	if IS_WINDOWS:
+		import ctypes
+		import string
+		# fixed local drives only, a network drive can take long to answer
+		drives = [ letter + ':\\' for letter in string.ascii_uppercase if ctypes.windll.kernel32.GetDriveTypeW(letter + ':\\') == 3 ]
+		bases += drives + [ os.path.join(drive, 'pinokio', 'api') for drive in drives ]
+	else:
+		bases += [ '/opt', '/srv' ]
+	# compared lowercase on windows, the folder keeps its own spelling for the box
+	unique : Dict[str, str] = {}
+	for base in bases:
+		if os.path.isdir(base):
+			unique.setdefault(os.path.normcase(os.path.abspath(base)), os.path.abspath(base))
+	return list(unique.values())
+
+
+def find_facefusion_folders(studio_root : str) -> List[str]:
+	"""FaceFusion checkouts in the usual places, v4 ones first, it only looks two folders deep so it stays quick"""
+	found : List[str] = []
+	for base in search_bases(studio_root):
+		try:
+			children = sorted(entry.path for entry in os.scandir(base) if entry.is_dir() and not entry.name.startswith(('.', '$')))
+		except OSError:
+			continue
+		for child in children:
+			# a pinokio app keeps facefusion one folder down
+			for candidate in [ child, os.path.join(child, 'facefusion'), os.path.join(child, 'app') ]:
+				if is_facefusion_root(candidate) and candidate not in found:
+					found.append(candidate)
+	# the major number only, the v4 branch's metadata says just "v4"
+	found.sort(key = lambda root: version_tuple((read_facefusion_version(root) or '').lstrip('v'))[:1] < (4,))
+	return found
 
 
 def read_facefusion_version(root : str) -> Optional[str]:

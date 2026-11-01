@@ -11,6 +11,9 @@
 - Nik works on this project only on his home PC, so the to-do list stays in Claude's
   memory (`deferred-features-oct-2026.md`), not in a file in the project.
 
+- Nothing is installed on the user's PC without first saying what it is, how it is installed,
+  roughly how big it is, and asking (install.ps1 asks Y/N; the app shows a MessageBox) (Nik, 2026-11-01).
+
 - Times shown to the user (how long a run or preview took) read as seconds under a minute
   ("42.3 s") and as minutes:seconds from 60 s on ("1:24"). Use `format_seconds` from
   `ffstudio/media.py`; a running clock uses `format_length`.
