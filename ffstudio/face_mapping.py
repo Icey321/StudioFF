@@ -380,6 +380,8 @@ class FaceMappingCard(CollapsibleCard):
 
 	def refresh_text(self) -> None:
 		self.finding = False
+		# every change of the people, their sources or the switch ends here, the face selector rows follow it
+		self.page.refresh_selector_locks()
 		on = self.active()
 		self.find_button.setEnabled(True)
 		self.find_button.setChecked(on)

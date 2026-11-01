@@ -183,6 +183,7 @@ def scan(request : dict, model_keys : set) -> dict:
 	if mode == 'reference':
 		result['reference_faces'] = len(all_reference_faces)
 		result['reference_found'] = reference_face is not None
+		result['reference_position'] = reference_position
 		result['reference_distance'] = state_manager.get_item('reference_face_distance')
 
 	for face in faces:

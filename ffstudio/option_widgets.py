@@ -1,4 +1,4 @@
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtGui import QFont
@@ -6,7 +6,7 @@ from PySide6.QtWidgets import QBoxLayout, QButtonGroup, QFrame, QHBoxLayout, QSi
 from qfluentwidgets import BodyLabel, CaptionLabel, CheckBox, ComboBox, FlowLayout, FluentIcon, LineEdit, Slider, SpinBox, SwitchButton, ToolTipFilter
 
 from ffstudio.schema import Schema, format_scalar, same_value
-from ffstudio.widgets import ChoiceButton, DecimalBox, InfoButton, NumberBox, RangeSlider, ResetButton, StarButton, guard_wheel
+from ffstudio.widgets import ChoiceButton, DecimalBox, DisabledToolTipFilter, InfoButton, NumberBox, RangeSlider, ResetButton, StarButton, guard_wheel
 
 AUTO_TEXT = 'Auto'
 LABEL_WIDTH = 210
@@ -26,6 +26,30 @@ PAIRED_OPTIONS =\
 	'face_selector_age_start': ('face_selector_age_end', 'filter the detected faces based on their age, between the two grips')
 }
 PAIRED_PARTNERS = { partner: dest for dest, (partner, _) in PAIRED_OPTIONS.items() }
+# what facefusion does in each face selector mode, the tooltips of the mode buttons
+MODE_TIPS =\
+{
+	'many': 'Many: changes every face in the frame that passes the Gender, Race and Age filters.\nEvery face gets the same source face.',
+	'one': 'One: changes only the first face, after sorting by Order and the Gender, Race and Age filters.\nIt picks again on every frame, so in a video it can jump from one person to another.',
+	'reference': 'Reference: changes the faces that look like the face at Position in the reference Frame,\nwithin the Distance, on every frame. Order, Gender, Race and Age are not used.\nThe only mode that can give different people different sources (Face Mapping).'
+}
+# the face selector options each mode leaves unused: reference never sorts or filters, many and one never look at a
+# reference face, and many takes every face, so their order does not matter either. a pair is locked by its first option
+REFERENCE_OPTIONS = [ 'reference_face_position', 'reference_face_distance', 'reference_frame_index' ]
+FILTER_OPTIONS = [ 'face_selector_gender', 'face_selector_race', 'face_selector_age_start' ]
+UNUSED_BY_MODE =\
+{
+	'reference': [ 'face_selector_order' ] + FILTER_OPTIONS,
+	'many': [ 'face_selector_order' ] + REFERENCE_OPTIONS,
+	'one': REFERENCE_OPTIONS
+}
+# a lock that grays a row out and keeps showing the row's own value
+KEEP_VALUE = object()
+
+
+def unused_locks(mode : str, reason : str = '') -> Dict[str, Tuple[Any, str]]:
+	"""the rows the given face selector mode does not read, grayed out with the reason"""
+	return { dest: (KEEP_VALUE, reason or 'Not used in %s mode' % mode.capitalize()) for dest in UNUSED_BY_MODE.get(mode, []) }
 
 
 def pretty_choice(value : Any) -> str:
@@ -123,6 +147,10 @@ class ButtonChoiceControl(OptionControl):
 			text, symbol, icon = self.ICONS.get(item or 'auto', (str(item).capitalize(), None, None))
 			button = ChoiceButton(text, symbol, icon, self)
 			button.setCheckable(True)
+			if item in MODE_TIPS and option.get('dest') == 'face_selector_mode':
+				button.setToolTip(MODE_TIPS.get(item))
+				# also while the row is grayed out, the tip still says what the mode does
+				button.installEventFilter(DisabledToolTipFilter(button))
 			self.group.addButton(button, index)
 			layout.addWidget(button)
 		layout.addStretch(1)
@@ -536,6 +564,14 @@ class OptionRow(QFrame):
 			# lined up under the label, past the star
 			self.caption.setContentsMargins(24 if self.star_button else 0, 0, 0, 0)
 			text_layout.addWidget(self.caption)
+		# why the row is grayed out, while something else decides it (Face Mapping, the face selector mode)
+		self.lock : Optional[Tuple[Any, str]] = None
+		self.lock_label = CaptionLabel('', self.text_widget)
+		self.lock_label.setWordWrap(True)
+		self.lock_label.setTextColor('#b45309', '#f0b35a')
+		self.lock_label.setContentsMargins(24 if self.star_button else 0, 0, 0, 0)
+		self.lock_label.hide()
+		text_layout.addWidget(self.lock_label)
 		if not info_icon:
 			self.help = CaptionLabel(self.help_text, self.text_widget)
 			self.help.setWordWrap(True)
@@ -632,9 +668,27 @@ class OptionRow(QFrame):
 
 	def sync(self) -> None:
 		"""shows the shared value again after it was changed somewhere else"""
+		if self.overridden():
+			# the control shows the locked value, only the reset dot follows the stored one
+			self.refresh_reset()
+			return
 		if not self.applying and not self.shows(self.stored_value()):
 			self.control.set_value(self.stored_value())
 			self.refresh_reset()
+
+	def overridden(self) -> bool:
+		return bool(self.lock) and self.lock[0] is not KEEP_VALUE
+
+	def set_lock(self, lock : Optional[Tuple[Any, str]]) -> None:
+		"""grays the row out with a short reason, showing the lock's value instead of its own unless it is KEEP_VALUE"""
+		if lock == self.lock:
+			return
+		self.lock = lock
+		self.control.set_value(self.lock[0] if self.overridden() else self.stored_value())
+		self.lock_label.setText(lock[1] if lock else '')
+		self.lock_label.setVisible(bool(lock))
+		self.refresh_available()
+		self.refresh_reset()
 
 	def matches(self, text : str) -> bool:
 		words = []
@@ -664,16 +718,28 @@ class OptionRow(QFrame):
 	def refresh_available(self) -> None:
 		"""grays out the control while the choice it belongs to is not ticked, the label keeps its star and (i)"""
 		required = REQUIRED_CHOICES.get(self.dest)
-		if not required:
+		if not required and not self.lock and self.control_area.isEnabled():
 			return
-		driver, choice = required
-		ticked = self.values.get(driver, self.schema.resolve(driver, self.values).get('default')) or []
-		available = choice in ticked
+		available, tip = True, ''
+		if required:
+			driver, choice = required
+			ticked = self.values.get(driver, self.schema.resolve(driver, self.values).get('default')) or []
+			available = choice in ticked
+			driver_label = self.schema.split_label(self.schema.options.get(driver) or {})[0]
+			tip = 'Only used while %s is ticked in %s' % (pretty_choice(choice), driver_label)
+		if self.lock:
+			available, tip = False, self.lock[1]
 		self.control_area.setEnabled(available)
 		self.label.setTextColor(*(self.label_colors if available else ('#a0a0a0', '#6a6a6a')))
-		driver_label = self.schema.split_label(self.schema.options.get(driver) or {})[0]
-		self.control_area.setToolTip('' if available else 'Only used while %s is ticked in %s' % (pretty_choice(choice), driver_label))
+		self.control_area.setToolTip('' if available else tip)
+
+	def is_default(self) -> bool:
+		stored, default = self.stored_value(), self.default_value()
+		if self.partner:
+			return all(same_value(left, right) for left, right in zip(stored, default))
+		return same_value(stored, default)
 
 	def refresh_reset(self) -> None:
-		self.reset_button.setVisible(not self.shows(self.default_value()))
+		# an overridden control shows the lock's value, the stored one decides the dot then
+		self.reset_button.setVisible(not self.is_default() if self.overridden() else not self.shows(self.default_value()))
 		self.label.setText(self.title + ('  •' if self.reset_button.isVisible() else ''))

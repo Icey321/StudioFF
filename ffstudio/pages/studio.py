@@ -18,6 +18,7 @@ from ffstudio.faces import FACE_CHECK_SAMPLES, FACE_GROUPS, MASK_GROUPS, FacePro
 from ffstudio.media import VideoReader, animation_extension, browse_dir, is_animated_webp, is_animation, format_length, format_seconds, format_timecode, media_kind, needs_conversion, read_frame, read_image, thumbnail, to_pixmap, usable_path, write_image
 from ffstudio.nsfw import BLOCKED_STATUS, NsfwDialog, describe_result, show_blocked_bar
 from ffstudio.option_panel import FavoritesPanel, OptionPanel
+from ffstudio.option_widgets import FILTER_OPTIONS, KEEP_VALUE, unused_locks
 from ffstudio.output_name import AUTOMATIC_TEMPLATE, NAME_EXAMPLES, NAME_TAGS, build_output, build_output_path, unknown_tags
 from ffstudio.platforms import show_in_folder
 from ffstudio.presets import PresetBar
@@ -886,6 +887,11 @@ class SettingsColumn(QWidget):
 		self.no_match_label.setVisible(searching and not self.processor_panel.has_visible_cards() and not self.option_panel.has_visible_cards())
 		self.scroll.verticalScrollBar().setValue(0)
 
+	def set_locks(self, locks : dict) -> None:
+		"""grays out the rows something else decides, in their groups and in favorites"""
+		for panel in (self.favorites_panel, self.processor_panel, self.option_panel):
+			panel.set_locks(locks)
+
 	def rebuild(self) -> None:
 		schema = self.store.schema
 		self.rebuild_processors()
@@ -1087,6 +1093,7 @@ class StudioPage(SourceSelection, QWidget):
 		# right column: search, processors + options
 		self.settings_column = SettingsColumn(session, self.splitter, expansion_key = 'studio_groups_expanded', preset_key = 'studio_preset')
 		self.settings_column.setMinimumWidth(340)
+		self.refresh_selector_locks()
 		self.splitter.addWidget(self.settings_column)
 		self.splitter.setStretchFactor(0, 11)
 		self.splitter.setStretchFactor(1, 9)
@@ -1402,6 +1409,25 @@ class StudioPage(SourceSelection, QWidget):
 			self.target_card.refresh_markers()
 		if dest == 'reference_frame_index' or self.session.schema and self.session.schema.options.get(dest, {}).get('group') in FACE_GROUPS + MASK_GROUPS:
 			self.schedule_face_scan()
+		if dest in [ 'face_selector_mode', 'processors' ]:
+			self.refresh_selector_locks()
+
+	def refresh_selector_locks(self) -> None:
+		"""grays out the face selector rows a run will not read: the ones Face Mapping decides while it maps someone,
+		otherwise the ones the chosen mode leaves unused. the mode buttons show the mode Face Mapping runs in"""
+		if not hasattr(self, 'settings_column'):
+			return
+		passes = self.mapping_passes()
+		if not passes:
+			self.settings_column.set_locks(unused_locks(self.session.values.get('face_selector_mode') or 'reference'))
+			return
+		# everyone with the same sources is one run in many mode, otherwise reference runs (see launch_step)
+		mode = 'many' if passes[0].get('many') else 'reference'
+		unused = [ 'face_selector_order' ] + FILTER_OPTIONS + ([ 'reference_face_distance' ] if mode == 'many' else [])
+		locks = { dest: (KEEP_VALUE, 'Not used by Face Mapping') for dest in unused }
+		locks.update({ dest: (KEEP_VALUE, 'Face Mapping picks each face') for dest in [ 'reference_face_position', 'reference_frame_index' ] })
+		locks['face_selector_mode'] = (mode, 'Set by Face Mapping')
+		self.settings_column.set_locks(locks)
 
 	# running
 
@@ -2264,7 +2290,7 @@ class StudioPage(SourceSelection, QWidget):
 			return
 		position = candidates[0].get('position', -1)
 		if position < 0:
-			self.fail_chain('The face selector Gender, Race or Age filter skips %s. Change the filter, or pick another source.' % item.get('label'))
+			self.fail_chain("Could not find %s's face among the faces of frame #%d. Look for people again with the refresh button." % (item.get('label'), item.get('frame')))
 			return
 		chain['located'].append(dict(item, position = position))
 		self.locate_next()
@@ -2405,7 +2431,8 @@ class StudioPage(SourceSelection, QWidget):
 				sources = list(dict.fromkeys(path for other in step.get('items') for path in other.get('sources')))
 				values.update({ 'face_selector_mode': 'reference', 'face_selector_maps': [ face_map(other, sources, chain.get('video')) for other in step.get('items') ] })
 			elif item.get('many'):
-				values['face_selector_mode'] = 'many'
+				# everyone mapped, nobody filtered out, like the reference runs that never filter
+				values.update({ 'face_selector_mode': 'many', 'face_selector_gender': None, 'face_selector_race': None, 'face_selector_age_start': None, 'face_selector_age_end': None })
 			else:
 				values.update({ 'face_selector_mode': 'reference', 'reference_frame_index': item.get('frame') if chain.get('video') else 0, 'reference_face_position': item.get('position'), 'reference_face_distance': item.get('distance') })
 			if kind == 'base':

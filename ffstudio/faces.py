@@ -219,7 +219,9 @@ def describe_faces(result : Dict[str, Any], reference_index : Optional[int] = No
 	if mode == 'reference':
 		frame = ' #%d' % reference_index if reference_index is not None else ''
 		if not result.get('reference_found') and result.get('reference_faces'):
-			return found + ', but none will be processed: the face selector Gender, Race or Age filter also skips the face in the reference frame%s.' % frame
+			# reference mode never filters, the position asks for a face the reference frame does not have
+			count = result.get('reference_faces')
+			return found + ', but none will be processed: the Reference face Position (%d) is past the (%d) %s in the reference frame%s. Positions count from 0, largest face first.' % (result.get('reference_position') or 0, count, 'face' if count == 1 else 'faces', frame)
 		if not result.get('reference_found'):
 			return found + ', but none will be processed: no face was found in the reference frame%s. Pick a frame with a clear face and click Use as reference frame.' % frame
 		distances = [ face.get('distance') for face in faces if face.get('distance') is not None ]

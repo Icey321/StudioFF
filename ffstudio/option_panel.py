@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from PySide6.QtWidgets import QVBoxLayout, QWidget
 from qfluentwidgets import CaptionLabel, FluentIcon
@@ -53,6 +53,8 @@ class OptionPanel(QWidget):
 		self.group_rows : Dict[str, List[OptionRow]] = {}
 		self.filter_text = ''
 		self.saved_expansion : Dict[str, bool] = {}
+		# rows grayed out because something else decides them, dest -> (value shown or KEEP_VALUE, reason)
+		self.locks : Dict[str, Tuple[Any, str]] = {}
 		self.layout_ = QVBoxLayout(self)
 		self.layout_.setContentsMargins(0, 0, 0, 0)
 		self.layout_.setSpacing(10)
@@ -120,6 +122,13 @@ class OptionPanel(QWidget):
 		favorites = self.session.favorites()
 		for row in set(self.rows.values()):
 			row.set_favorite(any(dest in favorites for dest in row.dests()))
+		# every rebuild ends here, the new rows get the locks of the old ones
+		self.set_locks(self.locks)
+
+	def set_locks(self, locks : Dict[str, Tuple[Any, str]]) -> None:
+		self.locks = dict(locks)
+		for row in set(self.rows.values()):
+			row.set_lock(self.locks.get(row.dest))
 
 	def set_groups(self, groups : List[str]) -> None:
 		if groups != self.groups:

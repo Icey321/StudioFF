@@ -15,6 +15,7 @@ from ffstudio.config import APP_DIR, PREVIEW_DIR
 from ffstudio.faces import FACE_CHECK_SAMPLES, FACE_GROUPS, MASK_GROUPS, FaceProbe, describe_faces, describe_landmarks, describe_mask, face_landmarks, face_tag, faces_text_color, no_face, read_mask
 from ffstudio.media import VideoReader, animation_extension, browse_dir, extension, is_animation, format_length, format_seconds, format_timecode, media_kind, needs_conversion, read_frame, thumbnail, to_pixmap, usable_path, video_length, write_image
 from ffstudio.nsfw import BLOCKED_TITLE, NsfwDialog, show_blocked_bar
+from ffstudio.option_widgets import unused_locks
 from ffstudio.output_name import AUTOMATIC_TEMPLATE, build_output, unknown_tags
 from ffstudio.pages.models import format_size
 from ffstudio.pages.setup import SYSTEM_GROUPS, form_row, section_card
@@ -75,6 +76,8 @@ PREVIEW_MIN_WIDTH = 280
 # at most this many removed runs and picked video frames are kept across restarts
 REMOVED_LIMIT = 2000
 FRAMES_LIMIT = 2000
+# every face of each target, a batch has no reference frame to pick one person by
+BATCH_SELECTOR_MODE = 'many'
 
 
 def upgrade_template(template : str) -> str:
@@ -949,6 +952,10 @@ class BatchPage(SourceSelection, QWidget):
 		copy_button.installEventFilter(ToolTipFilter(copy_button))
 		copy_button.clicked.connect(self.copy_studio_settings)
 		self.settings_column = SettingsColumn(self.store, self.splitter, (copy_button,), expansion_key = 'batch_groups_expanded', preset_key = 'batch_preset')
+		# run_values always runs in many mode, the mode buttons show it and the rows it does not read are grayed out
+		locks = unused_locks(BATCH_SELECTOR_MODE)
+		locks['face_selector_mode'] = (BATCH_SELECTOR_MODE, 'Batch always uses Many')
+		self.settings_column.set_locks(locks)
 		return self.settings_column
 
 	def show_settings(self, shown : bool) -> None:
@@ -1091,6 +1098,8 @@ class BatchPage(SourceSelection, QWidget):
 		schema = self.session.schema
 		values = dict(self.session.values)
 		values.update({ dest: value for dest, value in self.store.values.items() if not schema or schema.options.get(dest, {}).get('group') not in SYSTEM_GROUPS })
+		# every face of each target: reference mode would only take the largest face of its first frame and its look-alikes
+		values['face_selector_mode'] = BATCH_SELECTOR_MODE
 		return values
 
 	def on_sources_changed(self, change : str) -> None:
