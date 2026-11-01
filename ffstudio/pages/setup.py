@@ -463,7 +463,7 @@ class SetupPage(QWidget):
 	# installation
 
 	def create_install_card(self, parent : QWidget) -> QWidget:
-		card, layout = section_card('Install FaceFusion', 'Clones the v4 branch, creates a Python 3.13 environment and installs the requirements with the onnxruntime build you pick. Anything missing that it needs (Git, uv, FFmpeg, curl) is listed first and only installed if you agree. It downloads a few GB and the progress shows in Console.', parent)
+		card, layout = section_card('Install FaceFusion', 'Clones the v4 branch at the commit StudioFF was tested with, creates a Python 3.13 environment and installs the requirements with the onnxruntime build you pick. Anything missing that it needs (Git, uv, FFmpeg, curl) is listed first and only installed if you agree. It downloads a few GB and the progress shows in Console.', parent)
 		self.conda_path = find_conda()
 		self.uv_path = shutil.which('uv')
 		default_folder = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))), 'facefusion-v4')
@@ -574,6 +574,9 @@ class SetupPage(QWidget):
 
 		if not is_facefusion_root(folder):
 			steps.append(('Cloning FaceFusion v4', lambda: self.session.run_program('Cloning FaceFusion v4', shutil.which('git') or 'git', [ 'clone', '--branch', FACEFUSION_BRANCH, '--depth', '1', REPOSITORY_URL, folder ], os.path.dirname(folder) or '.')))
+			# only a new clone moves to the tested commit, a reinstall keeps a newer one picked with Update to Latest
+			steps.append(('Getting the tested commit', lambda: self.session.run_program('Getting the tested commit %s' % TESTED_FACEFUSION_COMMIT[:7], shutil.which('git') or 'git', [ '-C', folder, 'fetch', '--depth', '1', 'origin', TESTED_FACEFUSION_COMMIT ], folder)))
+			steps.append(('Switching to the tested commit', lambda: self.session.run_program('Switching to the tested commit %s' % TESTED_FACEFUSION_COMMIT[:7], shutil.which('git') or 'git', [ '-C', folder, 'checkout', '-B', FACEFUSION_BRANCH, TESTED_FACEFUSION_COMMIT ], folder)))
 		if not os.path.isfile(python_path):
 			if env_kind == 'conda':
 				steps.append(('Creating conda environment', lambda: self.session.run_program('Creating conda environment', *script_command(self.conda_path, [ 'create', '-y', '-n', CONDA_ENV_NAME, 'python=3.13', 'pip' ]), folder)))

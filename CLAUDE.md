@@ -8,8 +8,12 @@
 - StudioFF supports only FaceFusion's v4 branch from commit e7a2848 (2026-10-30, `--face-selector-map`)
   on. Do not add or keep fallbacks for older FaceFusion commits (Nik, 2026-10-30).
 
-- Every GitHub release's notes start with the FaceFusion it needs, in bold:
-  "**Needs FaceFusion v4 from commit <7-char> (<date>) or newer.**" (Nik, 2026-11-01).
+- Every GitHub release's notes start with the FaceFusion it was tested with, never "or newer"
+  (newer FaceFusion commits can break StudioFF) (Nik, 2026-11-01):
+  "**Tested with FaceFusion v4 commit <7-char> (<date>).** Newer FaceFusion commits may break
+  this version of StudioFF. To switch to the tested commit, go to StudioFF's **FaceFusion** page
+  and press **Use Tested Version**. This works when FaceFusion was installed with git or with
+  StudioFF's Install FaceFusion."
   FaceFusion v4 reports no version number, so the commit is the version.
 
 - Nik works on this project only on his home PC, so the to-do list stays in Claude's
