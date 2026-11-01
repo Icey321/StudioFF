@@ -44,9 +44,9 @@ FaceFusion itself is not included: install FaceFusion v4 separately, then point 
 
 Pick the section for your system. Every way needs an internet connection and a few GB of free space for FaceFusion and its models.
 
-> **Only Windows 11 is tested.** Pinokio, Linux and macOS are **experimental and untested**: the scripts are written, but
-> StudioFF has not been run that way yet. Please report what happens in an
-> [issue](https://github.com/Icey321/StudioFF/issues).
+> **Tested on Windows 11**, both the Windows install and Pinokio (with an NVIDIA card). Linux and macOS, with or without
+> Pinokio, are **experimental and untested**: the scripts are written, but StudioFF has not been run there yet. Please
+> report what happens in an [issue](https://github.com/Icey321/StudioFF/issues).
 
 ### Windows 11
 
@@ -71,7 +71,7 @@ Pick the section for your system. Every way needs an internet connection and a f
 
 StudioFF updates itself from **Settings** when a new release is out.
 
-### Pinokio (Windows, Linux and macOS) - experimental, untested
+### Pinokio (Windows tested; Linux and macOS experimental, untested)
 
 [Pinokio](https://pinokio.computer) installs everything for you, FaceFusion v4 included.
 
