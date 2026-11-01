@@ -10,10 +10,8 @@
 
 - Every GitHub release's notes start with the FaceFusion it was tested with, never "or newer"
   (newer FaceFusion commits can break StudioFF) (Nik, 2026-11-01):
-  "**Tested with FaceFusion v4 commit <7-char> (<date>).** Newer FaceFusion commits may break
-  this version of StudioFF. To switch to the tested commit, go to StudioFF's **FaceFusion** page
-  and press **Use Tested Version**. This works when FaceFusion was installed with git or with
-  StudioFF's Install FaceFusion."
+  "**Tested with FaceFusion v4 commit <7-char> (<date>).** Go to StudioFF's **FaceFusion** page
+  and press **Use Tested Version** for best compatibility."
   FaceFusion v4 reports no version number, so the commit is the version.
 
 - Nik works on this project only on his home PC, so the to-do list stays in Claude's
