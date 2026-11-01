@@ -1,14 +1,17 @@
 import re
-from typing import Optional
+from typing import List, Optional, Tuple
 
 from PySide6.QtGui import QColor, QFont, QGuiApplication, QSyntaxHighlighter, QTextCharFormat, QTextCursor, QTextDocument
 from PySide6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
 from qfluentwidgets import CaptionLabel, FluentIcon, PlainTextEdit, PushButton, SubtitleLabel, isDarkTheme, qconfig
 
 from ffstudio.media import format_seconds
-from ffstudio.session import Session, is_error_line
+from ffstudio.session import EXCEPTION_PATTERN, Session, describe_error, is_error_line
 
 MAX_BLOCKS = 20000
+# the plain explanation under a failed command's last line
+WHY_PREFIX = '  Why: '
+FIX_PREFIX = '  Fix: '
 # VS Code's Light+ and Dark+ colours, (light, dark)
 COLORS ={
 	'keyword': ('#0000ff', '#569cd6'),
@@ -76,6 +79,9 @@ class ConsoleHighlighter(QSyntaxHighlighter):
 			key = 'success' if ' finished ' in text else 'warning' if ' stopped ' in text else 'error'
 			self.setFormat(0, len(text), self.formats.get(key))
 			return
+		if text.startswith(WHY_PREFIX) or text.startswith(FIX_PREFIX):
+			self.setFormat(0, len(text), self.formats.get('error' if text.startswith(WHY_PREFIX) else 'keyword'))
+			return
 		if is_error_line(text) or TOOL_ERROR_PATTERN.match(text):
 			self.setFormat(0, len(text), self.formats.get('error'))
 			return
@@ -130,9 +136,11 @@ class ConsolePage(QWidget):
 		self.highlighter = ConsoleHighlighter(self.output.document())
 		layout.addWidget(self.output, 1)
 
+		# per runner, the schema can be read while facefusion runs: the task name and the error lines of its current command
+		self.runs = { session.runner: { 'task': '', 'errors': [] }, session.schema_runner: { 'task': "Reading FaceFusion's options", 'errors': [] } }
 		for runner in [ session.runner, session.schema_runner ]:
 			runner.started.connect(self.on_started)
-			runner.log.connect(self.append)
+			runner.log.connect(self.on_log)
 			runner.finished.connect(self.on_finished)
 		session.busy_changed.connect(lambda busy, task: self.task_label.setText(task if busy else 'Idle'))
 
@@ -144,9 +152,41 @@ class ConsolePage(QWidget):
 
 	def on_started(self, command : str) -> None:
 		self.last_command = command
+		run = self.runs.get(self.sender())
+		if run is not None:
+			run['errors'] = []
+			# set_task comes before the runner starts
+			if self.sender() is self.session.runner:
+				run['task'] = self.session.task
 		self.append('')
 		self.append('> ' + command)
 
+	def on_log(self, line : str) -> None:
+		run = self.runs.get(self.sender())
+		if run is not None and (is_error_line(line) or TOOL_ERROR_PATTERN.match(line)):
+			run['errors'].append(line)
+		self.append(line)
+
 	def on_finished(self, exit_code : int, elapsed : float) -> None:
-		label = { 0: 'finished', -1: 'stopped' }.get(exit_code, 'failed with exit code %d' % exit_code)
-		self.append('— %s after %s' % (label, format_seconds(elapsed)))
+		if exit_code in [ 0, -1 ]:
+			self.append('— %s after %s' % ('finished' if exit_code == 0 else 'stopped', format_seconds(elapsed)))
+			return
+		run = self.runs.get(self.sender()) or { 'task': '', 'errors': [] }
+		self.append('— %s failed after %s (exit code %d)' % (run['task'] or 'The command', format_seconds(elapsed), exit_code))
+		why, fix = self.explain_failure(run['errors'], self.sender() is self.session.runner)
+		self.append(WHY_PREFIX + why)
+		if fix:
+			self.append(FIX_PREFIX + fix)
+
+	def explain_failure(self, error_lines : List[str], facefusion_run : bool) -> Tuple[str, str]:
+		# a python exception says the most, then facefusion's own error lines, then a tool's
+		exceptions = [ line for line in error_lines if EXCEPTION_PATTERN.match(line) ]
+		line = (exceptions or error_lines or [ '' ])[-1]
+		described = describe_error(line) if line else None
+		if described:
+			return described
+		if facefusion_run and self.session.nsfw_block_is_certain():
+			return self.session.nsfw_block_message(False), 'Pick another target. Pre-Check tells you before a run.'
+		if line:
+			return line, ''
+		return 'It stopped without giving a reason.', 'The lines above are the whole log. If the target is an image, the NSFW filter may have refused it: try Pre-Check.'

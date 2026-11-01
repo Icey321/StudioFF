@@ -40,15 +40,34 @@ def is_error_line(line : str) -> bool:
 	return bool(EXCEPTION_PATTERN.match(line) or FACEFUSION_ERROR_PATTERN.match(line) or USAGE_ERROR_PATTERN.match(line))
 
 
-def explain_error(line : str) -> Optional[str]:
-	"""a plain hint for the errors people can fix themselves"""
+MISSING_MODULE_PATTERN = re.compile(r"No module named '([\w.]+)'")
+MISSING_FILE_PATTERN = re.compile(r"No such file or directory: '([^']+)'")
+# the names people know the python packages by
+PACKAGE_NAMES = { 'cv2': 'OpenCV', 'onnxruntime': 'ONNX Runtime', 'numpy': 'NumPy', 'PySide6': 'PySide6', 'PIL': 'Pillow' }
+
+
+def describe_error(line : str) -> Optional[Tuple[str, str]]:
+	"""why an error line happened and what fixes it, in plain words, for the errors people can fix themselves"""
 	lowered = line.lower()
+	missing_module = MISSING_MODULE_PATTERN.search(line)
+	if missing_module:
+		module = missing_module.group(1).split('.')[0]
+		name = PACKAGE_NAMES.get(module)
+		return 'The Python environment is missing the "%s" package%s, so the FaceFusion install did not finish.' % (module, ' (%s)' % name if name and name != module else ''), \
+			'Install FaceFusion again: Install FaceFusion v4 on the FaceFusion page, or the Install button in Pinokio.'
 	if line.startswith('PermissionError') or '[errno 13]' in lowered:
-		return 'Saving there was not allowed. Choose another output folder, such as Videos or Documents, or close the file if it is open in another app.'
+		return 'Saving there was not allowed.', 'Choose another output folder, such as Videos or Documents, or close the file if it is open in another app.'
 	if '[errno 28]' in lowered or 'no space left' in lowered:
-		return 'The drive is full. Free some space or choose an output folder on another drive.'
+		return 'The drive is full.', 'Free some space or choose an output folder on another drive.'
 	if 'out of memory' in lowered or 'failed to allocate' in lowered or 'bad allocation' in lowered or line.startswith('MemoryError'):
-		return 'Ran out of memory. Try fewer execution threads, a smaller video or closing other apps.'
+		return 'Ran out of memory.', 'Try fewer execution threads, a smaller video or closing other apps.'
+	missing_file = MISSING_FILE_PATTERN.search(line)
+	if line.startswith('FileNotFoundError') or missing_file:
+		return 'A file it needs is missing%s.' % (': ' + missing_file.group(1) if missing_file else ''), 'Check that the file was not moved, renamed or deleted, then choose it again.'
+	if 'error 126' in lowered or ('cudaexecutionprovider' in lowered and ('not available' in lowered or 'failed' in lowered)):
+		return 'The graphics card could not be used through CUDA.', 'Update the NVIDIA driver, or pick another execution provider in the options.'
+	if USAGE_ERROR_PATTERN.match(line):
+		return 'FaceFusion did not accept one of the options.', 'Change or reset the option the line above names.'
 	return None
 
 
@@ -384,9 +403,9 @@ class Session(QObject):
 		line = self.run_error()
 		if not line:
 			return 'Failed', 'See Console for the full log.'
-		hint = explain_error(line)
+		described = describe_error(line)
 		short = line if len(line) <= 160 else line[:157] + '…'
-		return 'Failed: ' + (hint.split('.')[0] if hint else short), (hint + '\n' if hint else '') + short + '\nSee Console for the full log.'
+		return 'Failed: ' + (described[0].rstrip('.') if described else short), (' '.join(described) + '\n' if described else '') + short + '\nSee Console for the full log.'
 
 	def nsfw_block_message(self, image_target : bool) -> Optional[str]:
 		"""explains a failed run that was stopped by facefusion's nsfw content check

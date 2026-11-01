@@ -20,7 +20,7 @@ from ffstudio.pages.models import format_size
 from ffstudio.pages.setup import SYSTEM_GROUPS, form_row, section_card
 from ffstudio.platforms import show_in_folder
 from ffstudio.pages.studio import LIVE_IGNORED_GROUPS, PREVIEW_MAX_SIDE, NameTagsView, SettingsColumn, SourceCard, SourceSelection, StudioPage, elastic, estimated_progress, preview_step_floor, run_tag_values, tool_button
-from ffstudio.session import OptionStore, Session, explain_error, folder_is_writable
+from ffstudio.session import OptionStore, Session, describe_error, folder_is_writable
 from ffstudio.widgets import DriveLabel, IconCountButton, PreviewView, Splitter, add_edit_button, attach_landmarks_cycle, collect_drop_paths, guard_wheel, landmarks_mode, with_drive_bar
 
 TARGET_FILTERS = [ ('*.*', 'All files'), ('*.mp4', 'MP4 videos'), ('*.jpg', 'JPG images'), ('*.png', 'PNG images'), ('*.mov', 'MOV videos'), ('*.webm', 'WebM videos'), ('*.gif', 'GIF animations') ]
@@ -2573,7 +2573,7 @@ class BatchPage(SourceSelection, QWidget):
 		else:
 			item['status'] = 'failed'
 			error = self.session.run_error() or ''
-			item['reason'] = (explain_error(error) or error).split('. ')[0][:120]
+			item['reason'] = ((describe_error(error) or [ error ])[0]).rstrip('.')[:120]
 			# an image gives no reason when it is refused, the nsfw check confirms it once the batch is done
 			item['confirm'] = bool(self.session.nsfw_block_message(media_kind(item.get('target')) == 'image'))
 		self.refresh_item(index)
