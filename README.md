@@ -42,27 +42,61 @@ FaceFusion itself is not included: install FaceFusion v4 separately, then point 
 
 ## Install
 
-```powershell
-powershell -ExecutionPolicy Bypass -File install.ps1
-```
+Pick the section for your system. Every way needs an internet connection and a few GB of free space for FaceFusion and its models.
 
-This creates `.venv` for the UI (PySide6 + PySide6-Fluent-Widgets + OpenCV) and adds desktop and Start menu
-shortcuts. Then start **StudioFF** and open the **FaceFusion** page:
+### Windows 11
 
-- **Already have FaceFusion v4?** Pick its folder and the `python.exe` of its environment, or press **Detect**, then press **Save and load options**.
-- **No FaceFusion v4 yet?** Use the **Install FaceFusion v4** button on the app's **FaceFusion** page. Note that FaceFusion v4 requires **Python 3.13+**, so a
-  FaceFusion 3.x environment (Python 3.12) can't run it. The installer lists any missing program it needs (Git, uv, FFmpeg, curl) and installs them
-  through winget only after you agree. uv downloads Python 3.13 itself, so you don't have to install Python.
+1. Download the latest release from the [Releases page](https://github.com/Icey321/StudioFF/releases) and unzip it to a folder
+   of your choice, for example `C:\Programs\StudioFF`.
+2. In that folder, right-click an empty spot, choose **Open in Terminal** and run:
 
-FaceFusion also needs `ffmpeg`, `ffprobe` and `curl` on `PATH`. The FaceFusion page checks for them.
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File install.ps1
+   ```
 
-### With Pinokio
+   This creates `.venv` for the app (PySide6, PySide6-Fluent-Widgets, OpenCV) and adds **StudioFF** shortcuts to the desktop
+   and the Start menu.
+3. Start **StudioFF** and open the **FaceFusion** page:
+   - **Already have FaceFusion v4?** Pick its folder and the `python.exe` of its environment, or press **Detect**, then press
+     **Save and load options**.
+   - **No FaceFusion v4 yet?** Press **Install FaceFusion v4** on the same page. It lists any missing program it needs (Git, uv,
+     FFmpeg, curl) and installs them through winget only after you agree. uv downloads Python 3.13 itself, so you don't have
+     to install Python. FaceFusion v4 needs **Python 3.13 or newer**, so a FaceFusion 3.x environment (Python 3.12) can't run it.
 
-In [Pinokio](https://pinokio.computer), choose **Download from URL**, paste `https://github.com/Icey321/StudioFF` and press
-**Install**. That installs StudioFF together with its own FaceFusion v4 (CUDA on an NVIDIA card, DirectML on other Windows
-graphics cards, otherwise CPU) inside the Pinokio app folder, with its settings kept apart from any other StudioFF on the PC.
-**Start** opens the StudioFF window. Update StudioFF with Pinokio's **Update**; FaceFusion is updated from StudioFF's
-**FaceFusion** page as usual.
+StudioFF updates itself from **Settings** when a new release is out.
+
+### Pinokio (Windows, Linux and macOS)
+
+[Pinokio](https://pinokio.computer) installs everything for you, FaceFusion v4 included.
+
+1. Install Pinokio and open it.
+2. Choose **Download from URL**, paste `https://github.com/Icey321/StudioFF` and press **Install**. It installs StudioFF
+   with its own FaceFusion v4 (CUDA on an NVIDIA card, DirectML on other Windows graphics cards, otherwise CPU) inside the
+   Pinokio app folder. Its settings stay apart from any other StudioFF on the same computer.
+3. Press **Start** to open the StudioFF window.
+
+Update StudioFF with Pinokio's **Update** button. FaceFusion is updated from StudioFF's **FaceFusion** page as usual.
+
+### Linux and macOS (without Pinokio)
+
+StudioFF is made and tested on Windows. The Linux and macOS code is in place but has not been tried on a real computer yet,
+so Pinokio is the easier way for now.
+
+1. Install Python 3.12 or newer, Git, FFmpeg and curl with your package manager (`apt`, `dnf` or `brew`).
+2. Get the code and set up the app's environment:
+
+   ```bash
+   git clone https://github.com/Icey321/StudioFF.git
+   cd StudioFF
+   python3 -m venv .venv
+   .venv/bin/pip install -r requirements.txt
+   ```
+
+3. Start it with `.venv/bin/python -m ffstudio`.
+4. Point the **FaceFusion** page at a FaceFusion v4 you installed yourself (its folder and its Python 3.13 environment). The
+   page's **Install FaceFusion v4** button uses winget, which is Windows only.
+
+Update with `git pull` in the StudioFF folder.
 
 ## Layout
 
