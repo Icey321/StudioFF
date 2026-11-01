@@ -55,7 +55,10 @@ def install(onnxruntime : str) -> None:
 	if onnxruntime.startswith('cuda'):
 		run('Installing CUDA runtime and cuDNN', *script_command(conda, [ 'install' ] + conda_channel + [ 'cuda-runtime=' + onnxruntime.split('@')[1], 'cudnn=9' ]), FACEFUSION_DIR)
 	environment = environment_to_dict(create_process_environment(FACEFUSION_PYTHON))
+	# pinokio's shell sets this to true, but facefusion's packages go into its conda environment, not a virtualenv
+	environment['PIP_REQUIRE_VIRTUALENV'] = 'false'
 	run('Installing FaceFusion requirements (%s)' % onnxruntime, FACEFUSION_PYTHON, [ 'install.py', onnxruntime, '--skip-conda' ], FACEFUSION_DIR, environment)
+	run('Checking the FaceFusion packages', FACEFUSION_PYTHON, [ '-c', 'import cv2, numpy, onnxruntime' ], FACEFUSION_DIR, environment)
 	print('\nFaceFusion is installed. Press Start in Pinokio.', flush = True)
 
 
