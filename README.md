@@ -76,11 +76,16 @@ StudioFF updates itself from **Settings** when a new release is out.
 [Pinokio](https://pinokio.computer) installs everything for you, FaceFusion v4 included.
 
 1. Install Pinokio and open it.
-2. Click **Create**, open the **Download** tab, paste `https://github.com/Icey321/StudioFF` into **Git URL** and press
-   **Import**, then press **Install** in StudioFF's menu. It installs StudioFF
-   with its own FaceFusion v4 (CUDA on an NVIDIA card, DirectML on other Windows graphics cards, otherwise CPU) inside the
-   Pinokio app folder. Its settings stay apart from any other StudioFF on the same computer.
-3. Press **Start** to open the StudioFF window.
+2. Click **Create** (or **Create App**), open the **Download** tab, paste `https://github.com/Icey321/StudioFF` into
+   **Git URL** and press **Import**.
+3. Press **Install** in StudioFF's menu, then **Install** again on the next page.
+   - Windows may ask whether Python, Git for Windows and uv may access the internet. Allow each one.
+   - If Pinokio lists programs it needs to install or update first (such as CUDA and Python), press **Install** there too.
+
+   It installs StudioFF with its own FaceFusion v4 (CUDA on an NVIDIA card, DirectML on other Windows graphics cards,
+   otherwise CPU) inside the Pinokio app folder. This downloads several GB and takes a while. Its settings stay apart from
+   any other StudioFF on the same computer.
+4. When Pinokio says StudioFF is installed, press **Start** to open the StudioFF window.
 
 Update StudioFF with Pinokio's **Update** button. FaceFusion is updated from StudioFF's **FaceFusion** page as usual.
 
