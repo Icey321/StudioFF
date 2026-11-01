@@ -780,7 +780,7 @@ class BatchPage(SourceSelection, QWidget):
 		matches_layout = QVBoxLayout(matches_card)
 		matches_layout.setContentsMargins(20, 14, 20, 16)
 		self.header_row = header = QHBoxLayout()
-		self.list_title = StrongBodyLabel('Planned outputs', matches_card)
+		self.list_title = StrongBodyLabel('Planned Outputs', matches_card)
 		# the buttons give up their text before the title is cut
 		self.list_title.setMinimumWidth(self.list_title.sizeHint().width())
 		header.addWidget(self.list_title)
