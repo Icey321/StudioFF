@@ -20,6 +20,10 @@
 - Nothing is installed on the user's PC without first saying what it is, how it is installed,
   roughly how big it is, and asking (install.ps1 asks Y/N; the app shows a MessageBox) (Nik, 2026-11-01).
 
+- Fewer options to think about: when one option (or Face Mapping, or a page like Batch) makes other
+  options irrelevant, gray those out with a short reason under the label, using `OptionRow.set_lock`
+  / `SettingsColumn.set_locks` (or `REQUIRED_CHOICES` for "only used while X is checked") (Nik, 2026-11-01).
+
 - Times shown to the user (how long a run or preview took) read as seconds under a minute
   ("42.3 s") and as minutes:seconds from 60 s on ("1:24"). Use `format_seconds` from
   `ffstudio/media.py`; a running clock uses `format_length`.

@@ -1,7 +1,8 @@
 from typing import Any, Dict, List, Optional, Tuple
 
-from PySide6.QtWidgets import QVBoxLayout, QWidget
-from qfluentwidgets import CaptionLabel, FluentIcon
+from PySide6.QtCore import QEvent, QObject, QPoint, Qt
+from PySide6.QtWidgets import QAbstractScrollArea, QApplication, QVBoxLayout, QWidget
+from qfluentwidgets import CaptionLabel, FluentIcon, ToolTipFilter
 
 from ffstudio import splash
 from ffstudio.option_widgets import PAIRED_PARTNERS, REQUIRED_CHOICES, OptionRow
@@ -30,13 +31,27 @@ GROUP_ICONS =\
 PROCESSOR_ICON = FluentIcon.ROBOT
 
 
+def merge_order(groups : List[str], saved : List[str]) -> List[str]:
+	"""the groups in the saved order, a group missing from it goes right after the group in front of it in groups"""
+	order = [ group for group in saved if group in groups ]
+	for index, group in enumerate(groups):
+		if group not in order:
+			before = next((other for other in reversed(groups[:index]) if other in order), None)
+			order.insert(order.index(before) + 1 if before else 0, group)
+	return order
+
+
 class OptionPanel(QWidget):
 	"""a column of collapsible option groups generated from the facefusion schema"""
 
-	def __init__(self, session : Session, groups : List[str], expanded : Optional[List[str]] = None, parent : Optional[QWidget] = None, favorites : bool = False, info_icons : bool = False, short_labels : bool = False, group_captions : bool = False, expansion_key : str = '') -> None:
+	def __init__(self, session : Session, groups : List[str], expanded : Optional[List[str]] = None, parent : Optional[QWidget] = None, favorites : bool = False, info_icons : bool = False, short_labels : bool = False, group_captions : bool = False, expansion_key : str = '', order_key : str = '') -> None:
 		super().__init__(parent)
 		self.session = session
 		self.groups = groups
+		# config key of the order the groups were dragged into, with one the groups can be dragged by their title
+		self.order_key = order_key
+		self.header_cards : Dict[QWidget, CollapsibleCard] = {}
+		self.drag : Optional[Dict[str, Any]] = None
 		# rows get a star that adds them to the favorites box
 		self.favorites = favorites
 		# rows keep their description behind an (i) instead of under the label
@@ -69,10 +84,12 @@ class OptionPanel(QWidget):
 		self.cards.clear()
 		self.rows.clear()
 		self.group_rows.clear()
+		self.header_cards.clear()
+		self.drag = None
 		schema = self.session.schema
 		if not schema:
 			return
-		for group in self.groups:
+		for group in self.ordered_groups():
 			options = schema.group_options(group)
 			if not options:
 				continue
@@ -90,9 +107,85 @@ class OptionPanel(QWidget):
 				self.group_rows[group].append(row)
 			self.cards[group] = card
 			self.layout_.addWidget(card)
+			if self.order_key:
+				card.header.setToolTip('Click to open or close, drag to move this group')
+				card.header.installEventFilter(ToolTipFilter(card.header, 1000))
+				card.header.installEventFilter(self)
+				self.header_cards[card.header] = card
 		self.refresh_visibility()
 		self.refresh_subtitles()
 		self.refresh_favorites()
+
+	def ordered_groups(self) -> List[str]:
+		saved = (self.session.config.get(self.order_key) or []) if self.order_key else []
+		return merge_order(self.groups, saved)
+
+	def eventFilter(self, watched : QObject, event : QEvent) -> bool:
+		"""a group is dragged by its title, the others make room as it passes them. a click still opens or closes it"""
+		card = self.header_cards.get(watched)
+		if card is None or self.filter_text:
+			return super().eventFilter(watched, event)
+		kind = event.type()
+		if kind == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
+			self.drag = { 'card': card, 'start': event.globalPosition().toPoint(), 'moved': False }
+		elif kind == QEvent.Type.MouseMove and self.drag and self.drag.get('card') is card:
+			point = event.globalPosition().toPoint()
+			if not self.drag.get('moved'):
+				if (point - self.drag.get('start')).manhattanLength() < QApplication.startDragDistance():
+					return False
+				self.drag['moved'] = True
+				watched.setCursor(Qt.CursorShape.ClosedHandCursor)
+			self.drag_to(card, point)
+			return True
+		elif kind == QEvent.Type.MouseButtonRelease and self.drag and self.drag.get('card') is card:
+			moved = self.drag.get('moved')
+			self.drag = None
+			if moved:
+				watched.setCursor(Qt.CursorShape.PointingHandCursor)
+				self.save_order()
+				# the card would take the release as a click on its title and open or close
+				return True
+		return super().eventFilter(watched, event)
+
+	def drag_to(self, card : CollapsibleCard, point : QPoint) -> None:
+		y = self.mapFromGlobal(point).y()
+		others = [ other for other in self.layout_cards() if other is not card and other.isVisible() ]
+		# in front of the first group whose middle is below the pointer, else after the last one
+		target = next((other for other in others if y < other.geometry().center().y()), None)
+		current = self.layout_.indexOf(card)
+		index = self.layout_.indexOf(target) if target else self.layout_.indexOf(others[-1]) + 1 if others else current
+		if index > current:
+			index -= 1
+		if index != current:
+			self.layout_.removeWidget(card)
+			self.layout_.insertWidget(index, card)
+		self.scroll_near_edge(point)
+
+	def scroll_near_edge(self, point : QPoint) -> None:
+		"""dragged near the top or bottom of the scroll area, it scrolls to the groups out of sight"""
+		area = self.parentWidget()
+		while area and not isinstance(area, QAbstractScrollArea):
+			area = area.parentWidget()
+		if not area:
+			return
+		y = area.viewport().mapFromGlobal(point).y()
+		bar = area.verticalScrollBar()
+		if y < 40:
+			bar.setValue(bar.value() - 24)
+		elif y > area.viewport().height() - 40:
+			bar.setValue(bar.value() + 24)
+
+	def layout_cards(self) -> List[CollapsibleCard]:
+		cards = set(self.cards.values())
+		widgets = [ self.layout_.itemAt(index).widget() for index in range(self.layout_.count()) ]
+		return [ widget for widget in widgets if widget in cards ]
+
+	def save_order(self) -> None:
+		groups = { card: group for group, card in self.cards.items() }
+		shown = [ groups.get(card) for card in self.layout_cards() ]
+		# groups not shown now (a schema without them) keep their place in the saved order
+		saved = (self.session.config.get(self.order_key) or []) if self.order_key else []
+		self.session.config.set(self.order_key, shown + [ group for group in saved if group not in shown ])
 
 	def is_expanded(self, group : str) -> bool:
 		saved = self.session.config.get(self.expansion_key) or {} if self.expansion_key else {}

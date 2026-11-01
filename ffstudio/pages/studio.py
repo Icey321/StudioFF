@@ -808,7 +808,7 @@ class NameTagsView(FlyoutViewBase):
 class SettingsColumn(QWidget):
 	"""search, processors and option groups for one set of option values, the session's or a page's OptionStore"""
 
-	def __init__(self, store, parent : Optional[QWidget] = None, header_widgets : Tuple[QWidget, ...] = (), expansion_key : str = '', preset_key : str = '') -> None:
+	def __init__(self, store, parent : Optional[QWidget] = None, header_widgets : Tuple[QWidget, ...] = (), expansion_key : str = '', preset_key : str = '', order_key : str = '') -> None:
 		super().__init__(parent)
 		self.store = store
 		column = QVBoxLayout(self)
@@ -841,9 +841,8 @@ class SettingsColumn(QWidget):
 		layout.addWidget(self.processor_card)
 		self.favorites_panel = FavoritesPanel(store, content)
 		layout.addWidget(self.favorites_panel)
-		self.processor_panel = OptionPanel(store, [], expanded = [], parent = content, favorites = True, info_icons = True, short_labels = True, expansion_key = expansion_key)
-		layout.addWidget(self.processor_panel)
-		self.option_panel = OptionPanel(store, STUDIO_GROUPS, expanded = [ 'face_selector' ], parent = content, favorites = True, info_icons = True, short_labels = True, expansion_key = expansion_key)
+		# the processors' groups and the others in one list, dragged into any order by their titles
+		self.option_panel = OptionPanel(store, STUDIO_GROUPS, expanded = [ 'face_selector' ], parent = content, favorites = True, info_icons = True, short_labels = True, expansion_key = expansion_key, order_key = order_key)
 		layout.addWidget(self.option_panel)
 		self.no_match_label = CaptionLabel('No settings match your search. Options of processors that are switched off are hidden.', content)
 		self.no_match_label.setWordWrap(True)
@@ -878,26 +877,24 @@ class SettingsColumn(QWidget):
 		return card
 
 	def apply_filter(self, text : str) -> None:
-		self.processor_panel.set_filter(text)
 		self.option_panel.set_filter(text)
 		searching = bool(text.strip())
 		# while searching the matches show in their own groups, the copies in favorites would only repeat them
 		self.favorites_panel.setVisible(not searching)
 		self.processor_card.setVisible(not searching)
-		self.no_match_label.setVisible(searching and not self.processor_panel.has_visible_cards() and not self.option_panel.has_visible_cards())
+		self.no_match_label.setVisible(searching and not self.option_panel.has_visible_cards())
 		self.scroll.verticalScrollBar().setValue(0)
 
 	def set_locks(self, locks : dict) -> None:
 		"""grays out the rows something else decides, in their groups and in favorites"""
-		for panel in (self.favorites_panel, self.processor_panel, self.option_panel):
+		for panel in (self.favorites_panel, self.option_panel):
 			panel.set_locks(locks)
 
 	def rebuild(self) -> None:
-		schema = self.store.schema
 		self.rebuild_processors()
-		self.processor_panel.set_groups(list(schema.processors) if schema else [])
-		self.processor_panel.expanded = self.store.processors()
-		self.processor_panel.rebuild()
+		# without a dragged order the processors' groups lead, in the order of their buttons
+		self.option_panel.groups = self.processor_order() + STUDIO_GROUPS
+		self.option_panel.expanded = self.store.processors() + [ 'face_selector' ]
 		self.option_panel.rebuild()
 		self.favorites_panel.rebuild()
 
@@ -1091,7 +1088,7 @@ class StudioPage(SourceSelection, QWidget):
 		self.mapping_card.installEventFilter(self)
 
 		# right column: search, processors + options
-		self.settings_column = SettingsColumn(session, self.splitter, expansion_key = 'studio_groups_expanded', preset_key = 'studio_preset')
+		self.settings_column = SettingsColumn(session, self.splitter, expansion_key = 'studio_groups_expanded', preset_key = 'studio_preset', order_key = 'studio_group_order')
 		self.settings_column.setMinimumWidth(340)
 		self.refresh_selector_locks()
 		self.splitter.addWidget(self.settings_column)

@@ -951,7 +951,7 @@ class BatchPage(SourceSelection, QWidget):
 		copy_button.setToolTip('Make the processors and options here the same as on the Studio page. Later changes on either page stay on that page.')
 		copy_button.installEventFilter(ToolTipFilter(copy_button))
 		copy_button.clicked.connect(self.copy_studio_settings)
-		self.settings_column = SettingsColumn(self.store, self.splitter, (copy_button,), expansion_key = 'batch_groups_expanded', preset_key = 'batch_preset')
+		self.settings_column = SettingsColumn(self.store, self.splitter, (copy_button,), expansion_key = 'batch_groups_expanded', preset_key = 'batch_preset', order_key = 'batch_group_order')
 		# run_values always runs in many mode, the mode buttons show it and the rows it does not read are grayed out
 		locks = unused_locks(BATCH_SELECTOR_MODE)
 		locks['face_selector_mode'] = (BATCH_SELECTOR_MODE, 'Batch always uses Many')
