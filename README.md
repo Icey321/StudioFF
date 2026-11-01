@@ -44,6 +44,10 @@ FaceFusion itself is not included: install FaceFusion v4 separately, then point 
 
 Pick the section for your system. Every way needs an internet connection and a few GB of free space for FaceFusion and its models.
 
+> **Only Windows 11 is tested.** Pinokio, Linux and macOS are **experimental and untested**: the scripts are written, but
+> StudioFF has not been run that way yet. Please report what happens in an
+> [issue](https://github.com/Icey321/StudioFF/issues).
+
 ### Windows 11
 
 1. Download the latest release from the [Releases page](https://github.com/Icey321/StudioFF/releases) and unzip it to a folder
@@ -67,23 +71,24 @@ Pick the section for your system. Every way needs an internet connection and a f
 
 StudioFF updates itself from **Settings** when a new release is out.
 
-### Pinokio (Windows, Linux and macOS)
+### Pinokio (Windows, Linux and macOS) - experimental, untested
 
 [Pinokio](https://pinokio.computer) installs everything for you, FaceFusion v4 included.
 
 1. Install Pinokio and open it.
-2. Choose **Download from URL**, paste `https://github.com/Icey321/StudioFF` and press **Install**. It installs StudioFF
+2. Click **Create**, open the **Download** tab, paste `https://github.com/Icey321/StudioFF` into **Git URL** and press
+   **Import**, then press **Install** in StudioFF's menu. It installs StudioFF
    with its own FaceFusion v4 (CUDA on an NVIDIA card, DirectML on other Windows graphics cards, otherwise CPU) inside the
    Pinokio app folder. Its settings stay apart from any other StudioFF on the same computer.
 3. Press **Start** to open the StudioFF window.
 
 Update StudioFF with Pinokio's **Update** button. FaceFusion is updated from StudioFF's **FaceFusion** page as usual.
 
-### Linux and macOS (without Pinokio)
+### Linux and macOS (without Pinokio) - experimental, untested
 
 StudioFF is made and tested on Windows. The Linux support comes from
-[tokenwizard's Linux fork](https://github.com/tokenwizard/StudioFF), tested there on CachyOS with an NVIDIA card. macOS
-has not been tried on a real computer yet, so Pinokio is the easier way there.
+[tokenwizard's Linux fork](https://github.com/tokenwizard/StudioFF), tested there on CachyOS with an NVIDIA card, but this
+version has not been run on Linux yet. macOS has never been tried on a real computer.
 
 1. Install Python 3.12 or newer, Git, FFmpeg and curl with your package manager (`apt`, `dnf`, `pacman` or `brew`), and
    conda or [uv](https://docs.astral.sh/uv/) for FaceFusion's own environment.
