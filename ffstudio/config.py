@@ -4,9 +4,13 @@ import shutil
 import time
 from typing import Any, Dict
 
+from ffstudio import pinokio
+from ffstudio.platforms import data_root
+
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
-APPDATA_DIR = os.environ.get('APPDATA') or os.path.expanduser('~')
-DATA_DIR = os.environ.get('FFSTUDIO_DATA_DIR') or os.path.join(APPDATA_DIR, 'StudioFF')
+APPDATA_DIR = data_root()
+# the pinokio copy keeps its settings in its own folder, apart from a normal install on the same pc
+DATA_DIR = os.environ.get('FFSTUDIO_DATA_DIR') or (pinokio.DATA_DIR if pinokio.IS_PINOKIO else os.path.join(APPDATA_DIR, 'StudioFF'))
 # the app was called FaceFusion Studio before v0.40
 LEGACY_DATA_DIR = os.path.join(APPDATA_DIR, 'FaceFusionStudio')
 CONFIG_FILE = os.path.join(DATA_DIR, 'config.json')
@@ -29,7 +33,7 @@ def replace_path_prefix(value : Any, old_prefix : str, new_prefix : str) -> Any:
 
 def migrate_data_dir(old_dir : str = LEGACY_DATA_DIR, new_dir : str = DATA_DIR) -> None:
 	"""moves the data folder of an older version to the new name once, and points the saved paths into it at the new folder"""
-	if os.environ.get('FFSTUDIO_DATA_DIR') or os.path.exists(new_dir) or not os.path.isdir(old_dir):
+	if os.environ.get('FFSTUDIO_DATA_DIR') or pinokio.IS_PINOKIO or os.path.exists(new_dir) or not os.path.isdir(old_dir):
 		return
 	# right after an update the helper may still hold its log open for a moment
 	for attempt in range(10):
@@ -56,8 +60,8 @@ def migrate_data_dir(old_dir : str = LEGACY_DATA_DIR, new_dir : str = DATA_DIR) 
 
 DEFAULT_CONFIG : Dict[str, Any] =\
 {
-	'facefusion_root': '',
-	'python_path': '',
+	'facefusion_root': pinokio.FACEFUSION_DIR if pinokio.IS_PINOKIO else '',
+	'python_path': pinokio.FACEFUSION_PYTHON if pinokio.IS_PINOKIO else '',
 	'theme': 'auto',
 	'output_dir': os.path.join(os.path.expanduser('~'), 'Videos', 'FaceFusion'),
 	'open_output_when_done': False,
@@ -97,6 +101,10 @@ class AppConfig:
 			try:
 				with open(CONFIG_FILE, encoding = 'utf-8') as config_file:
 					self.data.update(json.load(config_file))
+				# the pinokio folder can move, its own facefusion is then found again where it is now
+				if pinokio.IS_PINOKIO and not os.path.isdir(self.data.get('facefusion_root') or ''):
+					self.data['facefusion_root'] = DEFAULT_CONFIG['facefusion_root']
+					self.data['python_path'] = DEFAULT_CONFIG['python_path']
 				return
 			except (OSError, ValueError):
 				time.sleep(0.2)

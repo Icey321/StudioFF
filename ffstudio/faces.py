@@ -7,7 +7,8 @@ import numpy
 from PySide6.QtCore import QObject, QProcess, QTimer, Signal
 
 from ffstudio.config import APP_DIR, PREVIEW_DIR
-from ffstudio.environment import create_process_environment, kill_process_tree
+from ffstudio.environment import create_process_environment
+from ffstudio.platforms import kill_process_tree
 from ffstudio.media import write_image
 from ffstudio.session import Session
 

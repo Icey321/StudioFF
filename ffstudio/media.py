@@ -368,7 +368,7 @@ def gif_as_video(ffmpeg : str, path : str, work_dir : str) -> Optional[str]:
 		modified = os.path.getmtime(path)
 	except OSError:
 		return None
-	video_path = os.path.join(work_dir, 'gif_%s.mp4' % hashlib.sha1(('%s|%f%s' % (os.path.abspath(path), modified, '|alpha' if copy_extension == '.mp4' else '')).encode()).hexdigest()[:16])
+	video_path = os.path.join(work_dir, 'gif_%s.mp4' % hashlib.sha1(('%s|%f' % (os.path.abspath(path), modified)).encode()).hexdigest()[:16])
 	if os.path.isfile(video_path):
 		return video_path
 	os.makedirs(work_dir, exist_ok = True)

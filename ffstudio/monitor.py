@@ -9,7 +9,8 @@ from qfluentwidgets import CaptionLabel, ToolTipFilter
 
 from ffstudio.config import APP_DIR
 from ffstudio.drive import format_size, output_drives
-from ffstudio.environment import create_process_environment, kill_process_tree
+from ffstudio.environment import create_process_environment
+from ffstudio.platforms import kill_process_tree
 from ffstudio.session import Session
 
 RESULT_PREFIX = 'METRICS '

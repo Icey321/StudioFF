@@ -19,6 +19,7 @@ from ffstudio.media import VideoReader, animation_extension, browse_dir, is_anim
 from ffstudio.nsfw import BLOCKED_STATUS, NsfwDialog, describe_result, show_blocked_bar
 from ffstudio.option_panel import FavoritesPanel, OptionPanel
 from ffstudio.output_name import AUTOMATIC_TEMPLATE, NAME_EXAMPLES, NAME_TAGS, build_output, build_output_path, unknown_tags
+from ffstudio.platforms import show_in_folder
 from ffstudio.presets import PresetBar
 from ffstudio.session import CONTENT_RESULT_PREFIX, Session, folder_is_writable
 from ffstudio.widgets import DisabledToolTipFilter, DriveLabel, GroupChip, PreviewView, ProcessorArea, ProcessorButton, Splitter, Thumbnail, add_edit_button, attach_landmarks_cycle, collect_drop_paths, guard_wheel, landmarks_mode, with_drive_bar
@@ -2474,8 +2475,7 @@ class StudioPage(SourceSelection, QWidget):
 
 	def reveal_output(self) -> None:
 		if self.last_output and os.path.exists(self.last_output):
-			import subprocess
-			subprocess.Popen([ 'explorer', '/select,', self.last_output ])
+			show_in_folder(self.last_output)
 
 	@staticmethod
 	def open_path(path : str) -> None:

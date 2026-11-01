@@ -9,9 +9,11 @@ from PySide6.QtWidgets import QAbstractButton, QApplication, QButtonGroup, QFile
 from qfluentwidgets import BodyLabel, CaptionLabel, CheckBox, ColorPickerButton, ComboBox, EditableComboBox, FluentIcon, HyperlinkButton, IconWidget, InfoBarIcon, LineEdit, MessageBox, PrimaryPushButton, ProgressBar, PushButton, SearchLineEdit, SimpleCardWidget, SingleDirectionScrollArea, StrongBodyLabel, SubtitleLabel, SwitchButton, ToolTipFilter, TransparentToolButton, isDarkTheme
 
 from ffstudio import APP_REPOSITORY, APP_VERSION, TESTED_FACEFUSION_COMMIT, TESTED_FACEFUSION_DATE
-from ffstudio.environment import PREREQUISITES, check_dependencies, compare_github_commits, create_process_environment, fetch_github_build, fetch_latest_release, find_conda, find_conda_base, find_missing_prerequisites, find_python_candidates, has_nvidia_gpu, is_facefusion_root, is_newer_version, probe_python_version, read_facefusion_build, read_facefusion_version, read_windows_version, refresh_path, switch_facefusion_commit, version_tuple, winget_install_args
+from ffstudio.environment import PREREQUISITES, check_dependencies, compare_github_commits, create_process_environment, fetch_github_build, fetch_latest_release, find_conda, find_conda_base, find_missing_prerequisites, find_python_candidates, has_nvidia_gpu, is_facefusion_root, is_newer_version, probe_python_version, read_facefusion_build, read_facefusion_version, switch_facefusion_commit, version_tuple, winget_install_args
 from ffstudio.main_window import DEFAULT_ACCENT, apply_theme
 from ffstudio.option_panel import OptionPanel
+from ffstudio.pinokio import IS_PINOKIO
+from ffstudio.platforms import PYTHON_NAME, conda_env_python, read_os_version, refresh_path, script_command, venv_python
 from ffstudio.session import MINIMUM_PYTHON, Session
 from ffstudio.updater import download_release, is_git_checkout, start_helper
 from ffstudio.widgets import ChoiceButton
@@ -33,6 +35,7 @@ FACEFUSION_BRANCH = 'v4'
 # the update card's labels are longer than the other cards'
 UPDATE_LABEL_WIDTH = 170
 CONDA_ENV_NAME = 'facefusion-v4'
+GIT_CHECKOUT_TIP = 'Pinokio installed this copy of the app, update it with Update in Pinokio' if IS_PINOKIO else 'This copy of the app is a git checkout, so it updates through git'
 ONNXRUNTIME_CHOICES =\
 [
 	('cuda@12', 'CUDA 12 — NVIDIA GPU'),
@@ -315,7 +318,7 @@ class SetupPage(QWidget):
 		layout.addLayout(form_row('', [ self.root_status ], card))
 
 		self.python_combo = EditableComboBox(card)
-		self.python_combo.setPlaceholderText('python.exe of the FaceFusion environment')
+		self.python_combo.setPlaceholderText(PYTHON_NAME + ' of the FaceFusion environment')
 		self.python_combo.setText(self.session.python_path)
 		python_browse = PushButton(FluentIcon.FOLDER, 'Browse', card)
 		python_browse.clicked.connect(self.browse_python)
@@ -346,7 +349,7 @@ class SetupPage(QWidget):
 			self.on_root_edited()
 
 	def browse_python(self) -> None:
-		path, _ = QFileDialog.getOpenFileName(self, 'Choose python.exe', os.path.dirname(self.python_combo.text()) or os.path.expanduser('~'), 'Python (python.exe);;All files (*)')
+		path, _ = QFileDialog.getOpenFileName(self, 'Choose ' + PYTHON_NAME, os.path.dirname(self.python_combo.text()) or os.path.expanduser('~'), 'Python (%s);;All files (*)' % PYTHON_NAME)
 		if path:
 			self.python_combo.setText(os.path.normpath(path))
 			self.refresh_python_status()
@@ -431,7 +434,7 @@ class SetupPage(QWidget):
 		self.refresh_status()
 		self.session.check_python()
 		if not self.session.is_configured():
-			self.session.notify.emit('error', 'Incomplete setup', 'Both the FaceFusion folder and python.exe are required.')
+			self.session.notify.emit('error', 'Incomplete setup', 'Both the FaceFusion folder and %s are required.' % PYTHON_NAME)
 			return
 		if not self.session.python_supported():
 			self.session.notify.emit('warning', 'Python too old', 'FaceFusion v4 refuses to run on Python %s.' % self.session.python_version)
@@ -513,8 +516,8 @@ class SetupPage(QWidget):
 
 	def env_python_path(self) -> str:
 		if self.env_combo.currentData() == 'conda':
-			return os.path.join(find_conda_base() or '', 'envs', CONDA_ENV_NAME, 'python.exe')
-		return os.path.join(self.install_folder_edit.text().strip(), '.venv', 'Scripts', 'python.exe')
+			return conda_env_python(os.path.join(find_conda_base() or '', 'envs', CONDA_ENV_NAME))
+		return venv_python(os.path.join(self.install_folder_edit.text().strip(), '.venv'))
 
 	def start_install(self) -> None:
 		folder = self.install_folder_edit.text().strip()
@@ -548,12 +551,12 @@ class SetupPage(QWidget):
 			steps.append(('Cloning FaceFusion v4', lambda: self.session.run_program('Cloning FaceFusion v4', shutil.which('git') or 'git', [ 'clone', '--branch', FACEFUSION_BRANCH, '--depth', '1', REPOSITORY_URL, folder ], os.path.dirname(folder) or '.')))
 		if not os.path.isfile(python_path):
 			if env_kind == 'conda':
-				steps.append(('Creating conda environment', lambda: self.session.run_program('Creating conda environment', 'cmd.exe', [ '/c', self.conda_path, 'create', '-y', '-n', CONDA_ENV_NAME, 'python=3.13', 'pip' ], folder)))
+				steps.append(('Creating conda environment', lambda: self.session.run_program('Creating conda environment', *script_command(self.conda_path, [ 'create', '-y', '-n', CONDA_ENV_NAME, 'python=3.13', 'pip' ]), folder)))
 			else:
 				steps.append(('Creating virtual environment', lambda: bool(self.uv_path) and self.session.run_program('Creating virtual environment', self.uv_path, [ 'venv', '--python', '3.13', '--seed', os.path.join(folder, '.venv') ], folder)))
 		if env_kind == 'conda' and str(onnxruntime).startswith('cuda') and self.cuda_check.isChecked():
 			cuda_major = onnxruntime.split('@')[1]
-			steps.append(('Installing CUDA runtime and cuDNN', lambda: self.session.run_program('Installing CUDA runtime and cuDNN', 'cmd.exe', [ '/c', self.conda_path, 'install', '-y', '-n', CONDA_ENV_NAME, '-c', 'conda-forge', 'cuda-runtime=' + cuda_major, 'cudnn=9' ], folder)))
+			steps.append(('Installing CUDA runtime and cuDNN', lambda: self.session.run_program('Installing CUDA runtime and cuDNN', *script_command(self.conda_path, [ 'install', '-y', '-n', CONDA_ENV_NAME, '-c', 'conda-forge', 'cuda-runtime=' + cuda_major, 'cudnn=9' ]), folder)))
 		steps.append(('Installing requirements', lambda: self.session.run_program('Installing FaceFusion requirements', python_path, [ 'install.py', onnxruntime, '--skip-conda' ], folder, create_process_environment(python_path))))
 		steps.append(('Finishing', lambda: self.finish_install(folder, python_path)))
 
@@ -603,7 +606,7 @@ class SetupPage(QWidget):
 
 	def create_update_card(self, parent : QWidget) -> QWidget:
 		card, layout = section_card('FaceFusion updates', 'StudioFF uses the %s branch of FaceFusion on GitHub (%s). This checks your FaceFusion folder against that branch. An orange dot on the FaceFusion icon means a newer release is out.' % (FACEFUSION_BRANCH, DEFAULT_REPOSITORY), parent)
-		self.windows_label = BodyLabel(read_windows_version(), card)
+		self.windows_label = BodyLabel(read_os_version(), card)
 		self.windows_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
 		layout.addLayout(form_row('Operating System',[ self.windows_label ], card, UPDATE_LABEL_WIDTH))
 		self.installed_label = BodyLabel('', card)
@@ -908,7 +911,7 @@ class SetupPage(QWidget):
 		self.studio_install_button.setVisible(newer and bool(release.get('zip')))
 		# a git checkout is updated with git, copying a release over it would mix the two
 		self.studio_install_button.setEnabled(not is_git_checkout() and self.studio_download_bar.isHidden())
-		self.studio_install_button.setToolTip('This copy of the app is a git checkout, so it updates through git' if is_git_checkout() else '')
+		self.studio_install_button.setToolTip(GIT_CHECKOUT_TIP if is_git_checkout() else '')
 		if newer:
 			self.studio_release_link.setUrl(release['url'])
 			self.studio_release_link.setText('Download %s' % tag)

@@ -1,13 +1,13 @@
 import os
 import shutil
 import subprocess
-import sys
 import tempfile
 import urllib.request
 import zipfile
 from typing import Callable, Optional, Tuple
 
 from ffstudio.config import DATA_DIR
+from ffstudio.platforms import IS_WINDOWS
 
 APP_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 UPDATE_DIR = os.path.join(tempfile.gettempdir(), 'StudioFF-update')
@@ -59,6 +59,48 @@ try {
 Remove-Item (Split-Path $Source) -Recurse -Force -ErrorAction SilentlyContinue
 Start-Process (Join-Path $Target '.venv\Scripts\pythonw.exe') -ArgumentList '-m', 'ffstudio' -WorkingDirectory $Target
 Stop-Transcript | Out-Null
+'''
+
+# the same steps for linux and macos
+POSIX_HELPER_SCRIPT = r'''#!/bin/sh
+app_id="$1"; source="$2"; target="$3"; tag="$4"; result="$5"
+exec > "$(dirname "$result")/update-log.txt" 2>&1
+waited=0
+while kill -0 "$app_id" 2> /dev/null && [ "$waited" -lt 240 ]; do sleep 0.5; waited=$((waited + 1)); done
+sleep 0.5
+backup="$target/ffstudio.update-backup"
+python="$target/.venv/bin/python"
+old_requirements="$(dirname "$source")/requirements.old"
+rm -f "$old_requirements"
+cp "$target/requirements.txt" "$old_requirements" 2> /dev/null
+reason=''
+update() {
+	rm -rf "$backup"
+	mv "$target/ffstudio" "$backup" || { reason='moving the old files aside failed'; return 1; }
+	cp -R "$source/." "$target/" || { reason='copying the new files failed'; return 1; }
+	[ -f "$target/ffstudio/__init__.py" ] || { reason='the new files are incomplete'; return 1; }
+	if ! cmp -s "$target/requirements.txt" "$old_requirements"; then
+		if command -v uv > /dev/null; then
+			uv pip install --python "$python" -r "$target/requirements.txt"
+		else
+			"$python" -m pip install -r "$target/requirements.txt"
+		fi || { reason='installing the new packages failed'; return 1; }
+	fi
+}
+if update; then
+	rm -rf "$backup"
+	echo "ok $tag" > "$result"
+else
+	if [ -d "$backup" ]; then
+		rm -rf "$target/ffstudio"
+		mv "$backup" "$target/ffstudio"
+	fi
+	# put the old requirements back too, else the next update sees them as equal and skips the install
+	[ -f "$old_requirements" ] && cp "$old_requirements" "$target/requirements.txt"
+	echo "failed $reason" > "$result"
+fi
+rm -rf "$(dirname "$source")"
+cd "$target" && nohup "$python" -m ffstudio > /dev/null 2>&1 &
 '''
 
 
@@ -118,14 +160,18 @@ def download_release(zip_url : str, progress : Callable[[int, int], None]) -> st
 
 def start_helper(source : str, tag : str) -> None:
 	"""starts the helper that waits for this app to quit, then installs the downloaded files and reopens the app"""
+	os.makedirs(DATA_DIR, exist_ok = True)
+	if not IS_WINDOWS:
+		script_path = os.path.join(UPDATE_DIR, 'update.sh')
+		with open(script_path, 'w', encoding = 'utf-8', newline = '\n') as script_file:
+			script_file.write(POSIX_HELPER_SCRIPT)
+		# its own session, so it lives on after this app quits
+		subprocess.Popen([ 'sh', script_path, str(os.getpid()), source, APP_ROOT, tag, RESULT_FILE ], start_new_session = True, close_fds = True)
+		return
 	script_path = os.path.join(UPDATE_DIR, 'update.ps1')
 	with open(script_path, 'w', encoding = 'utf-8-sig') as script_file:
 		script_file.write(HELPER_SCRIPT)
-	os.makedirs(DATA_DIR, exist_ok = True)
 	command = [ 'powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', script_path, '-AppId', str(os.getpid()), '-Source', source, '-Target', APP_ROOT, '-Tag', tag, '-Result', RESULT_FILE ]
-	if sys.platform != 'win32':
-		subprocess.Popen(command, close_fds = True)
-		return
 	# a hidden console, powershell started with none at all (DETACHED_PROCESS) quits without running the script
 	flags = CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
 	# the helper has to outlive this app, also when the app was started inside a job that closes with it

@@ -1,7 +1,6 @@
 import glob
 import json
 import os
-import platform
 import shutil
 import subprocess
 import urllib.error
@@ -11,7 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from PySide6.QtCore import QProcessEnvironment
 
-CREATE_NO_WINDOW = 0x08000000
+from ffstudio.platforms import CREATE_NO_WINDOW, ENV_BIN, conda_candidates, conda_env_python, python_patterns
 
 
 def is_facefusion_root(path : str) -> bool:
@@ -151,28 +150,9 @@ def is_newer_version(tag : str, current : str) -> bool:
 	return bool(newer) and newer + (0,) * (size - len(newer)) > older + (0,) * (size - len(older))
 
 
-def read_windows_version() -> str:
-	try:
-		import winreg
-		with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, 'SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion') as key:
-			def value(name : str) -> str:
-				try:
-					return str(winreg.QueryValueEx(key, name)[0])
-				except OSError:
-					return ''
-			product, build, revision = value('ProductName'), value('CurrentBuild'), value('UBR')
-			release = value('DisplayVersion') or value('ReleaseId')
-	except (ImportError, OSError):
-		return platform.platform()
-	# windows 11 still calls itself windows 10 in ProductName, the build number tells them apart
-	if build.isdigit() and int(build) >= 22000:
-		product = product.replace('Windows 10', 'Windows 11')
-	return ' '.join(part for part in [ product, release ] if part) + '  ·  version 10.0.%s%s' % (build, '.' + revision if revision else '')
-
-
 def get_env_prefix(python_path : str) -> str:
 	python_dir = os.path.dirname(os.path.abspath(python_path))
-	if os.path.basename(python_dir).lower() == 'scripts':
+	if os.path.basename(python_dir).lower() in [ 'scripts', 'bin' ]:
 		return os.path.dirname(python_dir)
 	return python_dir
 
@@ -185,18 +165,16 @@ def find_conda() -> Optional[str]:
 	conda = shutil.which('conda') or shutil.which('conda.bat')
 	if conda:
 		return conda
-	for base in [ os.path.join(os.environ.get('LOCALAPPDATA', ''), 'Programs'), os.path.expanduser('~'), 'C:\\ProgramData' ]:
-		for name in [ 'Miniconda3', 'miniconda3', 'Anaconda3', 'anaconda3', 'miniforge3', 'Miniforge3' ]:
-			candidate = os.path.join(base, name, 'condabin', 'conda.bat')
-			if os.path.isfile(candidate):
-				return candidate
+	for candidate in conda_candidates():
+		if os.path.isfile(candidate):
+			return candidate
 	return None
 
 
 def find_conda_base() -> Optional[str]:
 	conda = find_conda()
 	if conda:
-		# <base>\condabin\conda.bat or <base>\Library\bin\conda.bat or <base>\Scripts\conda.exe
+		# <base>\condabin\conda.bat or <base>\Library\bin\conda.bat or <base>\Scripts\conda.exe, <base>/condabin/conda or <base>/bin/conda elsewhere
 		path = os.path.dirname(os.path.abspath(conda))
 		for _ in range(3):
 			if os.path.isdir(os.path.join(path, 'envs')) or os.path.isdir(os.path.join(path, 'conda-meta')):
@@ -209,13 +187,13 @@ def find_python_candidates(facefusion_root : str = '') -> List[str]:
 	candidates : List[str] = []
 
 	if facefusion_root:
-		for pattern in [ '.venv\\Scripts\\python.exe', 'venv\\Scripts\\python.exe', '.conda\\python.exe', 'env\\python.exe' ]:
+		for pattern in python_patterns():
 			candidates.extend(glob.glob(os.path.join(facefusion_root, pattern)))
 
 	conda_base = find_conda_base()
 	if conda_base:
 		for env_dir in sorted(glob.glob(os.path.join(conda_base, 'envs', '*'))):
-			python_path = os.path.join(env_dir, 'python.exe')
+			python_path = conda_env_python(env_dir)
 			if os.path.isfile(python_path):
 				candidates.append(python_path)
 
@@ -252,7 +230,7 @@ def version_tuple(version : Optional[str]) -> tuple:
 def create_process_environment(python_path : str) -> QProcessEnvironment:
 	environment = QProcessEnvironment.systemEnvironment()
 	prefix = get_env_prefix(python_path)
-	path_parts = [ prefix, os.path.join(prefix, 'Scripts') ]
+	path_parts = [ prefix, os.path.join(prefix, ENV_BIN) ]
 
 	if is_conda_env(python_path):
 		environment.insert('CONDA_PREFIX', prefix)
@@ -280,71 +258,6 @@ def create_process_environment(python_path : str) -> QProcessEnvironment:
 
 def environment_to_dict(environment : QProcessEnvironment) -> Dict[str, str]:
 	return { key: environment.value(key) for key in environment.keys() }
-
-
-def kill_process_tree(pid : int) -> None:
-	if pid:
-		subprocess.run([ 'taskkill', '/PID', str(pid), '/T', '/F' ], capture_output = True, creationflags = CREATE_NO_WINDOW)
-
-
-def process_tree(pid : int) -> List[int]:
-	"""the process and every process under it, read from a windows snapshot of all processes"""
-	import ctypes
-	from ctypes import wintypes
-
-	class ProcessEntry(ctypes.Structure):
-		_fields_ =\
-		[
-			('dwSize', wintypes.DWORD),
-			('cntUsage', wintypes.DWORD),
-			('th32ProcessID', wintypes.DWORD),
-			('th32DefaultHeapID', ctypes.c_void_p),
-			('th32ModuleID', wintypes.DWORD),
-			('cntThreads', wintypes.DWORD),
-			('th32ParentProcessID', wintypes.DWORD),
-			('pcPriClassBase', ctypes.c_long),
-			('dwFlags', wintypes.DWORD),
-			('szExeFile', ctypes.c_wchar * 260)
-		]
-
-	kernel32 = ctypes.WinDLL('kernel32', use_last_error = True)
-	kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
-	snapshot = kernel32.CreateToolhelp32Snapshot(0x2, 0)
-	if not snapshot or snapshot == wintypes.HANDLE(-1).value:
-		return [ pid ]
-	children : Dict[int, List[int]] = {}
-	entry = ProcessEntry()
-	entry.dwSize = ctypes.sizeof(ProcessEntry)
-	found = kernel32.Process32FirstW(snapshot, ctypes.byref(entry))
-	while found:
-		children.setdefault(entry.th32ParentProcessID, []).append(entry.th32ProcessID)
-		found = kernel32.Process32NextW(snapshot, ctypes.byref(entry))
-	kernel32.CloseHandle(snapshot)
-	tree = [ pid ]
-	for parent in tree:
-		tree += [ child for child in children.get(parent, []) if child not in tree ]
-	return tree
-
-
-def suspend_process_tree(pid : int, suspend : bool) -> bool:
-	"""freezes or unfreezes a process and the processes it started, such as ffmpeg, in place: they use no cpu or gpu while frozen and go on where they were"""
-	if not pid:
-		return False
-	import ctypes
-	from ctypes import wintypes
-
-	kernel32 = ctypes.WinDLL('kernel32', use_last_error = True)
-	kernel32.OpenProcess.restype = wintypes.HANDLE
-	ntdll = ctypes.WinDLL('ntdll')
-	call = ntdll.NtSuspendProcess if suspend else ntdll.NtResumeProcess
-	done = False
-	# PROCESS_SUSPEND_RESUME
-	for process_id in process_tree(pid):
-		handle = kernel32.OpenProcess(0x0800, False, process_id)
-		if handle:
-			done = call(wintypes.HANDLE(handle)) == 0 or done
-			kernel32.CloseHandle(handle)
-	return done
 
 
 def has_nvidia_gpu() -> bool:
@@ -383,27 +296,3 @@ def find_missing_prerequisites(need_uv : bool, need_git : bool) -> List[str]:
 
 def winget_install_args(key : str) -> List[str]:
 	return [ 'install', '--id', PREREQUISITES[key][0], '--exact', '--silent', '--accept-package-agreements', '--accept-source-agreements' ]
-
-
-def refresh_path() -> None:
-	"""takes the PATH Windows holds now, programs installed while the app runs would not be found otherwise"""
-	import winreg
-
-	parts : List[str] = []
-	for root, sub_key in [ (winreg.HKEY_LOCAL_MACHINE, r'SYSTEM\CurrentControlSet\Control\Session Manager\Environment'), (winreg.HKEY_CURRENT_USER, 'Environment') ]:
-		try:
-			with winreg.OpenKey(root, sub_key) as key:
-				value, _ = winreg.QueryValueEx(key, 'Path')
-				parts.extend(os.path.expandvars(part) for part in value.split(os.pathsep) if part)
-		except OSError:
-			pass
-	known = { os.path.normcase(part) for part in parts }
-	parts.extend(part for part in os.environ.get('PATH', '').split(os.pathsep) if part and os.path.normcase(part) not in known)
-	path = os.pathsep.join(parts)
-	os.environ['PATH'] = path
-	# QProcess starts programs from the Windows environment block, which os.environ does not always reach
-	try:
-		import ctypes
-		ctypes.windll.kernel32.SetEnvironmentVariableW('PATH', path)
-	except (OSError, AttributeError):
-		pass

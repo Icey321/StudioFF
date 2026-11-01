@@ -1,7 +1,6 @@
 import glob
 import os
 import re
-import subprocess
 import time
 from collections import OrderedDict
 from typing import Any, Dict, List, Optional, Tuple
@@ -19,6 +18,7 @@ from ffstudio.nsfw import BLOCKED_TITLE, NsfwDialog, show_blocked_bar
 from ffstudio.output_name import AUTOMATIC_TEMPLATE, build_output, unknown_tags
 from ffstudio.pages.models import format_size
 from ffstudio.pages.setup import SYSTEM_GROUPS, form_row, section_card
+from ffstudio.platforms import show_in_folder
 from ffstudio.pages.studio import LIVE_IGNORED_GROUPS, PREVIEW_MAX_SIDE, NameTagsView, SettingsColumn, SourceCard, SourceSelection, StudioPage, elastic, estimated_progress, preview_step_floor, run_tag_values, tool_button
 from ffstudio.session import OptionStore, Session, explain_error, folder_is_writable
 from ffstudio.widgets import DriveLabel, IconCountButton, PreviewView, Splitter, add_edit_button, attach_landmarks_cycle, collect_drop_paths, guard_wheel, landmarks_mode, with_drive_bar
@@ -2116,8 +2116,7 @@ class BatchPage(SourceSelection, QWidget):
 		target = os.path.normpath(self.items[row].get('target'))
 		menu = RoundMenu(parent = self)
 		menu.addAction(Action(FluentIcon.COPY, 'Copy target file name', triggered = lambda: QApplication.clipboard().setText(os.path.basename(target))))
-		# explorer opens the target's folder with the target picked
-		menu.addAction(Action(FluentIcon.FOLDER, 'Open Folder…', triggered = lambda: subprocess.Popen([ 'explorer', '/select,', target ])))
+		menu.addAction(Action(FluentIcon.FOLDER, 'Open Folder…', triggered = lambda: show_in_folder(target)))
 		menu.exec(position)
 
 	def show_item_result(self, list_item) -> None:

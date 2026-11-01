@@ -56,6 +56,14 @@ shortcuts. Then start **StudioFF** and open the **FaceFusion** page:
 
 FaceFusion also needs `ffmpeg`, `ffprobe` and `curl` on `PATH`. The FaceFusion page checks for them.
 
+### With Pinokio
+
+In [Pinokio](https://pinokio.computer), choose **Download from URL**, paste `https://github.com/Icey321/StudioFF` and press
+**Install**. That installs StudioFF together with its own FaceFusion v4 (CUDA on an NVIDIA card, DirectML on other Windows
+graphics cards, otherwise CPU) inside the Pinokio app folder, with its settings kept apart from any other StudioFF on the PC.
+**Start** opens the StudioFF window. Update StudioFF with Pinokio's **Update**; FaceFusion is updated from StudioFF's
+**FaceFusion** page as usual.
+
 ## Layout
 
 | Path | Purpose |

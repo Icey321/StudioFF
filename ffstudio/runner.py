@@ -8,7 +8,7 @@ from typing import Any, List, Optional, Tuple
 from PySide6.QtCore import QObject, QProcess, QProcessEnvironment, QTimer, Signal
 
 from ffstudio.config import APP_DIR
-from ffstudio.environment import kill_process_tree, suspend_process_tree
+from ffstudio.platforms import kill_process_tree, suspend_process_tree
 
 ANSI_PATTERN = re.compile(r'\x1b\[[0-9;?]*[A-Za-z]')
 # facefusion draws its bar as <active color>====<neutral color>====<reset>

@@ -1,4 +1,3 @@
-import ctypes
 import hashlib
 import os
 import re
@@ -15,6 +14,7 @@ from qfluentwidgets import BodyLabel, CaptionLabel, CheckBox, ComboBox, FlowLayo
 from ffstudio.benchmark_report import RESOLUTIONS, format_processors, render_report
 from ffstudio.environment import CREATE_NO_WINDOW, create_process_environment, read_facefusion_version
 from ffstudio.pages.setup import form_row, section_card
+from ffstudio.platforms import read_cpu_name, read_memory_total
 from ffstudio.session import Session
 from ffstudio.widgets import NumberBox, guard_wheel
 
@@ -36,29 +36,6 @@ COLUMN_TIPS =\
 # where each stage of one run sits within that run on the overall progress bar
 STAGE_SPAN = { 'Checking content': (0.0, 0.03), 'Extracting frames': (0.03, 0.06), 'Processing frames': (0.06, 0.92), 'Merging video': (0.92, 0.97), 'Adding audio': (0.97, 1.0) }
 HISTORY_LIMIT = 200
-
-
-class MemoryStatus(ctypes.Structure):
-	_fields_ = [ ('length', ctypes.c_ulong), ('memory_load', ctypes.c_ulong), ('total_physical', ctypes.c_ulonglong), ('available_physical', ctypes.c_ulonglong), ('total_page_file', ctypes.c_ulonglong), ('available_page_file', ctypes.c_ulonglong), ('total_virtual', ctypes.c_ulonglong), ('available_virtual', ctypes.c_ulonglong), ('available_extended_virtual', ctypes.c_ulonglong) ]
-
-
-def read_cpu_name() -> str:
-	try:
-		import winreg
-		with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r'HARDWARE\DESCRIPTION\System\CentralProcessor\0') as key:
-			return str(winreg.QueryValueEx(key, 'ProcessorNameString')[0]).strip()
-	except OSError:
-		return ''
-
-
-def read_memory_total() -> int:
-	try:
-		status = MemoryStatus()
-		status.length = ctypes.sizeof(MemoryStatus)
-		ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status))
-		return int(status.total_physical)
-	except (AttributeError, OSError):
-		return 0
 
 
 def format_duration(seconds : float) -> str:
