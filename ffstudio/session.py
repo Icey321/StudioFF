@@ -5,14 +5,15 @@ import re
 import shutil
 import sys
 import tempfile
+import threading
 import uuid
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from PySide6.QtCore import QObject, Signal
 
 from ffstudio.config import APP_DIR, DATA_DIR, PREVIEW_DIR, SCHEMA_FILE, AppConfig
 from ffstudio.environment import create_process_environment, is_facefusion_root, probe_python_version, version_tuple
-from ffstudio.media import GIF_EXTENSIONS, extension, gif_as_video, media_kind, read_facefusion_frame
+from ffstudio.media import GIF_EXTENSIONS, extension, gif_as_video, gif_video_path, media_kind, needs_conversion, read_facefusion_frame, usable_path
 from ffstudio.runner import PreviewWorker, ProcessRunner
 from ffstudio.schema import Schema, build_option_args, schema_is_stale
 
@@ -82,6 +83,29 @@ def load_values(schema : Optional[Schema], stored : Dict[str, Any]) -> Dict[str,
 	return values
 
 
+class BackgroundWork(QObject):
+	"""runs slow file work, such as making a video copy, off the ui thread so the window does not stall, and hands the
+	result back on the ui thread"""
+	done = Signal(object, object)
+
+	def __init__(self, parent : Optional[QObject] = None) -> None:
+		super().__init__(parent)
+		self.done.connect(self.on_done)
+
+	def run(self, work : Callable[[], Any], then : Callable[[Any], None], fallback : Any = None) -> None:
+		def target() -> None:
+			try:
+				result = work()
+			except Exception:
+				result = fallback
+			self.done.emit(then, result)
+
+		threading.Thread(target = target, daemon = True).start()
+
+	def on_done(self, then : Callable[[Any], None], result : Any) -> None:
+		then(result)
+
+
 class Session(QObject):
 	"""shared state between pages: config, option schema, option values and the process runner"""
 	# where the order of the processor buttons is kept
@@ -131,6 +155,10 @@ class Session(QObject):
 		self.content_check_owner = ''
 		self.content_results : List[Dict[str, Any]] = []
 		self.batch_running = False
+		self.background = BackgroundWork(self)
+		# the gifs whose video is being made, with what waits for it, and the ones it could not be made of
+		self.gif_waiting : Dict[str, List[Callable[[], None]]] = {}
+		self.gif_failed : set = set()
 		self.init_values()
 
 	# configuration
@@ -151,8 +179,50 @@ class Session(QObject):
 		empty when the gif cannot be turned into one"""
 		if extension(path) not in GIF_EXTENSIONS:
 			return path
+		if path in self.gif_failed:
+			return ''
 		ffmpeg = shutil.which('ffmpeg', path = create_process_environment(self.python_path).value('PATH'))
 		return (gif_as_video(ffmpeg, path, GIF_VIDEO_DIR) or '') if ffmpeg else ''
+
+	def facefusion_video_ready(self, path : str) -> bool:
+		"""whether facefusion_video answers at once, rather than make a gif's video on the ui thread"""
+		if extension(path) not in GIF_EXTENSIONS or path in self.gif_failed:
+			return True
+		video_path = gif_video_path(path, GIF_VIDEO_DIR)
+		return not video_path or os.path.isfile(video_path)
+
+	def prepare_facefusion_video(self, path : str, then : Callable[[], None]) -> None:
+		"""calls then once facefusion_video answers at once: right away, or once the gif's video is made off the ui thread.
+		then is called once however often it is asked for meanwhile"""
+		if self.facefusion_video_ready(path):
+			then()
+			return
+		if path in self.gif_waiting:
+			# its video is being made already
+			if then not in self.gif_waiting[path]:
+				self.gif_waiting[path].append(then)
+			return
+		self.gif_waiting[path] = [ then ]
+		self.notify.emit('info', 'Preparing the GIF', 'Turning %s into a video for FaceFusion…' % os.path.basename(path))
+		self.background.run(lambda: self.facefusion_video(path), lambda video: self.on_gif_video(path, video), '')
+
+	def on_gif_video(self, path : str, video : str) -> None:
+		if not video:
+			self.gif_failed.add(path)
+		for then in self.gif_waiting.pop(path, []):
+			then()
+
+	def convert_files(self, paths : List[str], then : Callable[[List[str]], None], quiet : bool = False) -> None:
+		"""calls then with the usable_path of each file: right away when no copy has to be made, else once the copies
+		are made off the ui thread"""
+		if not needs_conversion(paths):
+			then([ usable_path(path) for path in paths ])
+			return
+		if not quiet:
+			converting = [ path for path in paths if needs_conversion([ path ]) ]
+			name = os.path.basename(converting[0]) if len(converting) == 1 else '(%d) files' % len(converting)
+			self.notify.emit('info', 'Converting', 'Making a copy of %s that FaceFusion can read…' % name)
+		self.background.run(lambda: [ usable_path(path) for path in paths ], then, list(paths))
 
 	def run_frame(self, path : str, frame_index : int, shown_frame : Optional[Any]) -> Optional[Any]:
 		"""the frame a preview runs on: a video or gif frame as facefusion itself reads it in a whole run, so the preview's

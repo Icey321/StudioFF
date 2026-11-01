@@ -15,7 +15,7 @@ from qfluentwidgets import Action, BodyLabel, CaptionLabel, FlowLayout, FluentIc
 from ffstudio.config import APP_DIR, PREVIEW_DIR
 from ffstudio.face_mapping import FACE_PROCESSORS, FRAME_PROCESSORS, GROUP_PREFIX, LEAVE, PEOPLE_FILE, SELECTED, FaceMappingCard, box_overlap, face_map, group_images, group_value, is_kept, is_mapped, merge_people, people_dir, person_color, person_name, plan_passes
 from ffstudio.faces import FACE_GROUPS, MASK_GROUPS, FaceProbe, describe_faces, describe_landmarks, describe_mask, face_landmarks, face_tag, faces_text_color, no_face, read_mask
-from ffstudio.media import VideoReader, animation_extension, browse_dir, is_animated_webp, is_animation, format_length, format_seconds, format_timecode, media_kind, read_frame, read_image, thumbnail, to_pixmap, usable_path, write_image
+from ffstudio.media import VideoReader, animation_extension, browse_dir, is_animated_webp, is_animation, format_length, format_seconds, format_timecode, media_kind, needs_conversion, read_frame, read_image, thumbnail, to_pixmap, usable_path, write_image
 from ffstudio.nsfw import BLOCKED_STATUS, NsfwDialog, describe_result, show_blocked_bar
 from ffstudio.option_panel import FavoritesPanel, OptionPanel
 from ffstudio.output_name import AUTOMATIC_TEMPLATE, NAME_EXAMPLES, NAME_TAGS, build_output, build_output_path, unknown_tags
@@ -207,7 +207,10 @@ class SourceSelection:
 		pass
 
 	def add_sources(self, paths : List[str]) -> None:
-		paths = [ usable_path(path) for path in paths ]
+		# an avif or heic is copied off the ui thread first
+		self.session.convert_files(paths, self.add_usable_sources)
+
+	def add_usable_sources(self, paths : List[str]) -> None:
 		accepted = [ path for path in paths if media_kind(path) in [ 'image', 'audio' ] and path not in self.source_paths ]
 		rejected = [ path for path in paths if media_kind(path) not in [ 'image', 'audio' ] ]
 		if rejected:
@@ -956,6 +959,9 @@ class StudioPage(SourceSelection, QWidget):
 		if self.target_path and not os.path.exists(self.target_path):
 			self.target_path = ''
 		self.view = 'target'
+		# the picked target and the shown result while their copies are made (see set_target and prepare_result)
+		self.converting_target = ''
+		self.converting_result = ''
 		self.last_output = ''
 		self.pending_output = ''
 		self.preview_mode = False
@@ -1267,7 +1273,20 @@ class StudioPage(SourceSelection, QWidget):
 			self.schedule_live_preview()
 
 	def set_target(self, path : str) -> None:
-		path = usable_path(path) if path else path
+		# a flash video or animated webp is copied off the ui thread first, the target changes once the copy is there
+		self.converting_target = path
+		if path:
+			self.session.convert_files([ path ], lambda paths: self.on_target_converted(path, paths[0]))
+		else:
+			self.use_target(path)
+
+	def on_target_converted(self, path : str, usable : str) -> None:
+		# another target was picked meanwhile
+		if self.converting_target == path:
+			self.converting_target = ''
+			self.use_target(usable)
+
+	def use_target(self, path : str) -> None:
 		if path and media_kind(path) not in [ 'image', 'video' ]:
 			self.session.notify.emit('warning', 'Unsupported target', 'Choose an image or a video.')
 			return
@@ -1319,15 +1338,20 @@ class StudioPage(SourceSelection, QWidget):
 				before = info.get('frame')
 				after = read_image(self.last_output)
 			elif media_kind(self.last_output) == 'video' or is_animated_webp(self.last_output):
-				# an animated webp is read from its video copy, opencv only decodes the first frame of a webp
-				read_path = usable_path(self.last_output)
-				if not self.result_reader or self.result_reader.path != read_path:
-					self.release_result_reader()
-					self.result_reader = VideoReader(read_path)
-				frame_index = self.target_card.current_frame_index() - info.get('trim_start', 0)
-				after = self.result_reader.read(frame_index) if frame_index >= 0 else None
-				before = self.target_card.current_frame() if same_target else None
-				hint = 'This frame is outside the trimmed range of the result'
+				if needs_conversion([ self.last_output ]):
+					# an animated webp is read from its video copy, made off the ui thread, the result shows once it is there
+					self.prepare_result(self.last_output)
+					hint = 'Preparing the result…'
+				else:
+					# opencv only decodes the first frame of a webp
+					read_path = usable_path(self.last_output)
+					if not self.result_reader or self.result_reader.path != read_path:
+						self.release_result_reader()
+						self.result_reader = VideoReader(read_path)
+					frame_index = self.target_card.current_frame_index() - info.get('trim_start', 0)
+					after = self.result_reader.read(frame_index) if frame_index >= 0 else None
+					before = self.target_card.current_frame() if same_target else None
+					hint = 'This frame is outside the trimmed range of the result'
 			else:
 				after = read_image(self.last_output)
 				before = read_image(self.target_path) if same_target else None
@@ -1338,6 +1362,16 @@ class StudioPage(SourceSelection, QWidget):
 			preview.set_pixmap(to_pixmap(after))
 			preview.set_badge('Result' if after is not None else '')
 			preview.hint = hint
+
+	def prepare_result(self, path : str) -> None:
+		if self.converting_result != path:
+			self.converting_result = path
+			self.session.convert_files([ path ], lambda _: self.on_result_converted(path), quiet = True)
+
+	def on_result_converted(self, path : str) -> None:
+		self.converting_result = ''
+		if self.view == 'result' and self.last_output == path:
+			self.refresh_result()
 
 	def on_result_scrubbed(self) -> None:
 		# a preview shows one frame only, scrubbing away from it goes back to the target
@@ -1509,6 +1543,10 @@ class StudioPage(SourceSelection, QWidget):
 
 	def start(self) -> None:
 		if not self.validate():
+			return
+		if self.mapping_passes() and not self.session.facefusion_video_ready(self.target_path):
+			# a gif's passes run on its video, made off the ui thread first
+			self.session.prepare_facefusion_video(self.target_path, self.start)
 			return
 		self.live_timer.stop()
 		self.live_pending = False
@@ -1688,6 +1726,10 @@ class StudioPage(SourceSelection, QWidget):
 			return
 		if self.freed:
 			self.session.notify.emit('warning', 'Paused', 'Resume or stop the paused run first.')
+			return
+		if not self.session.facefusion_video_ready(self.target_path):
+			# a gif's frame is read from its video, made off the ui thread first
+			self.session.prepare_facefusion_video(self.target_path, self.preview_frame)
 			return
 		frame = self.session.run_frame(self.target_path, self.target_card.current_frame_index(), self.target_card.current_frame())
 		if frame is None:
@@ -2080,6 +2122,9 @@ class StudioPage(SourceSelection, QWidget):
 			return
 		if not self.session.is_configured() or not self.session.schema:
 			self.session.notify.emit('error', 'FaceFusion not set up', 'Open Settings first, face detection runs in its environment.')
+			return
+		if not self.session.facefusion_video_ready(self.target_path):
+			self.session.prepare_facefusion_video(self.target_path, self.find_people)
 			return
 		start = end = None
 		if media_kind(self.target_path) == 'video':

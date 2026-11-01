@@ -13,7 +13,7 @@ from qfluentwidgets import Action, BodyLabel, CaptionLabel, ComboBox, FluentIcon
 
 from ffstudio.config import APP_DIR, PREVIEW_DIR
 from ffstudio.faces import FACE_GROUPS, MASK_GROUPS, FaceProbe, describe_faces, describe_landmarks, describe_mask, face_landmarks, face_tag, faces_text_color, no_face, read_mask
-from ffstudio.media import VideoReader, animation_extension, browse_dir, extension, is_animation, format_length, format_seconds, format_timecode, media_kind, read_frame, thumbnail, to_pixmap, usable_path, video_length, write_image
+from ffstudio.media import VideoReader, animation_extension, browse_dir, extension, is_animation, format_length, format_seconds, format_timecode, media_kind, needs_conversion, read_frame, thumbnail, to_pixmap, usable_path, video_length, write_image
 from ffstudio.nsfw import BLOCKED_TITLE, NsfwDialog, show_blocked_bar
 from ffstudio.output_name import AUTOMATIC_TEMPLATE, build_output, unknown_tags
 from ffstudio.pages.models import format_size
@@ -39,21 +39,24 @@ STATUS_LOOK =\
 	'skip': ('⛔', 'NSFW content detected, will be skipped  ·  ', '#9d5d00', '#fce100'),
 	'failed': ('✗', 'Failed  ·  ', '#c42b1c', '#ff99a4'),
 	'skipped': ('↷', 'Skipped  ·  ', '#9d5d00', '#fce100'),
+	'noface': ('↷', 'No face detected, skipped  ·  ', '#9d5d00', '#fce100'),
 	'running': ('▶', '', None, None)
 }
 # a run that ended keeps its row until something the user changes plans the batch again
-FINISHED = ('done', 'blocked', 'failed', 'skipped')
+FINISHED = ('done', 'blocked', 'failed', 'skipped', 'noface')
 # the outputs a hovered row offers to run again, and the ones it offers to run on their own
-RETRY_STATUSES = ('skipped', 'failed')
+RETRY_STATUSES = ('skipped', 'noface', 'failed')
 PLAY_STATUSES = ('', 'done')
 # how the Errors column sorts the rows, the worst first
-ERROR_RANK = { 'failed': 4, 'blocked': 3, 'skip': 2, 'skipped': 1 }
+ERROR_RANK = { 'failed': 4, 'blocked': 3, 'skip': 2, 'skipped': 1, 'noface': 1 }
+# the frames of a video Run Batch looks for faces in before the batch, a target with none in any of them is skipped
+FACE_CHECK_SAMPLES = 16
 # the tabs over the list, shown once it has more than one type of target
 TYPE_TABS = [ ('all', 'All'), ('images', 'Images'), ('videos', 'Videos'), ('gifs', 'GIFs') ]
 # the tabs after them, each shown while an output has its status
 STATUS_TABS = [ ('errors', 'Errors'), ('nsfw', 'NSFW'), ('skipped', 'Skipped') ]
 TABS = TYPE_TABS + STATUS_TABS
-TAB_STATUSES = { 'failed': 'errors', 'blocked': 'nsfw', 'skip': 'nsfw', 'skipped': 'skipped' }
+TAB_STATUSES = { 'failed': 'errors', 'blocked': 'nsfw', 'skip': 'nsfw', 'skipped': 'skipped', 'noface': 'skipped' }
 # what the start button says on a status tab, NSFW has nothing to run again so it is grayed out there
 STATUS_TAB_RUNS = { 'errors': 'Retry Errors', 'skipped': 'Run Skipped' }
 # the start button's tooltip, and the one on the NSFW tab
@@ -489,7 +492,7 @@ class OutputDelegate(ListItemDelegate):
 		elif status == 'running':
 			self.draw_ring(painter, rect.x(), rect.y() + rect.height() / 2, item.get('progress', 0.0))
 			words = self.page.progress_words(item)
-		elif status == 'skipped':
+		elif status in [ 'skipped', 'noface' ]:
 			FluentIcon.SYNC.render(painter, self.mark_rect(option.rect).adjusted(6, 6, -6, -6).toRect(), fill = dark if isDarkTheme() else light)
 		elif mark:
 			painter.setPen(QColor(dark if isDarkTheme() else light) if light else themeColor())
@@ -566,6 +569,9 @@ class BatchPage(SourceSelection, QWidget):
 		self.pairs_count = 0
 		# nsfw check results by target, from NSFW Check or from confirming refused images after a batch
 		self.check_results : Dict[str, Dict[str, Any]] = {}
+		# the target folder's files being copied into a form facefusion reads (see folder_targets), and those that could not be
+		self.converting_files = False
+		self.conversion_failed : set = set()
 		self.current = -1
 		# the running output's line in the status, the percent follows it
 		self.run_task = ''
@@ -573,6 +579,12 @@ class BatchPage(SourceSelection, QWidget):
 		self.confirming = False
 		# Run Batch checks the targets the nsfw check has not seen yet before the first output
 		self.prechecking = False
+		# then it looks for faces in the targets, whether one has any by target and face settings (see face_key)
+		self.face_checking = False
+		self.face_queue : List[str] = []
+		self.face_total = 0
+		self.face_word = ''
+		self.face_results : Dict[Tuple, bool] = {}
 		self.stopped = False
 		# the time the batch started, the clock counts up from it while it runs
 		self.run_started = 0.0
@@ -662,6 +674,7 @@ class BatchPage(SourceSelection, QWidget):
 		self.face_probe = FaceProbe(session, self)
 		self.face_probe.scanned.connect(self.on_faces_scanned)
 		self.face_probe.loading.connect(self.on_faces_loading)
+		self.face_probe.people_found.connect(self.on_face_check_result)
 		self.faces_timer = QTimer(self)
 		self.faces_timer.setSingleShot(True)
 		self.faces_timer.setInterval(250)
@@ -1142,7 +1155,7 @@ class BatchPage(SourceSelection, QWidget):
 		# the nsfw checks before and after a batch cannot pause, Free Memory needs a frozen output
 		self.free_button.setEnabled(self.running and self.paused and self.current >= 0 and busy)
 		if self.running:
-			self.start_button.setEnabled(not self.prechecking and not self.confirming)
+			self.start_button.setEnabled(not self.prechecking and not self.confirming and not self.face_checking)
 			self.start_button.setIcon(FluentIcon.PLAY if self.paused else FluentIcon.PAUSE)
 			self.start_button.setText('Resume' if self.paused else 'Pause')
 			self.start_button.setToolTip('Go on with the batch where it was paused' if self.paused else 'Pause the batch right where it is, the output being made goes on from the same frame on Resume')
@@ -1308,7 +1321,7 @@ class BatchPage(SourceSelection, QWidget):
 
 	def can_run_alone(self, item : Dict[str, Any]) -> bool:
 		"""whether the play button of a row has something to do, an output the running batch makes anyway has none"""
-		if self.prechecking:
+		if self.prechecking or self.face_checking:
 			return False
 		return not (self.running and not item.get('status') and (not self.run_only or self.run_key(item) in self.run_only))
 
@@ -1365,7 +1378,14 @@ class BatchPage(SourceSelection, QWidget):
 			self.session.notify.emit('info', 'Batch is running', 'Add files once the batch has finished or is stopped.')
 			return
 		folders = [ path for path in paths if os.path.isdir(path) ]
-		paths = [ path if path in folders else usable_path(path) for path in paths ]
+		# a flash video or animated webp is copied off the ui thread first
+		self.session.convert_files([ path for path in paths if path not in folders ], lambda files: self.add_usable_target_files(folders + files))
+
+	def add_usable_target_files(self, paths : List[str]) -> None:
+		if self.running:
+			self.session.notify.emit('info', 'Batch is running', 'Add files once the batch has finished or is stopped.')
+			return
+		folders = [ path for path in paths if os.path.isdir(path) ]
 		files = [ path for path in paths if os.path.isfile(path) and media_kind(path) in [ 'image', 'video' ] ]
 		rejected = [ path for path in paths if path not in folders and path not in files ]
 		if rejected:
@@ -1563,6 +1583,11 @@ class BatchPage(SourceSelection, QWidget):
 				self.preview_label.setText('Waiting for FaceFusion to finish…')
 			return
 		self.preview_waiting = False
+		if not self.session.facefusion_video_ready(item.get('target')):
+			# a gif's frame is read from its video, made off the ui thread first
+			self.preview_label.setText('Preparing %s…' % os.path.basename(item.get('target')))
+			self.session.prepare_facefusion_video(item.get('target'), self.run_preview)
+			return
 		frame = self.scaled_frame(item)
 		run_frame = self.run_frame(item)
 		if frame is None or run_frame is None:
@@ -1780,9 +1805,27 @@ class BatchPage(SourceSelection, QWidget):
 
 	def folder_targets(self) -> List[str]:
 		pattern = self.target_pattern()
+		if not pattern:
+			return []
+		paths = sorted(glob.glob(pattern))
+		# an avif counts as its png copy, copies not made yet are made off the ui thread and join the list once they are
+		pending = [ path for path in paths if path not in self.conversion_failed and needs_conversion([ path ]) ]
+		if pending:
+			self.convert_folder_files(pending)
 		# All files also matches text files and the like, only images and videos can be targets
-		# an avif counts as its png copy
-		return [ path for path in map(usable_path, sorted(glob.glob(pattern))) if media_kind(path) in [ 'image', 'video' ] ] if pattern else []
+		return [ path for path in map(usable_path, (path for path in paths if path not in pending)) if media_kind(path) in [ 'image', 'video' ] ]
+
+	def convert_folder_files(self, paths : List[str]) -> None:
+		if self.converting_files:
+			return
+		self.converting_files = True
+		self.session.convert_files(paths, lambda copies: self.on_folder_files_converted(paths, copies))
+
+	def on_folder_files_converted(self, paths : List[str], copies : List[str]) -> None:
+		self.converting_files = False
+		# a copy that could not be made is not tried again on every refresh
+		self.conversion_failed.update(path for path, copy in zip(paths, copies) if path == copy)
+		self.refresh_matches(True)
 
 	def targets(self) -> List[str]:
 		"""the files of the target folder, then the added files that still exist and are not in it"""
@@ -2048,7 +2091,7 @@ class BatchPage(SourceSelection, QWidget):
 		selected = len(self.selected_rows())
 		if selected:
 			parts.append('%d selected' % selected)
-		for status, words in [ ('running', 'running'), ('done', 'done'), ('failed', 'failed'), ('blocked', 'NSFW skipped'), ('skip', 'NSFW, will be skipped'), ('skipped', 'skipped') ]:
+		for status, words in [ ('running', 'running'), ('done', 'done'), ('failed', 'failed'), ('blocked', 'NSFW skipped'), ('skip', 'NSFW, will be skipped'), ('skipped', 'skipped'), ('noface', 'no face detected') ]:
 			count = statuses.count(status)
 			if count:
 				parts.append('%d %s' % (count, words))
@@ -2209,15 +2252,89 @@ class BatchPage(SourceSelection, QWidget):
 		return bool(box.exec())
 
 	def run_batch(self) -> None:
+		if self.check_faces():
+			return
+		args = self.face_args()
 		for item in self.items:
 			if self.selected_only and self.run_key(item) not in self.selected_only:
 				continue
 			item.pop('reason', None)
 			item['retried'] = self.status_tab(item)
-			# targets the nsfw check flagged would only be refused, so they are not run
-			item['status'] = 'blocked' if self.item_status(item) == 'skip' else ''
+			# targets the nsfw check flagged would only be refused, so they are not run, nor ones without a face
+			if self.item_status(item) == 'skip':
+				item['status'] = 'blocked'
+			else:
+				item['status'] = 'noface' if self.face_results.get(self.face_key(item.get('target'), args)) is False else ''
 		self.run_only = set(self.selected_only)
 		self.begin_run()
+
+	# face check before the batch
+
+	def face_args(self) -> Tuple:
+		return tuple(self.session.option_args(self.run_values(), FACE_GROUPS))
+
+	@staticmethod
+	def face_key(target : str, args : Tuple) -> Tuple:
+		try:
+			modified = os.path.getmtime(target)
+		except OSError:
+			modified = 0.0
+		return target, modified, args
+
+	def check_faces(self) -> bool:
+		"""looks for faces in the targets about to run that were not looked at with these face settings yet, True while it
+		does, it calls run_batch again once done"""
+		if not self.session.is_configured() or not self.session.schema:
+			return False
+		args = self.face_args()
+		targets = sorted({ item.get('target') for item in self.items if (not self.selected_only or self.run_key(item) in self.selected_only) and self.item_status(item) != 'skip' })
+		self.face_queue = [ target for target in targets if self.face_key(target, args) not in self.face_results ]
+		if not self.face_queue:
+			return False
+		self.face_checking = True
+		self.face_total = len(self.face_queue)
+		self.face_word = self.targets_word(self.face_queue)
+		self.running = True
+		self.stopped = False
+		self.progress.setValue(0)
+		self.progress.resume()
+		self.on_busy_changed(self.session.runner.is_running(), self.session.task)
+		self.check_next_face()
+		return True
+
+	def check_next_face(self) -> None:
+		if not self.face_queue:
+			self.face_checking = False
+			self.progress.setValue(0)
+			# let the probe's listeners see the result before the first output starts
+			QTimer.singleShot(0, self.run_batch)
+			return
+		target = self.face_queue[0]
+		done = self.face_total - len(self.face_queue)
+		self.progress.setValue(int(done / max(self.face_total, 1) * 1000))
+		self.status_label.setText('Looking for faces in the %s before the batch  ·  %d of %d' % (self.face_word, done + 1, self.face_total))
+		args = self.face_args()
+		self.face_probe.find_people(target, None, None, list(args), '', tag = ('batch faces', self.face_key(target, args)), samples = FACE_CHECK_SAMPLES)
+
+	def on_face_check_result(self, result : dict) -> None:
+		tag = result.get('tag')
+		if not self.face_checking or not isinstance(tag, tuple) or tag[0] != 'batch faces':
+			return
+		key = tag[1]
+		# a check that failed leaves the target to run, facefusion says what is wrong then
+		self.face_results[key] = bool(result.get('people')) or bool(result.get('error'))
+		self.face_queue = [ target for target in self.face_queue if target != key[0] ]
+		self.check_next_face()
+
+	def stop_face_check(self) -> None:
+		"""Stop while looking for faces, the probe's answer to the target it looks at is let go"""
+		self.face_checking = False
+		self.face_queue = []
+		self.running = False
+		self.stop_clock()
+		self.progress.pause()
+		self.status_label.setText('Face check stopped')
+		self.on_busy_changed(self.session.runner.is_running(), self.session.task)
 
 	def start_clock(self) -> None:
 		self.run_started = time.monotonic()
@@ -2250,6 +2367,9 @@ class BatchPage(SourceSelection, QWidget):
 		self.run_next()
 
 	def stop(self) -> None:
+		if self.face_checking:
+			self.stop_face_check()
+			return
 		self.stopped = True
 		# with its memory freed a paused batch runs nothing, what runs now may be someone else's
 		freed = self.paused and self.current < 0
@@ -2267,7 +2387,7 @@ class BatchPage(SourceSelection, QWidget):
 	def toggle_pause(self) -> None:
 		if self.paused:
 			self.resume_batch()
-		elif not self.prechecking and not self.confirming:
+		elif not self.prechecking and not self.confirming and not self.face_checking:
 			self.pause_batch()
 
 	def pause_batch(self) -> None:
@@ -2366,7 +2486,7 @@ class BatchPage(SourceSelection, QWidget):
 		self.refresh_start_button()
 		self.check_button.setEnabled(not busy and not self.running)
 		# a batch paused with its memory freed runs nothing, Stop still ends it
-		self.stop_button.setEnabled(self.running and (busy or self.paused))
+		self.stop_button.setEnabled(self.running and (busy or self.paused or self.face_checking))
 		self.skip_button.setEnabled(busy and self.running and self.current >= 0 and not self.confirming and not self.prechecking)
 
 	def on_progress(self, title : str, ratio : float, status : str) -> None:
@@ -2443,12 +2563,14 @@ class BatchPage(SourceSelection, QWidget):
 			QTimer.singleShot(0, self.run_preview)
 		# a run of some outputs counts only those, the other rows keep what earlier runs made
 		ran = [ item for item in self.items if not self.run_only or self.run_key(item) in self.run_only ]
-		counts = { status: sum(1 for item in ran if item.get('status') == status) for status in [ 'done', 'skipped', 'blocked', 'failed' ] }
+		counts = { status: sum(1 for item in ran if item.get('status') == status) for status in [ 'done', 'skipped', 'noface', 'blocked', 'failed' ] }
 		# the made files take their names, Saves As and the rows not run yet move on to the next free ones
 		self.refresh_matches(True)
 		parts = [ '%d done' % counts.get('done') ]
 		if counts.get('skipped'):
 			parts.append('%d skipped' % counts.get('skipped'))
+		if counts.get('noface'):
+			parts.append('%d skipped: No face detected' % counts.get('noface'))
 		if counts.get('blocked'):
 			parts.append('%d skipped: NSFW content detected' % counts.get('blocked'))
 		if counts.get('failed'):

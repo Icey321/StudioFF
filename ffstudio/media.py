@@ -2,8 +2,9 @@ import hashlib
 import os
 import shutil
 import subprocess
+import threading
 from functools import lru_cache
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 import cv2
 import numpy
@@ -38,44 +39,65 @@ def media_kind(path : str) -> Optional[str]:
 	return None
 
 
-def usable_path(path : str) -> str:
-	"""the path itself, or for an avif, heic, jfif or flash video a copy with the same name in the converted folder, made once
-	and kept. the copy is what studio shows and runs, so the result is a png named after the avif, an mkv named after the flv.
-	the path itself when it cannot be made"""
+def copy_location(path : str) -> Optional[Tuple[str, str]]:
+	"""the folder and path usable_path keeps the copy of this file at, None for a file used as it is"""
 	# an animated webp runs as a video, studio turns the result back into a webp (see gif_run.py)
 	copy_extension = '.mp4' if is_animated_webp(path) else CONVERTED_EXTENSIONS.get(extension(path))
 	if not copy_extension:
-		return path
+		return None
 	from ffstudio.config import CONVERTED_DIR
 
 	try:
 		modified = os.path.getmtime(path)
 	except OSError:
-		return path
+		return None
 	# a folder per file and version (video copies of animated webps made before the see-through parts were kept differ), so two photo.avif files in different folders do not meet
 	folder = os.path.join(CONVERTED_DIR, hashlib.sha1(('%s|%f%s' % (os.path.abspath(path), modified, '|alpha' if copy_extension == '.mp4' else '')).encode()).hexdigest()[:16])
-	copy_path = os.path.join(folder, os.path.splitext(os.path.basename(path))[0] + copy_extension)
-	if os.path.isfile(copy_path):
+	return folder, os.path.join(folder, os.path.splitext(os.path.basename(path))[0] + copy_extension)
+
+
+def needs_conversion(paths : List[str]) -> bool:
+	"""whether usable_path would have to make a copy of any of these files first, which can take a while for a video"""
+	return any(location and not os.path.isfile(location[1]) for location in (copy_location(path) for path in paths if path and os.path.isfile(path)))
+
+
+# copies are made off the ui thread, two threads asking for the same copy take turns so it is made once
+CONVERT_LOCK = threading.Lock()
+
+
+def usable_path(path : str) -> str:
+	"""the path itself, or for an avif, heic, jfif or flash video a copy with the same name in the converted folder, made once
+	and kept. the copy is what studio shows and runs, so the result is a png named after the avif, an mkv named after the flv.
+	the path itself when it cannot be made"""
+	location = copy_location(path)
+	if not location:
+		return path
+	folder, copy_path = location
+	with CONVERT_LOCK:
+		if os.path.isfile(copy_path):
+			write_original_note(folder, path)
+			return copy_path
+		os.makedirs(folder, exist_ok = True)
+		if not make_copy(path, copy_path):
+			return path
 		write_original_note(folder, path)
-		return copy_path
-	os.makedirs(folder, exist_ok = True)
+	return copy_path
+
+
+def make_copy(path : str, copy_path : str) -> bool:
+	copy_extension = extension(copy_path)
 	if copy_extension == '.jpg':
 		try:
 			shutil.copyfile(path, copy_path + '.part')
 			os.replace(copy_path + '.part', copy_path)
 		except OSError:
-			return path
-	elif copy_extension == '.mkv':
-		if not rewrap_video(path, copy_path):
-			return path
-	elif copy_extension == '.mp4':
-		if not animation_to_video(path, copy_path):
-			return path
-	else:
-		if not convert_image(path, copy_path):
-			return path
-	write_original_note(folder, path)
-	return copy_path
+			return False
+		return True
+	if copy_extension == '.mkv':
+		return rewrap_video(path, copy_path)
+	if copy_extension == '.mp4':
+		return animation_to_video(path, copy_path)
+	return convert_image(path, copy_path)
 
 
 def convert_image(path : str, copy_path : str) -> bool:
@@ -360,15 +382,27 @@ def probe_facefusion_video(ffprobe : str, path : str, modified : float) -> Optio
 	return { 'fps': fps, 'frame_total': round(duration * fps), 'width': width, 'height': height, 'color_transfer': entries.get('color_transfer', 'unknown') }
 
 
-def gif_as_video(ffmpeg : str, path : str, work_dir : str) -> Optional[str]:
-	"""the video gif_run.py turns the gif into for facefusion, made once per gif and kept for the next preview"""
-	from ffstudio.gif_run import gif_to_video_args
-
+def gif_video_path(path : str, work_dir : str) -> Optional[str]:
+	"""where gif_as_video keeps the video of this gif"""
 	try:
 		modified = os.path.getmtime(path)
 	except OSError:
 		return None
-	video_path = os.path.join(work_dir, 'gif_%s.mp4' % hashlib.sha1(('%s|%f' % (os.path.abspath(path), modified)).encode()).hexdigest()[:16])
+	return os.path.join(work_dir, 'gif_%s.mp4' % hashlib.sha1(('%s|%f' % (os.path.abspath(path), modified)).encode()).hexdigest()[:16])
+
+
+def gif_as_video(ffmpeg : str, path : str, work_dir : str) -> Optional[str]:
+	"""the video gif_run.py turns the gif into for facefusion, made once per gif and kept for the next preview"""
+	video_path = gif_video_path(path, work_dir)
+	if not video_path:
+		return None
+	with CONVERT_LOCK:
+		return make_gif_video(ffmpeg, path, work_dir, video_path)
+
+
+def make_gif_video(ffmpeg : str, path : str, work_dir : str, video_path : str) -> Optional[str]:
+	from ffstudio.gif_run import gif_to_video_args
+
 	if os.path.isfile(video_path):
 		return video_path
 	os.makedirs(work_dir, exist_ok = True)
