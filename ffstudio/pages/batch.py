@@ -15,12 +15,12 @@ from ffstudio.config import APP_DIR, PREVIEW_DIR
 from ffstudio.faces import FACE_CHECK_SAMPLES, FACE_GROUPS, MASK_GROUPS, FaceProbe, describe_faces, describe_landmarks, describe_mask, face_landmarks, face_tag, faces_text_color, no_face, read_mask
 from ffstudio.media import VideoReader, animation_extension, browse_dir, extension, is_animation, format_length, format_seconds, format_timecode, media_kind, needs_conversion, read_frame, thumbnail, to_pixmap, usable_path, video_length, write_image
 from ffstudio.nsfw import BLOCKED_TITLE, NsfwDialog, show_blocked_bar
-from ffstudio.option_widgets import unused_locks
+from ffstudio.option_widgets import setting_locks, unused_locks
 from ffstudio.output_name import AUTOMATIC_TEMPLATE, build_output, unknown_tags
 from ffstudio.pages.models import format_size
 from ffstudio.pages.setup import SYSTEM_GROUPS, form_row, section_card
 from ffstudio.platforms import show_in_folder
-from ffstudio.pages.studio import LIVE_IGNORED_GROUPS, PREVIEW_MAX_SIDE, NameTagsView, SettingsColumn, SourceCard, SourceSelection, StudioPage, elastic, estimated_progress, preview_step_floor, run_tag_values, tool_button
+from ffstudio.pages.studio import LOCK_DRIVERS, LIVE_IGNORED_GROUPS, PREVIEW_MAX_SIDE, NameTagsView, SettingsColumn, SourceCard, SourceSelection, StudioPage, elastic, estimated_progress, preview_step_floor, run_tag_values, tool_button
 from ffstudio.session import OptionStore, Session, describe_error, folder_is_writable
 from ffstudio.widgets import DriveLabel, IconCountButton, PreviewView, Splitter, add_edit_button, attach_landmarks_cycle, collect_drop_paths, guard_wheel, landmarks_mode, with_drive_bar
 
@@ -931,6 +931,8 @@ class BatchPage(SourceSelection, QWidget):
 		self.store.value_changed.connect(self.on_value_changed)
 		self.store.schema_changed.connect(self.refresh_timer.start)
 		self.store.schema_changed.connect(self.schedule_preview)
+		# copied options or a preset change many values at once
+		self.store.schema_changed.connect(self.refresh_locks)
 		self.source_card.refresh(self.source_paths)
 		self.refresh_matches()
 		# only once the page is built, the splash lets timers fire while it builds
@@ -952,11 +954,17 @@ class BatchPage(SourceSelection, QWidget):
 		copy_button.installEventFilter(ToolTipFilter(copy_button))
 		copy_button.clicked.connect(self.copy_studio_settings)
 		self.settings_column = SettingsColumn(self.store, self.splitter, (copy_button,), expansion_key = 'batch_groups_expanded', preset_key = 'batch_preset', order_key = 'batch_group_order')
-		# run_values always runs in many mode, the mode buttons show it and the rows it does not read are grayed out
+		self.refresh_locks()
+		return self.settings_column
+
+	def refresh_locks(self) -> None:
+		"""run_values always runs in many mode, the mode buttons show it and the rows it does not read are grayed out, so
+		are the rows the processors and models leave unused. the targets are a mix of images and videos, those count"""
 		locks = unused_locks(BATCH_SELECTOR_MODE)
 		locks['face_selector_mode'] = (BATCH_SELECTOR_MODE, 'Batch always uses Many')
+		if self.store.schema:
+			locks.update(setting_locks(self.store.schema, self.store.values))
 		self.settings_column.set_locks(locks)
-		return self.settings_column
 
 	def show_settings(self, shown : bool) -> None:
 		self.settings_column.setVisible(shown)
@@ -1114,6 +1122,8 @@ class BatchPage(SourceSelection, QWidget):
 			self.schedule_preview()
 		if not schema or group in FACE_GROUPS + MASK_GROUPS or dest == 'processors':
 			self.schedule_face_scan()
+		if dest in LOCK_DRIVERS or dest.endswith('_model'):
+			self.refresh_locks()
 
 	def open_output_folder(self) -> None:
 		StudioPage.open_folder(self.output_dir())

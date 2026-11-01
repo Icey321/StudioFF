@@ -52,6 +52,68 @@ def unused_locks(mode : str, reason : str = '') -> Dict[str, Tuple[Any, str]]:
 	return { dest: (KEEP_VALUE, reason or 'Not used in %s mode' % mode.capitalize()) for dest in UNUSED_BY_MODE.get(mode, []) }
 
 
+# the processors that work on faces, the face groups do nothing without one of them on
+FACE_PROCESSORS = [ 'age_modifier', 'deep_swapper', 'expression_restorer', 'face_debugger', 'face_editor', 'face_enhancer', 'face_swapper', 'lip_syncer' ]
+FACE_OPTION_GROUPS = [ 'face_detector', 'face_aligner', 'face_selector', 'face_tracker', 'face_masker' ]
+# the face processors that read each face mask option (facefusion processors/modules/*/core.py)
+MASK_TYPE_USERS = [ processor for processor in FACE_PROCESSORS if processor != 'face_editor' ]
+MASK_SHAPE_USERS = [ 'deep_swapper', 'face_debugger', 'face_swapper' ]
+MASK_USERS =\
+{
+	'face_mask_types': MASK_TYPE_USERS,
+	'face_occluder_model': MASK_TYPE_USERS,
+	'face_mask_blur': [ processor for processor in FACE_PROCESSORS if processor != 'face_debugger' ],
+	'face_mask_padding': MASK_SHAPE_USERS + [ 'lip_syncer' ],
+	'face_mask_areas': MASK_SHAPE_USERS,
+	'face_mask_regions': MASK_SHAPE_USERS,
+	'face_parser_model': MASK_SHAPE_USERS
+}
+# face swapper models that take the source as a picture, the weight that mixes in the target face is not used
+PICTURE_SWAPPERS = [ 'blendswap', 'uniface' ]
+# only codeformer has a weight input, the other face enhancer models ignore the weight
+WEIGHTED_ENHANCERS = [ 'codeformer' ]
+# the video encoders facefusion passes a preset to
+PRESET_ENCODERS = [ 'libx264', 'libx264rgb', 'libx265', 'h264_nvenc', 'hevc_nvenc', 'h264_amf', 'hevc_amf', 'h264_qsv', 'hevc_qsv' ]
+# options an image to image run does not read, and the ones only it reads
+VIDEO_OPTIONS = [ 'trim_frame_start', 'trim_frame_end', 'temp_frame_format', 'temp_pixel_format', 'target_frame_amount', 'face_tracker_score', 'workflow_strategy', 'output_audio_encoder', 'output_audio_quality', 'output_audio_volume', 'output_audio_fps', 'output_video_encoder', 'output_video_preset', 'output_video_quality', 'output_video_scale', 'output_video_fps' ]
+IMAGE_OPTIONS = [ 'output_image_quality', 'output_image_scale' ]
+
+
+def setting_locks(schema : Schema, values : Dict[str, Any], output : str = '') -> Dict[str, Tuple[Any, str]]:
+	"""the rows the processors, models and other choices leave unused, grayed out with the reason. output is 'image' or
+	'video' when the target says what the run makes, an image with an audio source makes a video from both and locks nothing"""
+	processors = list(values.get('processors') or [])
+	value = lambda dest: values.get(dest, schema.options.get(dest, {}).get('default'))
+	locks : Dict[str, Tuple[Any, str]] = {}
+	face_processors = [ processor for processor in processors if processor in FACE_PROCESSORS ]
+	if not face_processors:
+		for group in FACE_OPTION_GROUPS:
+			for option in schema.group_options(group):
+				locks[option.get('dest')] = (KEEP_VALUE, 'Only used by face processors')
+	else:
+		users = schema.group_title(face_processors[0]) if len(face_processors) == 1 else 'the face processors that are on'
+		for dest, readers in MASK_USERS.items():
+			if not any(processor in readers for processor in face_processors):
+				locks[dest] = (KEEP_VALUE, 'Not used by %s' % users)
+	swapper_model = str(value('face_swapper_model') or '')
+	if any(swapper_model.startswith(kind) for kind in PICTURE_SWAPPERS):
+		locks['face_swapper_weight'] = (KEEP_VALUE, 'Not used by %s' % swapper_model)
+	if value('face_enhancer_model') not in WEIGHTED_ENHANCERS:
+		locks['face_enhancer_weight'] = (KEEP_VALUE, 'Only used by codeformer')
+	if 'lip_syncer' not in processors:
+		locks['voice_extractor_model'] = (KEEP_VALUE, 'Only used by %s' % schema.group_title('lip_syncer'))
+	if list(value('execution_providers') or []) == [ 'cpu' ]:
+		locks['execution_device_ids'] = (KEEP_VALUE, 'Not used by cpu')
+	encoder = value('output_video_encoder')
+	if encoder not in PRESET_ENCODERS:
+		locks['output_video_preset'] = (KEEP_VALUE, 'Not used by %s' % encoder)
+	if output == 'image':
+		locks.update({ dest: (KEEP_VALUE, 'Only used for a video target') for dest in VIDEO_OPTIONS })
+	if output == 'video':
+		locks.update({ dest: (KEEP_VALUE, 'Only used for an image target') for dest in IMAGE_OPTIONS })
+	return locks
+
+
 def pretty_choice(value : Any) -> str:
 	return str(value)
 
@@ -726,7 +788,7 @@ class OptionRow(QFrame):
 			ticked = self.values.get(driver, self.schema.resolve(driver, self.values).get('default')) or []
 			available = choice in ticked
 			driver_label = self.schema.split_label(self.schema.options.get(driver) or {})[0]
-			tip = 'Only used while %s is ticked in %s' % (pretty_choice(choice), driver_label)
+			tip = 'Only used while %s is checked in %s' % (pretty_choice(choice), driver_label)
 		if self.lock:
 			available, tip = False, self.lock[1]
 		self.control_area.setEnabled(available)

@@ -18,7 +18,7 @@ from ffstudio.faces import FACE_CHECK_SAMPLES, FACE_GROUPS, MASK_GROUPS, FacePro
 from ffstudio.media import VideoReader, animation_extension, browse_dir, is_animated_webp, is_animation, format_length, format_seconds, format_timecode, media_kind, needs_conversion, read_frame, read_image, thumbnail, to_pixmap, usable_path, write_image
 from ffstudio.nsfw import BLOCKED_STATUS, NsfwDialog, describe_result, show_blocked_bar
 from ffstudio.option_panel import FavoritesPanel, OptionPanel
-from ffstudio.option_widgets import FILTER_OPTIONS, KEEP_VALUE, unused_locks
+from ffstudio.option_widgets import FILTER_OPTIONS, KEEP_VALUE, setting_locks, unused_locks
 from ffstudio.output_name import AUTOMATIC_TEMPLATE, NAME_EXAMPLES, NAME_TAGS, build_output, build_output_path, unknown_tags
 from ffstudio.platforms import show_in_folder
 from ffstudio.presets import PresetBar
@@ -27,6 +27,8 @@ from ffstudio.widgets import DisabledToolTipFilter, DriveLabel, GroupChip, Previ
 
 STUDIO_GROUPS = [ 'face_selector', 'face_masker', 'face_detector', 'face_aligner', 'face_tracker', 'output_creation', 'frame_extraction', 'frame_distribution', 'voice_extractor', 'workflow' ]
 # settings that cannot change how a single preview frame looks
+# options whose value grays out other rows, besides the models (refresh_locks)
+LOCK_DRIVERS = [ 'face_selector_mode', 'processors', 'execution_providers', 'output_video_encoder' ]
 LIVE_IGNORED_GROUPS = [ 'paths', 'output_creation', 'frame_extraction', 'frame_distribution', 'voice_extractor', 'workflow', 'execution', 'download', 'memory', 'misc' ]
 # bigger frames are previewed on a copy this many pixels high (or wide, when upright), which is a little quicker
 PREVIEW_MAX_SIDE = 1080
@@ -1090,7 +1092,7 @@ class StudioPage(SourceSelection, QWidget):
 		# right column: search, processors + options
 		self.settings_column = SettingsColumn(session, self.splitter, expansion_key = 'studio_groups_expanded', preset_key = 'studio_preset', order_key = 'studio_group_order')
 		self.settings_column.setMinimumWidth(340)
-		self.refresh_selector_locks()
+		self.refresh_locks()
 		self.splitter.addWidget(self.settings_column)
 		self.splitter.setStretchFactor(0, 11)
 		self.splitter.setStretchFactor(1, 9)
@@ -1275,6 +1277,8 @@ class StudioPage(SourceSelection, QWidget):
 		# a new selection too, Selected sources in the dropdowns shows the faces in use
 		self.mapping_card.refresh_sources()
 		self.refresh_name_preview()
+		# an audio source turns an image target into a video
+		self.refresh_locks()
 		# a new or renamed group changes no run
 		if change not in [ 'names', 'groups' ]:
 			self.schedule_live_preview()
@@ -1314,6 +1318,7 @@ class StudioPage(SourceSelection, QWidget):
 		self.show_view('target')
 		self.target_card.load(path)
 		self.load_mapping()
+		self.refresh_locks()
 		self.auto_check_content()
 		self.schedule_live_preview()
 
@@ -1396,6 +1401,7 @@ class StudioPage(SourceSelection, QWidget):
 	def on_schema_changed(self) -> None:
 		schema = self.session.schema
 		self.version_label.setText(('FaceFusion %s' % schema.version) if schema else 'FaceFusion is not set up yet — open Settings')
+		self.refresh_locks()
 
 	def on_value_changed(self, dest : str, _ : object) -> None:
 		if self.session.schema and self.session.schema.options.get(dest, {}).get('group') not in LIVE_IGNORED_GROUPS and dest not in [ 'reference_frame_index', 'trim_frame_start', 'trim_frame_end' ]:
@@ -1406,25 +1412,38 @@ class StudioPage(SourceSelection, QWidget):
 			self.target_card.refresh_markers()
 		if dest == 'reference_frame_index' or self.session.schema and self.session.schema.options.get(dest, {}).get('group') in FACE_GROUPS + MASK_GROUPS:
 			self.schedule_face_scan()
-		if dest in [ 'face_selector_mode', 'processors' ]:
-			self.refresh_selector_locks()
+		if dest in LOCK_DRIVERS or dest.endswith('_model'):
+			self.refresh_locks()
 
-	def refresh_selector_locks(self) -> None:
-		"""grays out the face selector rows a run will not read: the ones Face Mapping decides while it maps someone,
-		otherwise the ones the chosen mode leaves unused. the mode buttons show the mode Face Mapping runs in"""
+	def refresh_locks(self) -> None:
+		"""grays out the rows a run will not read. the face selector rows: the ones Face Mapping decides while it maps
+		someone, otherwise the ones the chosen mode leaves unused, the mode buttons show the mode Face Mapping runs in.
+		then the rows the processors, models and the target leave unused (setting_locks)"""
 		if not hasattr(self, 'settings_column'):
 			return
 		passes = self.mapping_passes()
 		if not passes:
-			self.settings_column.set_locks(unused_locks(self.session.values.get('face_selector_mode') or 'reference'))
-			return
-		# everyone with the same sources is one run in many mode, otherwise reference runs (see launch_step)
-		mode = 'many' if passes[0].get('many') else 'reference'
-		unused = [ 'face_selector_order' ] + FILTER_OPTIONS + ([ 'reference_face_distance' ] if mode == 'many' else [])
-		locks = { dest: (KEEP_VALUE, 'Not used by Face Mapping') for dest in unused }
-		locks.update({ dest: (KEEP_VALUE, 'Face Mapping picks each face') for dest in [ 'reference_face_position', 'reference_frame_index' ] })
-		locks['face_selector_mode'] = (mode, 'Set by Face Mapping')
+			locks = unused_locks(self.session.values.get('face_selector_mode') or 'reference')
+		else:
+			# everyone with the same sources is one run in many mode, otherwise reference runs (see launch_step)
+			mode = 'many' if passes[0].get('many') else 'reference'
+			unused = [ 'face_selector_order' ] + FILTER_OPTIONS + ([ 'reference_face_distance' ] if mode == 'many' else [])
+			locks = { dest: (KEEP_VALUE, 'Not used by Face Mapping') for dest in unused }
+			locks.update({ dest: (KEEP_VALUE, 'Face Mapping picks each face') for dest in [ 'reference_face_position', 'reference_frame_index' ] })
+			locks['face_selector_mode'] = (mode, 'Set by Face Mapping')
+		if self.session.schema:
+			locks.update(setting_locks(self.session.schema, self.session.values, self.output_kind()))
 		self.settings_column.set_locks(locks)
+
+	def output_kind(self) -> str:
+		"""'image' or 'video', what the run makes of the target. an image with an audio source makes a video and both
+		kinds of output options count, it and no target give ''"""
+		kind = media_kind(self.target_path) if self.target_path else None
+		if kind == 'image':
+			if is_animated_webp(self.target_path):
+				return 'video'
+			return '' if any(media_kind(path) == 'audio' for path in self.active_sources()) else 'image'
+		return kind or ''
 
 	# running
 

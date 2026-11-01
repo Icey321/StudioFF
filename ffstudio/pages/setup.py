@@ -12,6 +12,7 @@ from ffstudio import APP_REPOSITORY, APP_VERSION, TESTED_FACEFUSION_COMMIT, TEST
 from ffstudio.environment import PREREQUISITES, check_dependencies, compare_github_commits, create_process_environment, fetch_github_build, fetch_latest_release, find_conda, find_conda_base, find_facefusion_folders, find_missing_prerequisites, find_python_candidates, has_nvidia_gpu, is_facefusion_root, is_newer_version, probe_python_version, read_facefusion_build, read_facefusion_version, switch_facefusion_commit, version_tuple, winget_install_args
 from ffstudio.main_window import DEFAULT_ACCENT, apply_theme
 from ffstudio.option_panel import OptionPanel
+from ffstudio.option_widgets import setting_locks
 from ffstudio.platforms import GPU_ONNXRUNTIME, IS_WINDOWS, PYTHON_NAME, conda_env_python, package_install_hint, read_os_version, refresh_path, script_command, venv_python
 from ffstudio.session import MINIMUM_PYTHON, Session
 from ffstudio.updater import download_release, is_git_checkout, start_helper
@@ -271,6 +272,9 @@ class SetupPage(QWidget):
 		self.scroll.setWidget(content)
 
 		session.schema_changed.connect(self.system_panel.rebuild)
+		session.schema_changed.connect(self.refresh_locks)
+		session.value_changed.connect(lambda dest, _: self.refresh_locks() if dest == 'execution_providers' else None)
+		self.refresh_locks()
 		session.schema_changed.connect(self.refresh_status)
 		session.runner.finished.connect(self.on_runner_finished)
 		self.update_checked.connect(self.on_update_checked)
@@ -283,6 +287,11 @@ class SetupPage(QWidget):
 		self.build_read.connect(self.show_installed_build)
 		self.facefusion_switched.connect(self.on_facefusion_switched)
 		self.refresh_status()
+
+	def refresh_locks(self) -> None:
+		# the system rows the other choices leave unused, such as the device ids with only cpu checked
+		if self.session.schema:
+			self.system_panel.set_locks(setting_locks(self.session.schema, self.session.values))
 
 	# search
 

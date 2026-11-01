@@ -1,8 +1,9 @@
 from typing import Any, Dict, List, Optional, Tuple
 
-from PySide6.QtCore import QEvent, QObject, QPoint, Qt
-from PySide6.QtWidgets import QAbstractScrollArea, QApplication, QVBoxLayout, QWidget
-from qfluentwidgets import CaptionLabel, FluentIcon, ToolTipFilter
+from PySide6.QtCore import QEasingCurve, QEvent, QObject, QPoint, QPropertyAnimation, QRect, QRectF, Qt, QTimer
+from PySide6.QtGui import QColor, QPainter, QPen
+from PySide6.QtWidgets import QAbstractScrollArea, QApplication, QGraphicsDropShadowEffect, QGraphicsOpacityEffect, QLabel, QVBoxLayout, QWidget
+from qfluentwidgets import CaptionLabel, FluentIcon, ToolTipFilter, themeColor
 
 from ffstudio import splash
 from ffstudio.option_widgets import PAIRED_PARTNERS, REQUIRED_CHOICES, OptionRow
@@ -41,6 +42,21 @@ def merge_order(groups : List[str], saved : List[str]) -> List[str]:
 	return order
 
 
+class DropSpot(QWidget):
+	"""the open spot a dragged group lands in, a dashed outline in the accent color"""
+
+	def paintEvent(self, _) -> None:
+		painter = QPainter(self)
+		painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+		accent = themeColor()
+		fill = QColor(accent)
+		fill.setAlpha(28)
+		pen = QPen(accent, 1.5, Qt.PenStyle.DashLine)
+		painter.setPen(pen)
+		painter.setBrush(fill)
+		painter.drawRoundedRect(QRectF(self.rect()).adjusted(1, 1, -1, -1), 8, 8)
+
+
 class OptionPanel(QWidget):
 	"""a column of collapsible option groups generated from the facefusion schema"""
 
@@ -52,6 +68,18 @@ class OptionPanel(QWidget):
 		self.order_key = order_key
 		self.header_cards : Dict[QWidget, CollapsibleCard] = {}
 		self.drag : Optional[Dict[str, Any]] = None
+		self.drop_spot = DropSpot(self)
+		self.drop_spot.hide()
+		self.ghost = QLabel(self)
+		shadow = QGraphicsDropShadowEffect(self.ghost)
+		shadow.setBlurRadius(28)
+		shadow.setOffset(0, 6)
+		shadow.setColor(QColor(0, 0, 0, 110))
+		self.ghost.setGraphicsEffect(shadow)
+		self.ghost.hide()
+		self.scroll_timer = QTimer(self)
+		self.scroll_timer.setInterval(30)
+		self.scroll_timer.timeout.connect(self.scroll_while_dragging)
 		# rows get a star that adds them to the favorites box
 		self.favorites = favorites
 		# rows keep their description behind an (i) instead of under the label
@@ -85,7 +113,7 @@ class OptionPanel(QWidget):
 		self.rows.clear()
 		self.group_rows.clear()
 		self.header_cards.clear()
-		self.drag = None
+		self.end_drag()
 		schema = self.session.schema
 		if not schema:
 			return
@@ -121,7 +149,7 @@ class OptionPanel(QWidget):
 		return merge_order(self.groups, saved)
 
 	def eventFilter(self, watched : QObject, event : QEvent) -> bool:
-		"""a group is dragged by its title, the others make room as it passes them. a click still opens or closes it"""
+		"""a group is dragged by its title, the others slide aside to open a spot for it. a click still opens or closes it"""
 		card = self.header_cards.get(watched)
 		if card is None or self.filter_text:
 			return super().eventFilter(watched, event)
@@ -135,45 +163,150 @@ class OptionPanel(QWidget):
 					return False
 				self.drag['moved'] = True
 				watched.setCursor(Qt.CursorShape.ClosedHandCursor)
+				self.lift(card)
+			self.drag['point'] = point
 			self.drag_to(card, point)
 			return True
 		elif kind == QEvent.Type.MouseButtonRelease and self.drag and self.drag.get('card') is card:
 			moved = self.drag.get('moved')
-			self.drag = None
 			if moved:
 				watched.setCursor(Qt.CursorShape.PointingHandCursor)
+				self.drop(card)
 				self.save_order()
+			self.drag = None
+			if moved:
 				# the card would take the release as a click on its title and open or close
 				return True
 		return super().eventFilter(watched, event)
 
-	def drag_to(self, card : CollapsibleCard, point : QPoint) -> None:
-		y = self.mapFromGlobal(point).y()
-		others = [ other for other in self.layout_cards() if other is not card and other.isVisible() ]
-		# in front of the first group whose middle is below the pointer, else after the last one
-		target = next((other for other in others if y < other.geometry().center().y()), None)
-		current = self.layout_.indexOf(card)
-		index = self.layout_.indexOf(target) if target else self.layout_.indexOf(others[-1]) + 1 if others else current
-		if index > current:
-			index -= 1
-		if index != current:
-			self.layout_.removeWidget(card)
-			self.layout_.insertWidget(index, card)
-		self.scroll_near_edge(point)
+	def lift(self, card : CollapsibleCard) -> None:
+		"""the groups leave the layout while one is dragged, it floats with the pointer above a spot the others slide away from"""
+		order = self.layout_cards()
+		shown = [ other for other in order if other.isVisible() ]
+		self.drag.update(
+		{
+			'order': order,
+			'others': [ other for other in shown if other is not card ],
+			'top': min(other.y() for other in shown),
+			'offset': self.mapFromGlobal(self.drag.get('start')).y() - card.y(),
+			'gap': shown.index(card),
+			'targets': {},
+			'animations': {},
+			'minimum': self.minimumHeight()
+		})
+		# the column keeps its height, the layout has nothing in it until the drop
+		self.setMinimumHeight(self.height())
+		for other in order:
+			self.layout_.removeWidget(other)
+		# a solid picture of the group floats above everything, the group itself turns invisible but keeps the mouse
+		self.ghost.setPixmap(self.window().grab(QRect(card.mapTo(self.window(), QPoint(0, 0)), card.size())))
+		self.ghost.setGeometry(card.geometry())
+		self.drop_spot.setGeometry(card.geometry())
+		self.drop_spot.show()
+		self.drop_spot.raise_()
+		self.ghost.show()
+		self.ghost.raise_()
+		hidden = QGraphicsOpacityEffect(card)
+		hidden.setOpacity(0)
+		card.setGraphicsEffect(hidden)
+		self.slide(card, animate = False)
+		self.scroll_timer.start()
 
-	def scroll_near_edge(self, point : QPoint) -> None:
-		"""dragged near the top or bottom of the scroll area, it scrolls to the groups out of sight"""
+	def drag_to(self, card : CollapsibleCard, point : QPoint) -> None:
+		pointer = self.mapFromGlobal(point).y()
+		card.move(card.x(), max(0, min(pointer - self.drag.get('offset'), self.height() - card.height())))
+		self.ghost.move(card.pos())
+		# the spot opens in front of the first group whose middle is below the pointer
+		targets = self.drag.get('targets')
+		gap = sum(1 for other in self.drag.get('others') if targets.get(other, other.y()) + other.height() // 2 < pointer)
+		if gap != self.drag.get('gap'):
+			self.drag['gap'] = gap
+			self.slide(card)
+
+	def slide(self, card : CollapsibleCard, animate : bool = True) -> None:
+		"""moves the other groups up or down so the spot for the dragged one is open"""
+		spacing = self.layout_.spacing()
+		y = self.drag.get('top')
+		places : List[Tuple[QWidget, int]] = []
+		for index, other in enumerate(self.drag.get('others')):
+			if index == self.drag.get('gap'):
+				places.append((self.drop_spot, y))
+				y += card.height() + spacing
+			places.append((other, y))
+			y += other.height() + spacing
+		if self.drag.get('gap') >= len(self.drag.get('others')):
+			places.append((self.drop_spot, y))
+		for widget, top in places:
+			self.drag.get('targets')[widget] = top
+			running = self.drag.get('animations').pop(widget, None)
+			if running:
+				running.stop()
+			if not animate:
+				widget.move(widget.x(), top)
+				continue
+			animation = QPropertyAnimation(widget, b'pos', self)
+			animation.setDuration(180)
+			animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+			animation.setEndValue(QPoint(widget.x(), top))
+			animation.start()
+			self.drag.get('animations')[widget] = animation
+
+	def drop(self, card : CollapsibleCard) -> None:
+		"""the groups go back into the layout in the new order, the dragged one glides into its spot"""
+		for animation in self.drag.get('animations').values():
+			animation.stop()
+		self.scroll_timer.stop()
+		self.drop_spot.hide()
+		self.ghost.hide()
+		others = self.drag.get('others')
+		order = [ other for other in self.drag.get('order') if other is not card ]
+		gap = self.drag.get('gap')
+		if gap < len(others):
+			order.insert(order.index(others[gap]), card)
+		else:
+			order.insert(order.index(others[-1]) + 1 if others else len(order), card)
+		for other in order:
+			self.layout_.addWidget(other)
+		self.setMinimumHeight(self.drag.get('minimum'))
+		floating = card.pos()
+		self.layout_.activate()
+		card.setGraphicsEffect(None)
+		landed = card.pos()
+		card.move(floating)
+		animation = QPropertyAnimation(card, b'pos', self)
+		animation.setDuration(140)
+		animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+		animation.setEndValue(landed)
+		animation.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
+
+	def end_drag(self) -> None:
+		"""a rebuild in the middle of a drag drops it, the cards it moved are gone"""
+		if self.drag and self.drag.get('moved'):
+			self.scroll_timer.stop()
+			self.drop_spot.hide()
+			self.ghost.hide()
+			self.setMinimumHeight(self.drag.get('minimum'))
+		self.drag = None
+
+	def scroll_while_dragging(self) -> None:
+		"""held near the top or bottom of the scroll area, it keeps scrolling to the groups out of sight"""
+		if not self.drag or not self.drag.get('point'):
+			return
 		area = self.parentWidget()
 		while area and not isinstance(area, QAbstractScrollArea):
 			area = area.parentWidget()
 		if not area:
 			return
+		point = self.drag.get('point')
 		y = area.viewport().mapFromGlobal(point).y()
 		bar = area.verticalScrollBar()
+		before = bar.value()
 		if y < 40:
-			bar.setValue(bar.value() - 24)
+			bar.setValue(before - 16)
 		elif y > area.viewport().height() - 40:
-			bar.setValue(bar.value() + 24)
+			bar.setValue(before + 16)
+		if bar.value() != before:
+			self.drag_to(self.drag.get('card'), point)
 
 	def layout_cards(self) -> List[CollapsibleCard]:
 		cards = set(self.cards.values())
