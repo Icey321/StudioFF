@@ -34,7 +34,8 @@ def run(title : str, program : str, args : List[str], cwd : str, env : dict = No
 
 
 def install(onnxruntime : str) -> None:
-	from ffstudio.environment import create_process_environment, environment_to_dict, find_conda, is_facefusion_root
+	from ffstudio import TESTED_FACEFUSION_COMMIT
+	from ffstudio.environment import create_process_environment, environment_to_dict, find_conda, is_facefusion_root, switch_facefusion_commit
 	from ffstudio.pages.setup import FACEFUSION_BRANCH, REPOSITORY_URL
 
 	conda = shutil.which('conda') or find_conda()
@@ -44,6 +45,11 @@ def install(onnxruntime : str) -> None:
 
 	if not is_facefusion_root(FACEFUSION_DIR):
 		run('Cloning FaceFusion v4', shutil.which('git') or 'git', [ 'clone', '--branch', FACEFUSION_BRANCH, '--depth', '1', REPOSITORY_URL, FACEFUSION_DIR ], APP_ROOT)
+		# only a new clone moves to the tested commit, a reinstall keeps a newer one picked on the FaceFusion page
+		print('\n== Switching to the tested commit %s' % TESTED_FACEFUSION_COMMIT[:7], flush = True)
+		switched = switch_facefusion_commit(FACEFUSION_DIR, FACEFUSION_BRANCH, TESTED_FACEFUSION_COMMIT)
+		if switched['error']:
+			sys.exit('Switching to the tested commit failed: %s' % switched['error'])
 	if not os.path.isfile(FACEFUSION_PYTHON):
 		run('Creating the Python 3.13 environment', *script_command(conda, [ 'create' ] + conda_channel + [ 'python=3.13', 'pip', 'ffmpeg' ]), FACEFUSION_DIR)
 	if onnxruntime.startswith('cuda'):
