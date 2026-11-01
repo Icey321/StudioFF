@@ -9,9 +9,14 @@ module.exports = {
     method: "shell.run",
     params: {
       venv: "env",
+      venv_python: "3.12",
       message: [
         "uv pip install -r requirements.txt"
-      ]
+      ],
+      on: [{
+        event: "/No solution found/i",
+        break: true
+      }]
     }
   }]
 }
