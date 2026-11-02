@@ -337,6 +337,24 @@ class OutputDelegate(ListItemDelegate):
 		super().__init__(page.match_list)
 		self.page = page
 		self.pixmaps : 'OrderedDict[Tuple[str, float, int, int], QPixmap]' = OrderedDict()
+		# when a file was last looked at and its change time, so painting does not ask the drive on every redraw
+		self.stamps : Dict[str, Tuple[float, Optional[float]]] = {}
+
+	def modified(self, path : str) -> Optional[float]:
+		"""the change time of a file, None when it is gone. looked up at most every 2 seconds, forget_files asks again"""
+		now = time.monotonic()
+		known = self.stamps.get(path)
+		if known is None or now - known[0] > 2:
+			try:
+				modified = os.path.getmtime(path)
+			except OSError:
+				modified = None
+			known = self.stamps[path] = (now, modified)
+		return known[1]
+
+	def forget_files(self) -> None:
+		"""after outputs were made or the rows changed, the next paint looks at the files again"""
+		self.stamps.clear()
 
 	def sizeHint(self, option, index) -> QSize:
 		return QSize(option.rect.width(), self.ROW_HEIGHT)
@@ -420,10 +438,10 @@ class OutputDelegate(ListItemDelegate):
 	def pixmap(self, path : str, size : QSize) -> QPixmap:
 		"""the thumbnail already scaled to fill the box, so painting a row only draws it"""
 		# keyed by the change time too, so a result made again shows its new look
-		try:
-			key = (path, os.path.getmtime(path), size.width(), size.height())
-		except OSError:
+		modified = self.modified(path)
+		if modified is None:
 			return QPixmap()
+		key = (path, modified, size.width(), size.height())
 		if key in self.pixmaps:
 			self.pixmaps.move_to_end(key)
 			return self.pixmaps.get(key)
@@ -502,7 +520,7 @@ class OutputDelegate(ListItemDelegate):
 			painter.drawText(QRectF(rect.x(), rect.y(), 20, rect.height()), Qt.AlignmentFlag.AlignCenter, mark)
 		x = rect.x() + 28
 		y = rect.y() + (rect.height() - self.THUMB_HEIGHT) / 2
-		made = item.get('status') == 'done' and os.path.isfile(item.get('output'))
+		made = item.get('status') == 'done' and self.modified(item.get('output')) is not None
 		sources = item.get('sources')
 		show_target, show_sources = self.thumbnails_shown(item, rect)
 		if 'remove' in buttons:
@@ -568,7 +586,6 @@ class BatchPage(SourceSelection, QWidget):
 		self.batch_running = False
 		# one entry per output: sources, target, output path, status
 		self.items : List[Dict[str, Any]] = []
-		self.pairs_count = 0
 		# nsfw check results by target, from NSFW Check or from confirming refused images after a batch
 		self.check_results : Dict[str, Dict[str, Any]] = {}
 		# the target folder's files being copied into a form facefusion reads (see folder_targets), and those that could not be
@@ -617,6 +634,8 @@ class BatchPage(SourceSelection, QWidget):
 		self.preview_running = False
 		self.preview_waiting = False
 		self.preview_frame = None
+		# the frame the running preview was made from, the result is compared with it even if another frame shows by then
+		self.preview_run_frame = None
 		self.removed_count = 0
 		self.load_sources()
 		# the batch has its own processors and options, the system settings from Setup are shared
@@ -667,6 +686,8 @@ class BatchPage(SourceSelection, QWidget):
 		# the size and length of each target by its path, for the Size and Length columns and the total under the list
 		self.target_sizes : Dict[str, int] = {}
 		self.target_lengths : Dict[str, Tuple[float, int]] = {}
+		# the change time and size of each target when those were read, to know when to read them again
+		self.target_stamps : Dict[str, Optional[Tuple[float, int]]] = {}
 		# typing and setting changes replan the outputs once they settle
 		self.refresh_timer = QTimer(self)
 		self.refresh_timer.setSingleShot(True)
@@ -1669,6 +1690,7 @@ class BatchPage(SourceSelection, QWidget):
 		args += [ '-t', frame_path, '-o', output_path ] + self.session.option_args(values)
 		self.display_preview_frame(item, frame)
 		self.preview_run = item
+		self.preview_run_frame = frame
 		self.preview_running = True
 		self.schedule_face_scan()
 		if not self.session.run_facefusion('Batch preview of ' + os.path.basename(item.get('target')), args, preview = True):
@@ -1716,7 +1738,7 @@ class BatchPage(SourceSelection, QWidget):
 		name = self.preview_name()
 		if exit_code == 0 and os.path.exists(output_path):
 			self.session.remember_preview_seconds(self.preview_estimate, elapsed)
-			self.preview_view.set_compare(to_pixmap(self.preview_frame), to_pixmap(read_frame(output_path)))
+			self.preview_view.set_compare(to_pixmap(self.preview_run_frame), to_pixmap(read_frame(output_path)))
 			result = self.check_results.get(self.preview_run.get('target'))
 			if result and result.get('blocked'):
 				# one clean frame says nothing about the rest, Run Batch checks the whole video
@@ -1727,7 +1749,7 @@ class BatchPage(SourceSelection, QWidget):
 		elif exit_code == -1:
 			self.preview_label.setText('Preview stopped')
 		elif self.session.nsfw_block_message(True):
-			self.preview_view.set_pixmap(to_pixmap(self.preview_frame))
+			self.preview_view.set_pixmap(to_pixmap(self.preview_run_frame))
 			self.preview_label.setText('⛔ %s in %s, FaceFusion refused to process it' % (BLOCKED_TITLE, name))
 		else:
 			status, _ = self.session.describe_run_error()
@@ -1988,7 +2010,8 @@ class BatchPage(SourceSelection, QWidget):
 
 	def target_pattern(self) -> str:
 		folder = self.target_dir.text().strip()
-		return os.path.join(folder, self.target_filter.currentData()) if folder else ''
+		# escaped, a folder with [ ] in its name would otherwise match no files
+		return os.path.join(glob.escape(folder), self.target_filter.currentData()) if folder else ''
 
 	def folder_targets(self) -> List[str]:
 		pattern = self.target_pattern()
@@ -2081,10 +2104,8 @@ class BatchPage(SourceSelection, QWidget):
 		self.items = [ finished.get(self.run_key(item), item) for item in self.plan_items ]
 		for order, item in enumerate(self.items):
 			item['order'] = order
-		self.target_sizes = {}
-		self.target_lengths = {}
+		self.forget_changed_targets()
 		self.sort_items()
-		self.pairs_count = len(self.items)
 		self.refresh_list()
 		faces = len({ item.get('source') for item in self.items if item.get('source') })
 		targets = len({ item.get('target') for item in self.items })
@@ -2184,6 +2205,7 @@ class BatchPage(SourceSelection, QWidget):
 			self.use_tab_sort()
 			return
 		# the rows are drawn from items, so only their number has to match
+		self.match_list.itemDelegate().forget_files()
 		shown = self.items[:LIST_LIMIT]
 		while self.match_list.count() > len(shown):
 			self.match_list.takeItem(self.match_list.count() - 1)
@@ -2253,6 +2275,23 @@ class BatchPage(SourceSelection, QWidget):
 			self.match_list.item(index).setToolTip(self.item_tooltip(self.items[index]))
 			self.match_list.viewport().update()
 		self.refresh_list_status()
+
+	def forget_changed_targets(self) -> None:
+		"""a target's size and length are read once, only a file that changed (or left the list) is read again"""
+		targets = { item.get('target') for item in self.items }
+		for target in [ target for target in self.target_stamps if target not in targets ]:
+			for known in (self.target_stamps, self.target_sizes, self.target_lengths):
+				known.pop(target, None)
+		for target in targets:
+			try:
+				stat = os.stat(target)
+				stamp = (stat.st_mtime, stat.st_size)
+			except OSError:
+				stamp = None
+			if self.target_stamps.get(target, stamp) != stamp:
+				self.target_sizes.pop(target, None)
+				self.target_lengths.pop(target, None)
+			self.target_stamps[target] = stamp
 
 	def target_size(self, target : str) -> int:
 		if target not in self.target_sizes:
@@ -2759,6 +2798,8 @@ class BatchPage(SourceSelection, QWidget):
 			item['reason'] = ((describe_error(error) or [ error ])[0]).rstrip('.')[:120]
 			# an image gives no reason when it is refused, the nsfw check confirms it once the batch is done
 			item['confirm'] = bool(self.session.nsfw_block_message(media_kind(item.get('target')) == 'image'))
+		# the output just made shows its own thumbnail
+		self.match_list.itemDelegate().forget_files()
 		self.refresh_item(index)
 		# facefusion prints no progress for an image, so the bar moves on as each output ends
 		total = self.started_count + len(self.queued())
@@ -2831,7 +2872,9 @@ class BatchPage(SourceSelection, QWidget):
 		self.progress.setValue(0)
 		self.progress.resume()
 		self.status_label.setText('Checking %d %s with the NSFW filter…' % (len(targets), self.targets_word(targets)))
-		self.session.run_content_check('batch', targets)
+		if not self.session.run_content_check('batch', targets):
+			# its message says why, the status goes back to what it was
+			self.status_label.setText('Ready')
 
 	def on_content_checked(self, owner : str, results : list, exit_code : int) -> None:
 		if owner != 'batch':
