@@ -453,7 +453,6 @@ class SourceCard(SimpleCardWidget):
 
 	@staticmethod
 	def audio_pixmap():
-		from PySide6.QtGui import QPixmap
 		return QPixmap()
 
 	def dragEnterEvent(self, event) -> None:
@@ -590,7 +589,7 @@ class TargetCard(SimpleCardWidget):
 		self.slider.setMinimumWidth(120)
 		self.slider.valueChanged.connect(lambda _: self.frame_timer.start())
 		self.slider.valueChanged.connect(lambda _: self.page.schedule_live_preview())
-		self.slider.valueChanged.connect(lambda _: self.page.refresh_name_preview())
+		self.slider.valueChanged.connect(lambda _: self.page.refresh_name_preview() if '{frame}' in self.page.output_name_edit.text() else None)
 		guard_wheel(self.slider)
 		self.time_label = CaptionLabel('00:00:00.00', self.timeline)
 		self.time_label.setFixedWidth(150)
@@ -1058,6 +1057,8 @@ class StudioPage(SourceSelection, QWidget):
 		# the Start run without face mapping as it was started, for Resume after Free Memory
 		self.whole_run : Optional[dict] = None
 		self.run_ratio = 0.0
+		# the run bar shows a run of another page (a Batch), it is cleared when that ends
+		self.foreign_status = False
 		# face detection on the shown frame, rerun shortly after the frame or a face setting changes
 		self.face_probe = FaceProbe(session, self)
 		self.face_probe.scanned.connect(self.on_faces_scanned)
@@ -1344,7 +1345,6 @@ class StudioPage(SourceSelection, QWidget):
 			self.session.set_value('reference_frame_index', 0)
 			self.session.set_value('trim_frame_start', None)
 			self.session.set_value('trim_frame_end', None)
-		if path != self.target_path:
 			self.target_blocked_status = ''
 		self.target_path = path
 		self.content_result = None
@@ -1592,6 +1592,10 @@ class StudioPage(SourceSelection, QWidget):
 		if self.freed:
 			# a run paused with its memory freed waits for Resume, a preview would take its place
 			return
+		if self.session.batch_running:
+			# a batch keeps facefusion between its runs, the preview follows when it ends
+			self.live_pending = True
+			return
 		if self.chain:
 			# between two passes nothing runs, the preview follows the last one
 			self.live_pending = True
@@ -1627,6 +1631,9 @@ class StudioPage(SourceSelection, QWidget):
 
 	def start(self) -> None:
 		if not self.validate():
+			return
+		if self.session.batch_running:
+			self.session.notify.emit('warning', 'Busy', 'A Batch is running. Start once it is done.')
 			return
 		if self.mapping_passes() and not self.session.facefusion_video_ready(self.target_path):
 			# a gif's passes run on its video, made off the ui thread first
@@ -1688,7 +1695,7 @@ class StudioPage(SourceSelection, QWidget):
 		return self.freed or bool(self.chain and not self.chain.get('preview')) or bool(self.pending_output and not self.preview_mode)
 
 	def refresh_start_button(self) -> None:
-		busy = self.session.runner.is_running()
+		busy = self.session.runner.is_running() or self.session.batch_running
 		# Free Memory needs a frozen run, between two face mapping steps nothing holds memory
 		self.free_button.setEnabled(self.paused and not self.freed and busy and bool(self.pending_output) and not self.preview_mode)
 		if self.run_active():
@@ -1703,7 +1710,7 @@ class StudioPage(SourceSelection, QWidget):
 		self.start_button.setEnabled(not busy and not self.chain)
 
 	def refresh_run_buttons(self) -> None:
-		busy = self.session.runner.is_running()
+		busy = self.session.runner.is_running() or self.session.batch_running
 		self.refresh_start_button()
 		# a run paused with its memory freed comes first, nothing else starts until it is resumed or stopped
 		self.check_button.setEnabled(not busy and not self.freed)
@@ -1808,6 +1815,9 @@ class StudioPage(SourceSelection, QWidget):
 	def preview_frame(self) -> None:
 		if not self.validate():
 			return
+		if self.session.batch_running:
+			self.session.notify.emit('warning', 'Busy', 'A Batch is running. Preview once it is done.')
+			return
 		if self.freed:
 			self.session.notify.emit('warning', 'Paused', 'Resume or stop the paused run first.')
 			return
@@ -1858,6 +1868,7 @@ class StudioPage(SourceSelection, QWidget):
 		self.refresh_run_buttons()
 		run_bar = not self.session.task_is_preview
 		if busy and run_bar:
+			self.foreign_status = not self.pending_output and self.session.content_check_owner != 'studio'
 			self.status_label.setText(task)
 			self.detail_label.setText('Starting…')
 			self.run_ratio = 0.0
@@ -1880,8 +1891,17 @@ class StudioPage(SourceSelection, QWidget):
 			self.end_preview_progress()
 		else:
 			self.target_card.set_preview_progress(None)
+		self.clear_foreign_status()
 		if not busy and self.auto_check_pending:
 			QTimer.singleShot(0, self.auto_check_content)
+
+	def clear_foreign_status(self) -> None:
+		"""the run bar goes back to Ready once a run of another page is over"""
+		if self.foreign_status and not self.session.runner.is_running() and not self.session.batch_running:
+			self.foreign_status = False
+			self.status_label.setText('Ready')
+			self.detail_label.setText('')
+			self.progress_bar.setValue(0)
 
 	def end_preview_progress(self) -> None:
 		# show the bar full for a moment so a finished preview does not look cut off
@@ -2288,6 +2308,10 @@ class StudioPage(SourceSelection, QWidget):
 		preview = self.chain.get('preview')
 		self.chain = None
 		shutil.rmtree(PASSES_DIR, ignore_errors = True)
+		# a change made while the chain was looking for people still gets its preview
+		if self.live_pending:
+			self.live_pending = False
+			self.schedule_live_preview()
 		if not preview:
 			self.freed = False
 			self.end_clock()
@@ -2296,10 +2320,13 @@ class StudioPage(SourceSelection, QWidget):
 			QTimer.singleShot(0, self.auto_check_content)
 
 	def fail_chain(self, message : str) -> None:
+		preview = self.chain.get('preview')
 		self.end_chain()
-		self.status_label.setText('Face mapping stopped')
-		self.detail_label.setText('')
-		self.progress_bar.error()
+		# a preview leaves the run bar as it was
+		if not preview:
+			self.status_label.setText('Face mapping stopped')
+			self.detail_label.setText('')
+			self.progress_bar.error()
 		self.session.notify.emit('error', 'Face Mapping', message)
 
 	def locate_next(self) -> None:
@@ -2371,8 +2398,6 @@ class StudioPage(SourceSelection, QWidget):
 			self.release_result_reader()
 			self.last_output = output_path
 			self.result_info = info
-			self.status_label.setText('Preview ready')
-			self.detail_label.setText('No mapped face in this frame')
 			self.target_card.set_result(output_path, 'preview of frame #%d, no mapped face in it' % info.get('frame_index', 0))
 			self.show_view('result')
 			return
@@ -2515,6 +2540,12 @@ class StudioPage(SourceSelection, QWidget):
 		self.check_content(False, auto = True)
 
 	def on_batch_running_changed(self, running : bool) -> None:
+		# the gaps between a batch's runs belong to it, Studio starts nothing then
+		self.refresh_run_buttons()
+		self.clear_foreign_status()
+		if not running and self.live_pending:
+			self.live_pending = False
+			self.schedule_live_preview()
 		if not running and self.auto_check_pending:
 			QTimer.singleShot(0, self.auto_check_content)
 
