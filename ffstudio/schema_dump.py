@@ -99,6 +99,42 @@ def build_options(program_module, capability_store, extra_args):
 	return options
 
 
+def build_scope_models(download_scopes):
+	"""every model file one download scope fetches, as [ processor, model ], found the way force-download finds them"""
+	from facefusion import state_manager
+	from facefusion.filesystem import get_file_name, resolve_file_paths
+	from facefusion.processors.core import get_processors_modules
+
+	if state_manager.get_item('download_providers') is None:
+		state_manager.init_item('download_providers', [ 'github', 'huggingface' ])
+	processor_modules = get_processors_modules([ get_file_name(file_path) for file_path in resolve_file_paths('facefusion/processors/modules') ])
+	common_modules = []
+	for processor_module in processor_modules:
+		for common_module in processor_module.get_common_modules():
+			if common_module not in common_modules:
+				common_modules.append(common_module)
+
+	scope_models = {}
+	for scope in download_scopes:
+		models = []
+		for module in common_modules + processor_modules:
+			if not hasattr(module, 'create_static_model_set'):
+				continue
+			parts = module.__name__.split('.')
+			processor = parts[-2] if parts[-1] == 'core' else parts[-1]
+			for model in module.create_static_model_set(scope).values():
+				for source in (model.get('sources') or {}).values():
+					# deep swapper keeps its .dfm files in a folder per author
+					file_path = (source.get('path') or '').replace(os.sep, '/')
+					model_name, extension = os.path.splitext(file_path.split('.assets/models/')[-1])
+					entry = [ processor, model_name ]
+					# one file shared by several processors is listed once
+					if extension in [ '.onnx', '.dfm' ] and model_name not in [ model[1] for model in models ]:
+						models.append(entry)
+		scope_models[scope] = models
+	return scope_models
+
+
 def main():
 	facefusion_root = os.path.abspath(sys.argv[1])
 	output_path = os.path.abspath(sys.argv[2])
@@ -147,6 +183,12 @@ def main():
 			'default': options.get(dest).get('default')
 		})
 
+	download_scopes = to_json_value(getattr(facefusion.choices, 'download_scopes', [ 'lite', 'full' ]))
+	try:
+		scope_models = build_scope_models(download_scopes)
+	except Exception:
+		scope_models = {}
+
 	schema =\
 	{
 		'name': metadata.get('name'),
@@ -160,7 +202,8 @@ def main():
 			'video': to_json_value(facefusion.choices.video_formats)
 		},
 		'processors': options.get('processors', {}).get('choices') or [],
-		'download_scopes': to_json_value(getattr(facefusion.choices, 'download_scopes', [ 'lite', 'full' ])),
+		'download_scopes': download_scopes,
+		'scope_models': scope_models,
 		'options': options,
 		'dependencies': dependencies
 	}

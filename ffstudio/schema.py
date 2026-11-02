@@ -194,6 +194,8 @@ def build_option_args(schema : Schema, values : Dict[str, Any], groups : Optiona
 def schema_is_stale(schema : Optional[Schema], facefusion_root : str) -> bool:
 	if not schema or os.path.normcase(os.path.abspath(schema.facefusion_root)) != os.path.normcase(os.path.abspath(facefusion_root)):
 		return True
+	if 'scope_models' not in schema.data:
+		return True
 	try:
 		schema_time = os.path.getmtime(SCHEMA_FILE)
 		watched = [ os.path.join(facefusion_root, 'facefusion', 'program.py'), os.path.join(facefusion_root, 'facefusion.ini'), os.path.join(facefusion_root, 'facefusion', 'choices.py') ]

@@ -3,8 +3,8 @@ from typing import Optional
 
 from PySide6.QtCore import QThread, QUrl, Qt, Signal
 from PySide6.QtGui import QDesktopServices, QKeySequence, QShortcut
-from PySide6.QtWidgets import QHBoxLayout, QTableWidgetItem, QVBoxLayout, QWidget
-from qfluentwidgets import BodyLabel, CaptionLabel, ComboBox, FluentIcon, MessageBox, PrimaryPushButton, ProgressBar, PushButton, SubtitleLabel, TableWidget
+from PySide6.QtWidgets import QHBoxLayout, QStackedWidget, QTableWidgetItem, QVBoxLayout, QWidget
+from qfluentwidgets import BodyLabel, CaptionLabel, ComboBox, FluentIcon, MessageBox, PrimaryPushButton, ProgressBar, PushButton, SearchLineEdit, SegmentedWidget, SubtitleLabel, TableWidget
 
 from ffstudio.pages.setup import form_row, section_card
 from ffstudio.session import Session
@@ -22,7 +22,80 @@ def format_size(size : int) -> str:
 
 def model_files(folder : str, name : str) -> list:
 	"""the model and the files facefusion keeps beside it, like its .hash checksum"""
-	return [ os.path.join(folder, file) for file in os.listdir(folder) if os.path.splitext(file)[0] == name ] if os.path.isdir(folder) else []
+	folder = os.path.dirname(os.path.join(folder, name))
+	return [ os.path.join(folder, file) for file in os.listdir(folder) if os.path.splitext(file)[0] == os.path.basename(name) ] if os.path.isdir(folder) else []
+
+
+def processor_label(processor : str) -> str:
+	return processor.replace('_', ' ').title()
+
+
+def installed_sizes(folder : str) -> dict:
+	"""model name (with the author folder of a deep swapper face) to its size on disk"""
+	sizes = {}
+	for current, _, names in os.walk(folder):
+		for file in names:
+			name, extension = os.path.splitext(file)
+			if extension in [ '.onnx', '.dfm' ]:
+				relative = os.path.relpath(os.path.join(current, name), folder).replace(os.sep, '/')
+				try:
+					sizes[relative] = os.path.getsize(os.path.join(current, file))
+				except OSError:
+					pass
+	return sizes
+
+
+class ScopeTab(QWidget):
+	"""every model one download scope fetches, with the size of those already installed"""
+
+	def __init__(self, parent : Optional[QWidget] = None) -> None:
+		super().__init__(parent)
+		layout = QVBoxLayout(self)
+		layout.setContentsMargins(0, 8, 0, 0)
+		layout.setSpacing(8)
+		header = QHBoxLayout()
+		self.summary = BodyLabel('', self)
+		self.search = SearchLineEdit(self)
+		self.search.setPlaceholderText('Search')
+		self.search.setFixedWidth(240)
+		self.search.textChanged.connect(self.apply_filter)
+		header.addWidget(self.summary)
+		header.addStretch(1)
+		header.addWidget(self.search)
+		layout.addLayout(header)
+		self.table = TableWidget(self)
+		self.table.setColumnCount(3)
+		self.table.setHorizontalHeaderLabels([ 'Processor', 'Model', 'Size' ])
+		self.table.verticalHeader().hide()
+		self.table.setBorderVisible(True)
+		self.table.setBorderRadius(6)
+		self.table.setEditTriggers(TableWidget.EditTrigger.NoEditTriggers)
+		self.table.setSelectionMode(TableWidget.SelectionMode.NoSelection)
+		resize_mode = self.table.horizontalHeader().ResizeMode
+		self.table.horizontalHeader().setSectionResizeMode(0, resize_mode.Interactive)
+		self.table.horizontalHeader().setSectionResizeMode(1, resize_mode.Stretch)
+		self.table.setColumnWidth(0, 170)
+		self.table.setColumnWidth(2, 120)
+		self.table.horizontalHeaderItem(2).setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+		layout.addWidget(self.table, 1)
+
+	def set_models(self, models : list, sizes : dict) -> None:
+		self.table.setRowCount(len(models))
+		for row, (processor, model) in enumerate(models):
+			self.table.setItem(row, 0, QTableWidgetItem(processor_label(processor)))
+			self.table.setItem(row, 1, QTableWidgetItem(model))
+			size_item = QTableWidgetItem(format_size(sizes[model]) if model in sizes else '—')
+			size_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+			self.table.setItem(row, 2, size_item)
+		installed = [ sizes[model] for _, model in models if model in sizes ]
+		self.summary.setText('(%d) models · (%d) installed%s' % (len(models), len(installed), ' · ' + format_size(sum(installed)) if installed else '') if models else 'FaceFusion has not listed its models yet')
+		self.apply_filter(self.search.text())
+
+	def apply_filter(self, text : str) -> None:
+		text = text.strip().lower()
+		for row in range(self.table.rowCount()):
+			haystack = (self.table.item(row, 0).text() + ' ' + self.table.item(row, 1).text()).lower()
+			self.table.setRowHidden(row, bool(text) and text not in haystack)
 
 
 class ModelScanner(QThread):
@@ -33,12 +106,7 @@ class ModelScanner(QThread):
 		self.folder = folder
 
 	def run(self) -> None:
-		files = []
-		if os.path.isdir(self.folder):
-			for name in os.listdir(self.folder):
-				if name.endswith('.onnx'):
-					files.append((name, os.path.getsize(os.path.join(self.folder, name))))
-		self.scanned.emit(sorted(files))
+		self.scanned.emit(sorted(installed_sizes(self.folder).items()))
 
 
 class ModelsPage(QWidget):
@@ -58,6 +126,12 @@ class ModelsPage(QWidget):
 		card, form = section_card('Download models', 'FaceFusion downloads each model the first time it is used. Download them ahead of time to work offline or to avoid waiting mid-run. The download providers are set in Settings.', self)
 		self.scope_combo = ComboBox(card)
 		form.addLayout(form_row('Scope', [ self.scope_combo ], card))
+		self.scope_label = CaptionLabel('', card)
+		scope_row = QHBoxLayout()
+		scope_row.addSpacing(138)
+		scope_row.addWidget(self.scope_label, 1)
+		form.addLayout(scope_row)
+		self.scope_combo.currentIndexChanged.connect(self.refresh_scope_label)
 		buttons = QHBoxLayout()
 		buttons.addSpacing(138)
 		self.download_button = PrimaryPushButton(FluentIcon.CLOUD_DOWNLOAD, 'Download models', card)
@@ -81,7 +155,19 @@ class ModelsPage(QWidget):
 		form.addLayout(progress_row)
 		layout.addWidget(card)
 
-		list_card, list_layout = section_card('Installed models', '', self)
+		list_card, list_layout = section_card('Models', '', self)
+		self.pivot = SegmentedWidget(list_card)
+		self.stack = QStackedWidget(list_card)
+		pivot_row = QHBoxLayout()
+		pivot_row.addWidget(self.pivot)
+		pivot_row.addStretch(1)
+		list_layout.addLayout(pivot_row)
+		list_layout.addWidget(self.stack, 1)
+		installed_tab = QWidget(self.stack)
+		installed_layout = QVBoxLayout(installed_tab)
+		installed_layout.setContentsMargins(0, 8, 0, 0)
+		installed_layout.setSpacing(8)
+		list_layout = installed_layout
 		header = QHBoxLayout()
 		self.summary = BodyLabel('', list_card)
 		header.addWidget(self.summary)
@@ -114,6 +200,11 @@ class ModelsPage(QWidget):
 		self.table.itemSelectionChanged.connect(self.refresh_delete_button)
 		QShortcut(QKeySequence(QKeySequence.StandardKey.Delete), self.table, self.delete_selected, context = Qt.ShortcutContext.WidgetShortcut)
 		list_layout.addWidget(self.table, 1)
+		self.scope_tabs = { scope : ScopeTab(self.stack) for scope in [ 'lite', 'full' ] }
+		for key, text, tab in [ ('installed', 'Installed Models', installed_tab) ] + [ (scope, scope.title(), tab) for scope, tab in self.scope_tabs.items() ]:
+			self.stack.addWidget(tab)
+			self.pivot.addItem(key, text, lambda _ = False, tab = tab: self.stack.setCurrentWidget(tab))
+		self.pivot.setCurrentItem('installed')
 		layout.addWidget(list_card, 1)
 
 		session.schema_changed.connect(self.refresh_scopes)
@@ -137,6 +228,29 @@ class ModelsPage(QWidget):
 		self.scope_combo.clear()
 		for scope in scopes:
 			self.scope_combo.addItem(SCOPE_LABELS.get(scope, scope), userData = scope)
+		self.refresh_scope_label()
+		self.refresh_scope_tabs()
+
+	def refresh_scope_tabs(self) -> None:
+		sizes = dict(self.files)
+		for scope, tab in self.scope_tabs.items():
+			tab.set_models(self.scope_models().get(scope, []), sizes)
+
+	def scope_models(self) -> dict:
+		return (self.session.schema.data.get('scope_models') if self.session.schema else None) or {}
+
+	def refresh_scope_label(self) -> None:
+		scope_models = self.scope_models()
+		scope = self.scope_combo.currentData()
+		if scope not in scope_models:
+			self.scope_label.setText('')
+			return
+		text = '(%d) models' % len(scope_models[scope])
+		names = list(scope_models)
+		if names.index(scope) < len(names) - 1:
+			bigger = names[-1]
+			text += '. %s adds (%d) more, (%d) in all.' % (bigger.title(), len(scope_models[bigger]) - len(scope_models[scope]), len(scope_models[bigger]))
+		self.scope_label.setText(text)
 
 	def scan(self) -> None:
 		if self.scanner and self.scanner.isRunning():
@@ -147,9 +261,10 @@ class ModelsPage(QWidget):
 
 	def on_scanned(self, files : list) -> None:
 		self.files = files
+		self.refresh_scope_tabs()
 		self.table.setRowCount(len(files))
 		for row, (name, size) in enumerate(files):
-			self.table.setItem(row, 0, QTableWidgetItem(name[:-5]))
+			self.table.setItem(row, 0, QTableWidgetItem(name))
 			size_item = QTableWidgetItem(format_size(size))
 			size_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 			self.table.setItem(row, 1, size_item)
@@ -172,7 +287,7 @@ class ModelsPage(QWidget):
 		if not selected or not self.delete_button.isEnabled():
 			return
 		total = sum(size for _, size in selected)
-		names = [ name[:-5] for name, _ in selected ]
+		names = [ name for name, _ in selected ]
 		listing = '\n'.join(names[:12]) + ('\n… and (%d) more' % (len(names) - 12) if len(names) > 12 else '')
 		box = MessageBox('Delete (%d) model%s?' % (len(names), '' if len(names) == 1 else 's'), '%s\n\nThis frees %s. The files are deleted, not moved to the Recycle Bin. FaceFusion downloads a model again the next time it is used.' % (listing, format_size(total)), self.window())
 		box.yesButton.setText('Delete')
