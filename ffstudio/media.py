@@ -185,10 +185,15 @@ def animation_to_video(path : str, video_path : str) -> bool:
 						if alpha_process:
 							alpha_process.stdin.write(alpha_data)
 			finally:
-				process.stdin.close()
+				# an encoder that quit early breaks its pipe, both must still be waited for
+				for encoder in [ process, alpha_process ]:
+					if encoder:
+						try:
+							encoder.stdin.close()
+						except OSError:
+							pass
 				code = process.wait()
 				if alpha_process:
-					alpha_process.stdin.close()
 					code = code or alpha_process.wait()
 		if code or not os.path.isfile(temp_path):
 			return False

@@ -110,9 +110,12 @@ def check_gif(target_path : str, preview_dir : str, index : int, trim_start : in
 	ffmpeg = shutil.which('ffmpeg')
 	if not ffmpeg or subprocess.call([ ffmpeg, '-hide_banner', '-loglevel', 'error', '-y' ] + gif_to_video_args(target_path, video_path)):
 		return { 'path': target_path, 'kind': 'video', 'blocked': False, 'rate': 0.0, 'checked': 0, 'flagged': [], 'previews': [], 'error': 'could not convert the gif to video' }
-	result = check_video(video_path, preview_dir, index, trim_start, trim_end)
+	try:
+		result = check_video(video_path, preview_dir, index, trim_start, trim_end)
+	finally:
+		if os.path.isfile(video_path):
+			os.remove(video_path)
 	result['path'] = target_path
-	os.remove(video_path)
 	return result
 
 
@@ -148,14 +151,18 @@ def main() -> int:
 	os.makedirs(preview_dir, exist_ok = True)
 	for index, target_path in enumerate(targets):
 		print('Checking %s (%d of %d)' % (os.path.basename(target_path), index + 1, len(targets)), flush = True)
-		if is_image(target_path):
-			result = check_image(target_path, preview_dir, index)
-		elif target_path.lower().endswith('.gif'):
-			result = check_gif(target_path, preview_dir, index, int(trim_start), int(trim_end))
-		elif is_video(target_path):
-			result = check_video(target_path, preview_dir, index, int(trim_start), int(trim_end))
-		else:
-			result = { 'path': target_path, 'kind': 'other', 'blocked': False, 'rate': 0.0, 'checked': 0, 'flagged': [], 'previews': [], 'error': 'not an image or video FaceFusion can read' }
+		try:
+			if is_image(target_path):
+				result = check_image(target_path, preview_dir, index)
+			elif target_path.lower().endswith('.gif'):
+				result = check_gif(target_path, preview_dir, index, int(trim_start), int(trim_end))
+			elif is_video(target_path):
+				result = check_video(target_path, preview_dir, index, int(trim_start), int(trim_end))
+			else:
+				result = { 'path': target_path, 'kind': 'other', 'blocked': False, 'rate': 0.0, 'checked': 0, 'flagged': [], 'previews': [], 'error': 'not an image or video FaceFusion can read' }
+		except Exception as exception:
+			# one target FaceFusion chokes on must not leave the ones after it unchecked
+			result = { 'path': target_path, 'kind': 'other', 'blocked': False, 'rate': 0.0, 'checked': 0, 'flagged': [], 'previews': [], 'error': '%s: %s' % (type(exception).__name__, exception) }
 		sys.stdout.write('\n' + RESULT_PREFIX + json.dumps(result) + '\n')
 		sys.stdout.flush()
 	return 0

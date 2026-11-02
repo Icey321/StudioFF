@@ -28,7 +28,7 @@ FaceFusion itself is not included: install FaceFusion v4 separately, then point 
 - **GIF support**: GIF targets are converted for FaceFusion and saved back as looping GIFs (needs `ffmpeg`).
 - **AVIF and HEIC support**: AVIF and HEIC (iPhone) images work as sources and targets. StudioFF uses a PNG copy of each one, so the result is a PNG.
 - **More file types**: JFIF images run as a JPG copy. FLV and F4V (Flash) videos are moved into an MKV copy, so the result is an MKV. MPG and MPEG videos work as they are.
-- **Animated WebP support**: animated WebP targets run as a lossless video copy and are saved back as looping animated WebPs. Transparent parts turn white.
+- **Animated WebP support**: animated WebP targets run as a lossless video copy and are saved back as looping animated WebPs. Transparent parts stay transparent.
 - **Output names**: build file names from tags like `{source}`, `{target}`, `{date}` and `{n}`, with an optional sub-folder per source.
 - **Favorite Options and search**: star any option to pin it to Favorite Options, or filter all options with *Search options*. Open or closed option groups stay that way.
 - **Faces**: shows the faces FaceFusion detects in the current frame and which ones will be processed. If none will be, it says why.

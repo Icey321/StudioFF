@@ -99,7 +99,10 @@ class FaceProbe(QObject):
 			return
 		self.idle_timer.stop()
 		if self.python_path != self.session.python_path:
+			# stop forgets the waiting requests, the other kind still wants its turn
+			waiting, waiting_people = self.waiting, self.waiting_people
 			self.stop()
+			self.waiting, self.waiting_people = waiting, waiting_people
 		if not self.is_running() and not self.start():
 			self.emit_result(request, { 'id': request.get('id'), 'faces': [], 'people': [], 'error': 'Could not start FaceFusion' })
 			return
@@ -201,6 +204,9 @@ class FaceProbe(QObject):
 		self.loading.emit(False)
 		if request:
 			self.emit_result(request, { 'id': request.get('id'), 'faces': [], 'people': [], 'error': 'FaceFusion stopped: ' + (self.errors[-1] if self.errors else 'no reason given') })
+		# a request that waited meanwhile gets its turn on a fresh process
+		if not self.is_idle():
+			self.send_next()
 
 
 def describe_faces(result : Dict[str, Any], reference_index : Optional[int] = None) -> str:
