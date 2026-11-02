@@ -46,6 +46,8 @@ def compose(base : numpy.ndarray, passes : list) -> numpy.ndarray:
 	for frame in passes:
 		if frame is not None and frame.shape == base.shape:
 			result += frame.astype(numpy.int16) - base
+		elif frame is not None:
+			print('Skipped a pass whose size differs from the base', flush = True)
 	return result.clip(0, 255).astype(numpy.uint8)
 
 
@@ -58,7 +60,11 @@ def compose_image(base_path : str, output_path : str, settings : dict, pass_path
 	if base is None:
 		print('Could not read ' + base_path, flush = True)
 		return 1
-	result = compose(base, [ read_image(path) for path in pass_paths ])
+	passes = [ read_image(path) for path in pass_paths ]
+	for path, frame in zip(pass_paths, passes):
+		if frame is None:
+			print('Could not read ' + path + ', its face is left out', flush = True)
+	result = compose(base, passes)
 	extension = os.path.splitext(output_path)[1].lower()
 	quality = int(settings.get('image_quality') or 80)
 	params = [ cv2.IMWRITE_JPEG_QUALITY, quality ] if extension in [ '.jpg', '.jpeg' ] else [ cv2.IMWRITE_WEBP_QUALITY, quality ] if extension == '.webp' else []
@@ -132,7 +138,11 @@ def compose_video(base_path : str, output_path : str, settings : dict, pass_path
 		done += 1
 		if done % 25 == 0 or done == total:
 			print('Combining the passes: frame %d of %d' % (done, total), flush = True)
-	process.stdin.close()
+	try:
+		process.stdin.close()
+	except OSError:
+		# the encoder quit early, its exit code says why
+		pass
 	exit_code = process.wait()
 	for reader in [ base ] + passes:
 		reader.close()

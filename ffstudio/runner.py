@@ -317,8 +317,9 @@ class PreviewWorker(QObject):
 		self.buffer = self.buffer[held:]
 
 	def pass_output(self, text : str) -> None:
-		# what the worker says between runs, such as that it is ready, is nobody's run log
-		if text and self.running_id is not None:
+		# what the worker says between runs, such as that it is ready, is nobody's run log, and a stopped preview
+		# the worker is still finishing is not the log of the one that started after it
+		if text and self.running_id is not None and self.cancelled_id is None:
 			self.output.emit(text)
 
 	def on_result(self, text : str) -> None:

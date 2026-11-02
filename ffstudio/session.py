@@ -6,6 +6,7 @@ import shutil
 import sys
 import tempfile
 import threading
+import traceback
 import uuid
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -229,7 +230,11 @@ class Session(QObject):
 		if not video:
 			self.gif_failed.add(path)
 		for then in self.gif_waiting.pop(path, []):
-			then()
+			try:
+				then()
+			except Exception:
+				# one waiting page failing must not leave the others waiting for good
+				traceback.print_exc()
 
 	def convert_files(self, paths : List[str], then : Callable[[List[str]], None], quiet : bool = False) -> None:
 		"""calls then with the usable_path of each file: right away when no copy has to be made, else once the copies
@@ -260,6 +265,8 @@ class Session(QObject):
 		return frame
 
 	def check_python(self) -> Optional[str]:
+		# a gif that failed because ffmpeg was missing gets another try once the environment changes
+		self.gif_failed.clear()
 		self.python_version = probe_python_version(self.python_path) if os.path.isfile(self.python_path) else None
 		return self.python_version
 
