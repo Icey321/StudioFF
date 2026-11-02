@@ -1671,8 +1671,10 @@ class BatchPage(SourceSelection, QWidget):
 		frame_path = os.path.join(PREVIEW_DIR, 'batch_frame.png')
 		output_path = os.path.join(PREVIEW_DIR, 'batch_result.png')
 		for path in [ frame_path, output_path ]:
-			if os.path.exists(path):
+			try:
 				os.remove(path)
+			except OSError:
+				pass
 		write_image(frame_path, run_frame)
 		values = self.run_values()
 		values.update({ 'reference_frame_index': 0, 'trim_frame_start': None, 'trim_frame_end': None, 'workflow_mode': 'auto' })

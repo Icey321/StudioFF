@@ -13,6 +13,7 @@ from qfluentwidgets import BodyLabel, CaptionLabel, CheckBox, ComboBox, FlowLayo
 
 from ffstudio.benchmark_report import RESOLUTIONS, format_processors, render_report
 from ffstudio.environment import CREATE_NO_WINDOW, create_process_environment, read_facefusion_version
+from ffstudio.media import format_length
 from ffstudio.pages.setup import form_row, section_card
 from ffstudio.platforms import read_cpu_name, read_memory_total
 from ffstudio.session import Session
@@ -36,13 +37,6 @@ COLUMN_TIPS =\
 # where each stage of one run sits within that run on the overall progress bar
 STAGE_SPAN = { 'Checking content': (0.0, 0.03), 'Extracting frames': (0.03, 0.06), 'Processing frames': (0.06, 0.92), 'Merging video': (0.92, 0.97), 'Adding audio': (0.97, 1.0) }
 HISTORY_LIMIT = 200
-
-
-def format_duration(seconds : float) -> str:
-	seconds = int(seconds)
-	if seconds >= 3600:
-		return '%d:%02d:%02d' % (seconds // 3600, seconds // 60 % 60, seconds % 60)
-	return '%d:%02d' % (seconds // 60, seconds % 60)
 
 
 class HardwareProbe(QThread):
@@ -390,7 +384,7 @@ class BenchmarkPage(QWidget):
 	def refresh_status(self) -> None:
 		if not self.running:
 			return
-		elapsed = 'elapsed %s' % format_duration(time.monotonic() - self.started_at)
+		elapsed = 'elapsed %s' % format_length(time.monotonic() - self.started_at)
 		if self.stage == 'Downloading':
 			self.status_label.setText('Downloading example videos and models (first run only)')
 			self.detail_label.setText('  ·  '.join(part for part in [ '%d%%' % round(self.stage_ratio * 100), self.stage_status, elapsed ] if part))
@@ -454,13 +448,13 @@ class BenchmarkPage(QWidget):
 		self.remove_outputs()
 		if exit_code == 0 and self.rows:
 			self.progress.setValue(1000)
-			self.status_label.setText('Finished: %d runs in %s' % (self.run_total, format_duration(elapsed)))
+			self.status_label.setText('Finished: %d runs in %s' % (self.run_total, format_length(elapsed)))
 			self.detail_label.setText('The results are at the top of the table below.')
 			self.add_history(self.rows)
 		elif exit_code == -1:
 			self.progress.pause()
 			self.status_label.setText('Stopped')
-			self.detail_label.setText('after %d of %d runs, %s' % (self.runs_done, self.run_total, format_duration(elapsed)))
+			self.detail_label.setText('after %d of %d runs, %s' % (self.runs_done, self.run_total, format_length(elapsed)))
 		else:
 			self.progress.error()
 			self.status_label.setText('Benchmark failed (exit code %d)' % exit_code)

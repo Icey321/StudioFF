@@ -541,6 +541,14 @@ class TextControl(OptionControl):
 		self.edit.setMinimumWidth(140)
 		self.edit.editingFinished.connect(self.emit_changed)
 		layout.addWidget(self.edit)
+		# what was last handed on, leaving the box untouched hands on nothing
+		self.committed : Any = self.value()
+
+	def emit_changed(self, *_ : Any) -> None:
+		value = self.value()
+		if not self.updating and value != self.committed:
+			self.committed = value
+			self.changed.emit(value)
 
 	def value(self) -> Any:
 		text = self.edit.text().strip()
@@ -558,6 +566,7 @@ class TextControl(OptionControl):
 			self.edit.setText(' '.join(format_scalar(item) for item in value))
 		else:
 			self.edit.setText(format_scalar(value))
+		self.committed = self.value()
 		self.updating = False
 
 

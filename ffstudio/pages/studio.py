@@ -1837,8 +1837,10 @@ class StudioPage(SourceSelection, QWidget):
 		frame_path = os.path.join(PREVIEW_DIR, 'frame.png')
 		output_path = os.path.join(PREVIEW_DIR, 'result.png')
 		for path in [ frame_path, output_path ]:
-			if os.path.exists(path):
+			try:
 				os.remove(path)
+			except OSError:
+				pass
 		write_image(frame_path, frame)
 		info = { 'preview': True, 'target': self.target_path, 'frame': frame, 'frame_index': self.target_card.current_frame_index() }
 		passes = self.mapping_passes()

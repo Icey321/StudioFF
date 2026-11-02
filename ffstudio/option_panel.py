@@ -396,7 +396,7 @@ class OptionPanel(QWidget):
 			return
 		# open every matching group while searching and put the groups back the way they were afterwards
 		if text and not self.filter_text:
-			self.saved_expansion = { group: card.body.isVisible() for group, card in self.cards.items() }
+			self.saved_expansion = { group: not card.body.isHidden() for group, card in self.cards.items() }
 		# put them back while still searching, so the restore is not remembered as a choice
 		if not text:
 			for group, expanded in self.saved_expansion.items():

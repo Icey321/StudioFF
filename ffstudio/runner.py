@@ -1,3 +1,4 @@
+import codecs
 import json
 import os
 import re
@@ -38,6 +39,8 @@ class ProcessRunner(QObject):
 		super().__init__(parent)
 		self.process : Optional[QProcess] = None
 		self.buffer = ''
+		# output arrives in chunks that can end inside a character
+		self.decoder = codecs.getincrementaldecoder('utf-8')(errors = 'replace')
 		self.start_time = 0.0
 		self.cancelled = False
 		# the preview worker running the current command, and how to run it without the worker
@@ -55,6 +58,7 @@ class ProcessRunner(QObject):
 		self.buffer = ''
 		self.cancelled = False
 		self.start_time = time.monotonic()
+		self.decoder = codecs.getincrementaldecoder('utf-8')(errors = 'replace')
 		self.process = QProcess(self)
 		self.process.setProgram(program)
 		self.process.setArguments(args)
@@ -130,8 +134,7 @@ class ProcessRunner(QObject):
 			process.waitForFinished(2000)
 
 	def on_ready_read(self) -> None:
-		chunk = bytes(self.process.readAllStandardOutput().data()).decode('utf-8', errors = 'replace')
-		self.buffer += chunk
+		self.buffer += self.decoder.decode(bytes(self.process.readAllStandardOutput().data()))
 		self.flush_buffer(final = False)
 
 	def flush_buffer(self, final : bool) -> None:
@@ -210,6 +213,7 @@ class PreviewWorker(QObject):
 		self.process : Optional[QProcess] = None
 		self.key : Tuple[str, str] = ('', '')
 		self.buffer = ''
+		self.decoder = codecs.getincrementaldecoder('utf-8')(errors = 'replace')
 		self.request_id = 0
 		self.running_id : Optional[int] = None
 		# a stopped preview the worker is still making, and when it was stopped
@@ -258,6 +262,7 @@ class PreviewWorker(QObject):
 	def start(self, python_path : str, facefusion_root : str, environment : Optional[QProcessEnvironment]) -> None:
 		self.key = (python_path, facefusion_root)
 		self.buffer = ''
+		self.decoder = codecs.getincrementaldecoder('utf-8')(errors = 'replace')
 		self.process = QProcess(self)
 		self.process.setProgram(python_path)
 		self.process.setArguments([ '-u', os.path.join(APP_DIR, 'preview_worker.py') ])
@@ -299,7 +304,7 @@ class PreviewWorker(QObject):
 		# stop lets go of the process before waiting for it, its last output can still arrive
 		if not self.process:
 			return
-		self.buffer += bytes(self.process.readAllStandardOutput().data()).decode('utf-8', errors = 'replace')
+		self.buffer += self.decoder.decode(bytes(self.process.readAllStandardOutput().data()))
 		while True:
 			# a result can follow a progress bar on the same line
 			index = self.buffer.find(WORKER_RESULT_PREFIX)
