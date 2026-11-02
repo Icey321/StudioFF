@@ -31,14 +31,9 @@ FaceFusion itself is not included: install FaceFusion v4 separately, then point 
 - **Animated WebP support**: animated WebP targets run as a lossless video copy and are saved back as looping animated WebPs. Transparent parts stay transparent.
 - **Output names**: build file names from tags like `{source}`, `{target}`, `{date}` and `{n}`, with an optional sub-folder per source.
 - **Favorite Options and search**: star any option to pin it to Favorite Options, or filter all options with *Search options*. Open or closed option groups stay that way.
-- **Faces**: shows the faces FaceFusion detects in the current frame and which ones will be processed. If none will be, it says why.
-- **Mask**: shades the face mask FaceFusion will blend through, and redraws as you change mask settings.
-- **Models**: download the lite or full model set, see what's installed, and delete models to free space.
 - **Benchmark**: runs FaceFusion's benchmark on your hardware and exports the results as a shareable image.
 - **FaceFusion**: point the app at an existing FaceFusion v4 or install it from scratch, and check GitHub for FaceFusion updates. It shows whether your FaceFusion is the version StudioFF was tested with, and can switch to that version, to the latest one or back again.
 - **System monitor**: graphics card, processor and memory use in the title bar, read with FaceFusion's own libraries. A bar under each reading goes from green to orange to red as it fills. It can be turned off in Settings.
-- **Custom look**: Auto, Light or Dark theme, with your own accent color for each (one click puts back the standard purple).
-- **Fluent design**: Windows 11 style throughout, a splash screen with a loading bar, and settings remembered between runs.
 
 ## Install
 

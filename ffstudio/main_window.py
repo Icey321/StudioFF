@@ -29,6 +29,8 @@ class MainWindow(FluentWindow):
 		self.tray : Optional[QSystemTrayIcon] = None
 		self.quitting = False
 		self.close_button_pressed = False
+		# the StudioFF update stops the run itself after asking, so closing does not ask again
+		self.update_closing = False
 		# small steps through the slow imports, so the bar keeps moving instead of stopping at 10%
 		splash.step()
 		from ffstudio.pages.batch import BatchPage
@@ -257,7 +259,7 @@ class MainWindow(FluentWindow):
 		self.save_window_state()
 		# a run with its memory freed has no process left, but closing still loses the output it was making
 		freed = self.studio_page.freed or self.batch_page.running and self.batch_page.paused and self.batch_page.current < 0
-		if self.session.runner.is_running() or freed:
+		if (self.session.runner.is_running() or freed) and not self.update_closing:
 			from qfluentwidgets import MessageBox
 			paused = self.studio_page.paused or self.batch_page.running and self.batch_page.paused
 			if freed:

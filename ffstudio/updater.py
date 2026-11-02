@@ -7,7 +7,7 @@ import zipfile
 from typing import Callable, Optional, Tuple
 
 from ffstudio.config import DATA_DIR
-from ffstudio.platforms import IS_WINDOWS
+from ffstudio.platforms import CREATE_NO_WINDOW, IS_WINDOWS
 
 APP_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 UPDATE_DIR = os.path.join(tempfile.gettempdir(), 'StudioFF-update')
@@ -16,7 +16,6 @@ RESULT_FILE = os.path.join(DATA_DIR, 'update-result.txt')
 # add a file here whenever a release removes or renames one outside ffstudio (that folder is replaced as a whole)
 RETIRED_FILES = [ 'FaceFusion Studio.bat', 'UNLICENSE', 'pinokio.js', 'install.js', 'start.js', 'update.js', 'reset.js' ]
 CREATE_NEW_PROCESS_GROUP = 0x00000200
-CREATE_NO_WINDOW = 0x08000000
 CREATE_BREAKAWAY_FROM_JOB = 0x01000000
 
 # runs after the app has quit: swaps in the new files, keeps a backup of ffstudio until the copy worked, refreshes the
@@ -31,20 +30,21 @@ $backup = Join-Path $Target 'ffstudio.update-backup'
 $python = Join-Path $Target '.venv\Scripts\python.exe'
 try {
 	$oldRequirements = Get-Content (Join-Path $Target 'requirements.txt') -Raw -ErrorAction SilentlyContinue
+	$newRequirements = Get-Content (Join-Path $Source 'requirements.txt') -Raw -ErrorAction SilentlyContinue
+	# the packages come first, so when they fail nothing of the app has been touched yet
+	if ($null -ne $newRequirements -and $newRequirements -ne $oldRequirements) {
+		if (Get-Command uv -ErrorAction SilentlyContinue) {
+			uv pip install --python $python -r (Join-Path $Source 'requirements.txt') | Out-Null
+		} else {
+			& $python -m pip install -r (Join-Path $Source 'requirements.txt') | Out-Null
+		}
+		if ($LASTEXITCODE -ne 0) { throw 'installing the new packages failed' }
+	}
 	if (Test-Path $backup) { Remove-Item $backup -Recurse -Force }
 	Move-Item (Join-Path $Target 'ffstudio') $backup
 	robocopy $Source $Target /E /XD .venv .git /R:3 /W:1 /NP /NFL /NDL /NJH /NJS | Out-Null
 	if ($LASTEXITCODE -ge 8) { throw "copying the new files failed (robocopy $LASTEXITCODE)" }
 	if (-not (Test-Path (Join-Path $Target 'ffstudio\__init__.py'))) { throw 'the new files are incomplete' }
-	$newRequirements = Get-Content (Join-Path $Target 'requirements.txt') -Raw -ErrorAction SilentlyContinue
-	if ($newRequirements -ne $oldRequirements) {
-		if (Get-Command uv -ErrorAction SilentlyContinue) {
-			uv pip install --python $python -r (Join-Path $Target 'requirements.txt') | Out-Null
-		} else {
-			& $python -m pip install -r (Join-Path $Target 'requirements.txt') | Out-Null
-		}
-		if ($LASTEXITCODE -ne 0) { throw 'installing the new packages failed' }
-	}
 	Remove-Item $backup -Recurse -Force -ErrorAction SilentlyContinue
 	Set-Content $Result "ok $Tag" -Encoding utf8
 } catch {
@@ -75,17 +75,18 @@ rm -f "$old_requirements"
 cp "$target/requirements.txt" "$old_requirements" 2> /dev/null
 reason=''
 update() {
+	# the packages come first, so when they fail nothing of the app has been touched yet
+	if [ -f "$source/requirements.txt" ] && ! cmp -s "$source/requirements.txt" "$old_requirements"; then
+		if command -v uv > /dev/null; then
+			uv pip install --python "$python" -r "$source/requirements.txt"
+		else
+			"$python" -m pip install -r "$source/requirements.txt"
+		fi || { reason='installing the new packages failed'; return 1; }
+	fi
 	rm -rf "$backup"
 	mv "$target/ffstudio" "$backup" || { reason='moving the old files aside failed'; return 1; }
 	cp -R "$source/." "$target/" || { reason='copying the new files failed'; return 1; }
 	[ -f "$target/ffstudio/__init__.py" ] || { reason='the new files are incomplete'; return 1; }
-	if ! cmp -s "$target/requirements.txt" "$old_requirements"; then
-		if command -v uv > /dev/null; then
-			uv pip install --python "$python" -r "$target/requirements.txt"
-		else
-			"$python" -m pip install -r "$target/requirements.txt"
-		fi || { reason='installing the new packages failed'; return 1; }
-	fi
 }
 if update; then
 	rm -rf "$backup"

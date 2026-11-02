@@ -1,7 +1,8 @@
 import os
 import shutil
+import threading
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 GIGABYTE = 1024 * 1024 * 1024
 # less free than this shows in orange, a long video may not fit
@@ -10,6 +11,9 @@ WARN_FREE_BYTES = 20 * GIGABYTE
 # asking a network drive often is slow, readings this young are used again
 CACHE_SECONDS = 5.0
 CACHE : Dict[str, Tuple[float, Optional[Tuple[int, int]]]] = {}
+# drives being asked right now, an asleep or offline network drive can take many seconds to answer
+READING : Set[str] = set()
+LOCK = threading.Lock()
 
 
 def drive_name(folder : str) -> str:
@@ -29,28 +33,50 @@ def existing_folder(folder : str) -> str:
 	return folder
 
 
-def drive_usage(folder : str) -> Optional[Tuple[int, int]]:
-	"""free and total bytes of the drive the folder is on, None when it cannot be read"""
-	if not folder:
-		return None
-	key = os.path.normcase(drive_name(folder))
-	now = time.monotonic()
-	cached = CACHE.get(key)
-	if cached and now - cached[0] < CACHE_SECONDS:
-		return cached[1]
-	usage = None
+def read_usage(folder : str) -> Optional[Tuple[int, int]]:
+	"""asks the drive, which can block for a long time on a network drive that is not answering"""
 	found = existing_folder(folder)
 	if found:
 		try:
 			total, _, free = shutil.disk_usage(found)
-			usage = (free, total)
+			return (free, total)
 		except OSError:
-			usage = None
-	CACHE[key] = (now, usage)
-	return usage
+			return None
+	return None
 
 
-def format_size(size : int) -> str:
+def read_in_background(key : str, folder : str) -> None:
+	usage = read_usage(folder)
+	with LOCK:
+		CACHE[key] = (time.monotonic(), usage)
+		READING.discard(key)
+
+
+def drive_usage(folder : str) -> Optional[Tuple[int, int]]:
+	"""free and total bytes of the drive the folder is on, None when it cannot be read (yet).
+	never waits for the drive: an old reading is returned while a new one is read in the background, see is_reading"""
+	if not folder:
+		return None
+	key = os.path.normcase(drive_name(folder))
+	cached = CACHE.get(key)
+	if cached and time.monotonic() - cached[0] < CACHE_SECONDS:
+		return cached[1]
+	with LOCK:
+		if key not in READING:
+			READING.add(key)
+			threading.Thread(target = read_in_background, args = (key, folder), daemon = True).start()
+	return cached[1] if cached else None
+
+
+def is_reading(folder : str) -> bool:
+	"""true while the first reading of the folder's drive is not there yet, the caller asks again soon"""
+	if not folder:
+		return False
+	key = os.path.normcase(drive_name(folder))
+	return key in READING and key not in CACHE
+
+
+def format_drive_size(size : int) -> str:
 	if size >= 1000 * GIGABYTE:
 		return '%.1f TB' % (size / (1024 * GIGABYTE))
 	return '%.0f GB' % (size / GIGABYTE) if size >= 10 * GIGABYTE else '%.1f GB' % (size / GIGABYTE)
@@ -76,7 +102,7 @@ def drive_text(folder : str) -> str:
 	drive = describe_drive(folder)
 	if not drive:
 		return ''
-	return 'Drive %s  %s free of %s' % (drive.get('drive'), format_size(drive.get('free')), format_size(drive.get('total')))
+	return 'Drive %s  %s free of %s' % (drive.get('drive'), format_drive_size(drive.get('free')), format_drive_size(drive.get('total')))
 
 
 def output_drives(folders : List[str]) -> List[Dict[str, Any]]:

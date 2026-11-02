@@ -109,6 +109,9 @@ def check_gif(target_path : str, preview_dir : str, index : int, trim_start : in
 	video_path = os.path.join(preview_dir, 'gif_%d.mp4' % index)
 	ffmpeg = shutil.which('ffmpeg')
 	if not ffmpeg or subprocess.call([ ffmpeg, '-hide_banner', '-loglevel', 'error', '-y' ] + gif_to_video_args(target_path, video_path)):
+		# ffmpeg may have written part of the video before it failed
+		if os.path.isfile(video_path):
+			os.remove(video_path)
 		return { 'path': target_path, 'kind': 'video', 'blocked': False, 'rate': 0.0, 'checked': 0, 'flagged': [], 'previews': [], 'error': 'could not convert the gif to video' }
 	try:
 		result = check_video(video_path, preview_dir, index, trim_start, trim_end)
@@ -161,7 +164,11 @@ def main() -> int:
 			else:
 				result = { 'path': target_path, 'kind': 'other', 'blocked': False, 'rate': 0.0, 'checked': 0, 'flagged': [], 'previews': [], 'error': 'not an image or video FaceFusion can read' }
 		except Exception as exception:
-			# one target FaceFusion chokes on must not leave the ones after it unchecked
+			# one target FaceFusion chokes on must not leave the ones after it unchecked, nor leave its video reader running
+			try:
+				video_manager.clear()
+			except Exception:
+				pass
 			result = { 'path': target_path, 'kind': 'other', 'blocked': False, 'rate': 0.0, 'checked': 0, 'flagged': [], 'previews': [], 'error': '%s: %s' % (type(exception).__name__, exception) }
 		sys.stdout.write('\n' + RESULT_PREFIX + json.dumps(result) + '\n')
 		sys.stdout.flush()

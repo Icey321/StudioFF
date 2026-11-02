@@ -1,3 +1,4 @@
+import copy
 import json
 import os
 import shutil
@@ -16,7 +17,6 @@ SCHEMA_FILE = os.path.join(DATA_DIR, 'schema.json')
 PREVIEW_DIR = os.path.join(DATA_DIR, 'preview')
 # copies of avif, heic, jfif and flash video files, see media.usable_path
 CONVERTED_DIR = os.path.join(DATA_DIR, 'converted')
-
 
 
 def replace_path_prefix(value : Any, old_prefix : str, new_prefix : str) -> Any:
@@ -86,7 +86,8 @@ DEFAULT_CONFIG : Dict[str, Any] =\
 
 class AppConfig:
 	def __init__(self) -> None:
-		self.data : Dict[str, Any] = dict(DEFAULT_CONFIG)
+		# a copy all the way down, the lists and dicts inside must not be the defaults' own
+		self.data : Dict[str, Any] = copy.deepcopy(DEFAULT_CONFIG)
 		# false when a settings file was there but could not be read, save then moves it aside instead of writing over it
 		self.loaded = True
 		self.load()
@@ -98,7 +99,11 @@ class AppConfig:
 				return
 			try:
 				with open(CONFIG_FILE, encoding = 'utf-8') as config_file:
-					self.data.update(json.load(config_file))
+					stored = json.load(config_file)
+				# a damaged file can hold valid json that is not a set of settings
+				if not isinstance(stored, dict):
+					raise ValueError('not a settings object')
+				self.data.update(stored)
 				return
 			except (OSError, ValueError):
 				time.sleep(0.2)

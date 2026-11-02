@@ -154,7 +154,7 @@ class ModelsPage(QWidget):
 			size_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 			self.table.setItem(row, 1, size_item)
 		total = sum(size for _, size in files)
-		self.summary.setText('%d models · %.2f GB' % (len(files), total / 1073741824) if self.session.facefusion_root else 'FaceFusion is not set up yet')
+		self.summary.setText('(%d) model%s · %.2f GB' % (len(files), '' if len(files) == 1 else 's', total / 1073741824) if self.session.facefusion_root else 'FaceFusion is not set up yet')
 		self.summary.setToolTip(models_dir(self.session.facefusion_root))
 		self.refresh_delete_button()
 
@@ -173,8 +173,8 @@ class ModelsPage(QWidget):
 			return
 		total = sum(size for _, size in selected)
 		names = [ name[:-5] for name, _ in selected ]
-		listing = '\n'.join(names[:12]) + ('\n… and %d more' % (len(names) - 12) if len(names) > 12 else '')
-		box = MessageBox('Delete %d model%s?' % (len(names), '' if len(names) == 1 else 's'), '%s\n\nThis frees %s. The files are deleted, not moved to the Recycle Bin. FaceFusion downloads a model again the next time it is used.' % (listing, format_size(total)), self.window())
+		listing = '\n'.join(names[:12]) + ('\n… and (%d) more' % (len(names) - 12) if len(names) > 12 else '')
+		box = MessageBox('Delete (%d) model%s?' % (len(names), '' if len(names) == 1 else 's'), '%s\n\nThis frees %s. The files are deleted, not moved to the Recycle Bin. FaceFusion downloads a model again the next time it is used.' % (listing, format_size(total)), self.window())
 		box.yesButton.setText('Delete')
 		box.cancelButton.setText('Cancel')
 		if not box.exec():

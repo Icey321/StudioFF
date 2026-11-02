@@ -18,10 +18,10 @@ from ffstudio.session import MINIMUM_PYTHON, Session
 from ffstudio.updater import download_release, is_git_checkout, start_helper
 from ffstudio.widgets import ChoiceButton
 
-# the theme buttons: key, text, icon and tooltip
 # minutes, 0 keeps them until the app closes
 KEEP_LOADED_CHOICES = [ (5, '5 minutes'), (10, '10 minutes'), (30, '30 minutes'), (60, '1 hour'), (0, 'Until the app closes') ]
 CLOSE_CHOICES = [ ('close', 'Quit the app'), ('minimize', 'Minimize the window'), ('tray', 'Minimize to the system tray') ]
+# the theme buttons: key, text, icon and tooltip
 THEME_CHOICES =[
 	('auto', 'Auto', FluentIcon.CONSTRACT, 'Follow the Windows light or dark setting'),
 	('light', 'Light', FluentIcon.BRIGHTNESS, 'Always light'),
@@ -405,7 +405,7 @@ class SetupPage(QWidget):
 		self.root_edit.setText(found[0])
 		self.on_root_edited()
 		version = read_facefusion_version(found[0]) or 'of unknown version'
-		others = ' (%d) other FaceFusion folders were found too, use Browse to pick another one.' % (len(found) - 1) if len(found) > 1 else ''
+		others = ' (%d) other FaceFusion folder%s %s found too, use Browse to pick another one.' % (len(found) - 1, '' if len(found) == 2 else 's', 'was' if len(found) == 2 else 'were') if len(found) > 1 else ''
 		self.session.notify.emit('success', 'FaceFusion found', 'FaceFusion %s is in %s. Check the Python below, then press "Save and load options".%s' % (version, found[0], others))
 
 	def refresh_root_status(self) -> None:
@@ -652,7 +652,7 @@ class SetupPage(QWidget):
 		self.github_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
 		layout.addLayout(form_row('FaceFusion on GitHub', [ self.github_label ], card, UPDATE_LABEL_WIDTH))
 		self.tested_label = BodyLabel(format_build(FACEFUSION_BRANCH, '', TESTED_FACEFUSION_COMMIT, TESTED_FACEFUSION_DATE), card)
-		self.tested_label.setToolTip('StudioFF v%s was tested with this FaceFusion commit. Newer ones usually work too, but FaceFusion v4 is still changing and a new commit can break options' % APP_VERSION)
+		self.tested_label.setToolTip('StudioFF v%s was tested with this FaceFusion commit. FaceFusion v4 is still changing and a newer commit can break options' % APP_VERSION)
 		self.tested_label.installEventFilter(ToolTipFilter(self.tested_label))
 		self.tested_status = StatusLine(card)
 		layout.addLayout(form_row('Tested with', [ self.tested_label ], card, UPDATE_LABEL_WIDTH))
@@ -720,6 +720,8 @@ class SetupPage(QWidget):
 			self.tested_status.set_status('warning', 'Yours is older than tested, by %d commit%s.' % (count, '' if count == 1 else 's'))
 		elif status == 'diverged':
 			self.tested_status.set_status('warning', 'Yours differs from the tested version.')
+		elif status == 'unknown':
+			self.tested_status.set_status('warning', 'Yours is not on GitHub (a local commit), so it can not be compared with the tested version.')
 		else:
 			self.tested_status.set_status('warning', 'Not the tested version. Check for updates to see if yours is newer or older.')
 
@@ -794,32 +796,27 @@ class SetupPage(QWidget):
 		"""quiet is the check at startup, it reads the build off the ui thread, only fills in the card and the dot and stays silent when something is missing"""
 		if not self.update_button.isEnabled():
 			return
-		if quiet:
-			root = self.session.facefusion_root
-			if not is_facefusion_root(root):
-				return
-			self.update_button.setEnabled(False)
-
-			def read_and_fetch() -> None:
-				build = read_facefusion_build(root)
-				self.build_read.emit(root, build)
-				if build.get('commit'):
-					self.fetch_update(dict(build, repository = build['repository'] or DEFAULT_REPOSITORY), quiet)
-				else:
-					self.update_checked.emit({ 'error': 'not a git checkout', 'quiet': True })
-			threading.Thread(target = read_and_fetch, daemon = True).start()
+		root = self.session.facefusion_root
+		if not is_facefusion_root(root):
+			if not quiet:
+				self.refresh_installed_build()
+				self.update_status.set_status('error', 'Set the FaceFusion folder first.')
+				self.update_status.show()
 			return
-		self.refresh_installed_build()
-		if not self.installed_build:
-			self.update_status.set_status('error', 'Set the FaceFusion folder first.')
-			self.update_status.show()
-			return
-		build = dict(self.installed_build)
-		build['repository'] = build['repository'] or DEFAULT_REPOSITORY
 		self.update_button.setEnabled(False)
-		self.update_status.set_status('info', 'Checking GitHub…')
-		self.update_status.show()
-		threading.Thread(target = self.fetch_update, args = (build,), daemon = True).start()
+		if not quiet:
+			self.update_status.set_status('info', 'Checking GitHub…')
+			self.update_status.show()
+
+		def read_and_fetch() -> None:
+			build = read_facefusion_build(root)
+			self.build_read.emit(root, build)
+			# without a commit only a click can still look for a newer release
+			if build.get('commit') or not quiet:
+				self.fetch_update(dict(build, repository = build['repository'] or DEFAULT_REPOSITORY), quiet)
+			else:
+				self.update_checked.emit({ 'error': 'not a git checkout', 'quiet': True })
+		threading.Thread(target = read_and_fetch, daemon = True).start()
 
 	def fetch_update(self, build : Dict[str, str], quiet : bool = False) -> None:
 		try:
@@ -847,7 +844,6 @@ class SetupPage(QWidget):
 		self.github_label.setText(text or 'Nothing found')
 		self.github_label.setToolTip(remote['commit'])
 		status, behind = remote['status'], remote['behind']
-		newer_release = bool(remote['release']) and bool(version_tuple(build.get('version', '').lstrip('v'))) and version_tuple(build['version'].lstrip('v')) < version_tuple(remote['release'].lstrip('v'))
 		# like the StudioFF dot, only a newer release counts, new commits come out almost every day
 		newer = bool(remote['release']) and bool(build.get('version')) and is_newer_version(remote['release'], build['version'])
 		self.facefusion_update_found.emit(newer)
@@ -861,7 +857,9 @@ class SetupPage(QWidget):
 			self.update_status.set_status('warning', 'Your copy differs from GitHub, which has %d commit%s you do not.' % (behind, '' if behind == 1 else 's'))
 		elif status == 'behind':
 			self.update_status.set_status('success', 'Your copy is newer than the %s branch on GitHub.' % remote['branch'])
-		elif newer_release:
+		elif status == 'unknown':
+			self.update_status.set_status('warning', 'Your commit is not on GitHub (a local commit), so it can not be compared.')
+		elif newer:
 			self.update_status.set_status('warning', 'Update available: release %s.' % remote['release'])
 		elif remote['release'] and not build.get('commit'):
 			self.update_status.set_status('info', 'This FaceFusion folder is not a git checkout, so it cannot be compared commit by commit.')
@@ -1001,11 +999,13 @@ class SetupPage(QWidget):
 			return
 		self.studio_update_status.set_status('info', 'Closing to install %s…' % self.studio_release['tag'])
 		window = self.window()
-		# the running job was already confirmed in the update question
+		# the running job was already confirmed in the update question, a batch worker may still be ending when close asks
 		if self.session.runner.is_running():
 			self.session.runner.stop()
 			self.session.clear_facefusion_temp()
+		window.update_closing = True
 		window.close()
+		window.update_closing = False
 		if window.isVisible():
 			self.studio_update_status.set_status('warning', 'The update was not installed because the app stayed open.')
 			return

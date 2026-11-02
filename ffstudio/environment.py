@@ -134,7 +134,13 @@ def compare_github_commits(repository : str, base : str, head : str) -> Dict[str
 	"""where head stands against base: identical, ahead (newer), behind (older) or diverged, with how many commits apart"""
 	if base == head:
 		return { 'status': 'identical', 'ahead': 0, 'behind': 0 }
-	compare = fetch_github_json('repos/%s/compare/%s...%s' % (repository, base, head))
+	try:
+		compare = fetch_github_json('repos/%s/compare/%s...%s' % (repository, base, head))
+	except urllib.error.HTTPError as exception:
+		# github does not know a commit that was only made on this PC
+		if exception.code not in (404, 422):
+			raise
+		return { 'status': 'unknown', 'ahead': 0, 'behind': 0 }
 	return { 'status': compare.get('status', ''), 'ahead': compare.get('ahead_by', 0), 'behind': compare.get('behind_by', 0) }
 
 
@@ -152,7 +158,13 @@ def fetch_github_build(repository : str, branch : str, commit : str) -> Dict[str
 		result['commit'] = head.get('sha', '')
 		result['date'] = head.get('commit', {}).get('committer', {}).get('date', '')
 		if commit and result['commit'] and commit != result['commit']:
-			compare = fetch_github_json('repos/%s/compare/%s...%s' % (repository, commit, result['commit']))
+			try:
+				compare = fetch_github_json('repos/%s/compare/%s...%s' % (repository, commit, result['commit']))
+			except urllib.error.HTTPError as exception:
+				# github does not know a commit that was only made on this PC
+				if exception.code not in (404, 422):
+					raise
+				compare = { 'status': 'unknown' }
 			# ahead means github has commits the local checkout lacks
 			result['status'] = compare.get('status', '')
 			result['behind'] = compare.get('ahead_by', 0)

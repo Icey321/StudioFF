@@ -13,7 +13,7 @@ from qfluentwidgets import CaptionLabel, ComboBox, CompactDoubleSpinBox, Compact
 from qfluentwidgets.components.widgets.line_edit import LineEditButton
 from qfluentwidgets.components.widgets.spin_box import CompactSpinBoxBase, SpinIcon
 
-from ffstudio.drive import describe_drive, drive_text
+from ffstudio.drive import describe_drive, drive_text, is_reading
 
 
 class WheelGuard(QObject):
@@ -1052,6 +1052,9 @@ class DriveLabel(CaptionLabel):
 			self.setTextColor('#b45309', '#f0b35a')
 		else:
 			self.setTextColor('#707070', '#9a9a9a')
+		# the drive answers in the background, the first reading is picked up as soon as it is there
+		if folder and is_reading(folder):
+			QTimer.singleShot(200, self.refresh)
 
 	def showEvent(self, event) -> None:
 		super().showEvent(event)
@@ -1081,6 +1084,8 @@ class DriveBar(QWidget):
 		folder = self.folder()
 		self.drive = describe_drive(folder) if folder else None
 		self.update()
+		if folder and is_reading(folder):
+			QTimer.singleShot(200, self.refresh)
 
 	def showEvent(self, event) -> None:
 		super().showEvent(event)

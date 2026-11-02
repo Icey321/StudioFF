@@ -8,7 +8,7 @@ from PySide6.QtWidgets import QHBoxLayout, QSizePolicy, QVBoxLayout, QWidget
 from qfluentwidgets import CaptionLabel, ToolTipFilter
 
 from ffstudio.config import APP_DIR
-from ffstudio.drive import format_size, output_drives
+from ffstudio.drive import format_drive_size, output_drives
 from ffstudio.environment import create_process_environment
 from ffstudio.platforms import kill_process_tree
 from ffstudio.session import Session
@@ -51,10 +51,10 @@ def describe_drives(folders : List[str]) -> List[Dict[str, Any]]:
 	"""the title bar parts for the drives the output folders are on, the meter fills as the drive fills"""
 	parts = []
 	for drive in output_drives(folders):
-		tip = 'Drive %s  %s free of %s\nAn output folder is on this drive' % (drive.get('drive'), format_size(drive.get('free')), format_size(drive.get('total')))
+		tip = 'Drive %s  %s free of %s\nAn output folder is on this drive' % (drive.get('drive'), format_drive_size(drive.get('free')), format_drive_size(drive.get('total')))
 		if drive.get('warn'):
 			tip += '\nGetting full, a long video may not fit'
-		parts.append({ 'text': '%s %s free' % (drive.get('drive'), format_size(drive.get('free'))), 'warn': drive.get('warn'), 'share': drive.get('share'), 'tip': tip })
+		parts.append({ 'text': '%s %s free' % (drive.get('drive'), format_drive_size(drive.get('free'))), 'warn': drive.get('warn'), 'share': drive.get('share'), 'tip': tip })
 	return parts
 
 
