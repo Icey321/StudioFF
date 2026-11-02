@@ -635,7 +635,13 @@ class BatchPage(SourceSelection, QWidget):
 		# the reference face picked for each target in Reference mode, [frame, position], also after a restart
 		self.reference_picks : Dict[str, List[int]] = { target: [ int(pick[0]), int(pick[1]) ] for target, pick in (stored.get('reference_picks') or {}).items() if isinstance(pick, list) and len(pick) == 2 }
 		# on another frame of a video than the picked one: the position of the face closest to the picked person there
-		self.reference_matches : Dict[Tuple[str, int], int] = {}
+		self.reference_matches : Dict[Tuple[str, int], Optional[int]] = {}
+		# a preview held back until the face scan knows which face of its frame is the picked person
+		self.preview_waits_for_match = False
+		# the frame the last face scan looked at, (tag, frame), and the picked frame of a target, (target, index, frame),
+		# kept so a scan result and the next scan do not read them from the file again
+		self.scanned_frame : Optional[Tuple[Tuple, Any]] = None
+		self.reference_frame : Optional[Tuple[str, int, Any]] = None
 		# the faces the last face scan found, the boxes on the preview are in this order
 		self.scanned_faces : List[Dict[str, Any]] = []
 		self.timeline_target = ''
@@ -1135,6 +1141,8 @@ class BatchPage(SourceSelection, QWidget):
 		if not schema or group not in LIVE_IGNORED_GROUPS:
 			self.schedule_preview()
 		if not schema or group in FACE_GROUPS + MASK_GROUPS or dest == 'processors':
+			# the face closest to a pick can change with the detector or the distance, the next scan finds it again
+			self.reference_matches.clear()
 			self.schedule_face_scan()
 		if dest in LOCK_DRIVERS or dest.endswith('_model'):
 			self.refresh_locks()
@@ -1597,6 +1605,16 @@ class BatchPage(SourceSelection, QWidget):
 			frame = cv2.resize(frame, (max(1, round(width * scale)), max(1, round(height * scale))), interpolation = cv2.INTER_AREA)
 		return frame
 
+	def display_preview_frame(self, item : Dict[str, Any], frame : Any) -> None:
+		"""another target or frame shows right away, so the faces drawn over it line up while the preview runs"""
+		frame_key = (item.get('target'), self.preview_frame_index(item.get('target')))
+		if frame_key != self.preview_frame_key:
+			self.preview_view.set_pixmap(to_pixmap(frame))
+			self.preview_view.set_faces([])
+			self.preview_frame_key = frame_key
+		self.shown_key = self.run_key(item)
+		self.preview_frame = frame
+
 	def run_preview(self) -> None:
 		item = self.preview_item()
 		if not item:
@@ -1621,6 +1639,13 @@ class BatchPage(SourceSelection, QWidget):
 		if frame is None or run_frame is None:
 			self.preview_label.setText('Could not read %s' % os.path.basename(item.get('target')))
 			return
+		if self.needs_match(item):
+			# the frame shows and is scanned first, on_faces_scanned starts the preview again once the match is known
+			self.display_preview_frame(item, frame)
+			self.preview_waits_for_match = True
+			self.preview_label.setText('Finding the picked face in this frame…')
+			self.schedule_face_scan()
+			return
 		os.makedirs(PREVIEW_DIR, exist_ok = True)
 		frame_path = os.path.join(PREVIEW_DIR, 'batch_frame.png')
 		output_path = os.path.join(PREVIEW_DIR, 'batch_result.png')
@@ -1642,15 +1667,8 @@ class BatchPage(SourceSelection, QWidget):
 		if image_sources:
 			args += [ '-s' ] + image_sources
 		args += [ '-t', frame_path, '-o', output_path ] + self.session.option_args(values)
-		# another target or frame shows right away, so the faces drawn over it line up while the preview runs
-		frame_key = (item.get('target'), self.preview_frame_index(item.get('target')))
-		if frame_key != self.preview_frame_key:
-			self.preview_view.set_pixmap(to_pixmap(frame))
-			self.preview_view.set_faces([])
-			self.preview_frame_key = frame_key
+		self.display_preview_frame(item, frame)
 		self.preview_run = item
-		self.shown_key = self.run_key(item)
-		self.preview_frame = frame
 		self.preview_running = True
 		self.schedule_face_scan()
 		if not self.session.run_facefusion('Batch preview of ' + os.path.basename(item.get('target')), args, preview = True):
@@ -1756,9 +1774,20 @@ class BatchPage(SourceSelection, QWidget):
 			# the picked face, looked for in the shown frame. picked on another frame, that frame is the reference
 			values.update({ 'reference_frame_index': 0, 'reference_face_position': pick[1] })
 			if pick[0] != self.preview_frame_index(item.get('target')):
-				reference = self.scaled_frame(item, pick[0])
+				reference = self.picked_frame(item, pick[0])
 		args = self.session.option_args(values, FACE_GROUPS + (MASK_GROUPS if mask else []))
+		self.scanned_frame = (self.faces_tag(item), frame)
 		self.face_probe.scan(frame, reference, sources, args, tag = self.faces_tag(item), mask = mask)
+
+	def picked_frame(self, item : Dict[str, Any], index : int) -> Optional[Any]:
+		"""the scaled frame a face was picked on, read once for all the scans of other frames"""
+		target = item.get('target')
+		if not self.reference_frame or self.reference_frame[:2] != (target, index):
+			frame = self.scaled_frame(item, index)
+			if frame is None:
+				return None
+			self.reference_frame = (target, index, frame)
+		return self.reference_frame[2]
 
 	def reference_mode(self) -> bool:
 		return self.store.values.get('face_selector_mode') == 'reference'
@@ -1767,17 +1796,33 @@ class BatchPage(SourceSelection, QWidget):
 		return self.reference_picks.get(target)
 
 	def reference_values(self, item : Dict[str, Any], preview : bool = False) -> Dict[str, Any]:
-		"""the reference frame and position of the target's picked face, nothing when none is picked or the mode is not Reference.
-		a preview runs on its one frame: the picked face there, or the one closest to it when it was picked on another frame"""
+		"""the reference frame and position of the target's picked face, nothing when the mode is not Reference. without a pick
+		the run takes the face at Position in the shown frame, like the face picker rings.
+		a preview runs on its one frame: the picked face there, or the one closest to it when it was picked on another frame,
+		nobody when no face there looks like it"""
+		if not self.reference_mode():
+			return {}
 		target = item.get('target')
 		pick = self.reference_pick(target)
-		if not self.reference_mode() or not pick:
-			return {}
+		index = self.preview_frame_index(target)
+		if not pick:
+			return {} if preview else { 'reference_frame_index': index }
 		if not preview:
 			return { 'reference_frame_index': pick[0], 'reference_face_position': pick[1] }
+		if pick[0] == index:
+			return { 'reference_frame_index': 0, 'reference_face_position': pick[1] }
+		match = self.reference_matches.get((target, index))
+		if match is None:
+			# no face is within the distance, a distance of 0 takes none
+			return { 'reference_frame_index': 0, 'reference_face_position': 0, 'reference_face_distance': 0.0 }
+		return { 'reference_frame_index': 0, 'reference_face_position': match }
+
+	def needs_match(self, item : Dict[str, Any]) -> bool:
+		"""a preview of a frame other than the picked one waits for the face scan to find the face closest to the pick"""
+		target = item.get('target')
+		pick = self.reference_pick(target)
 		index = self.preview_frame_index(target)
-		position = pick[1] if pick[0] == index else self.reference_matches.get((target, index), pick[1])
-		return { 'reference_frame_index': 0, 'reference_face_position': position }
+		return self.reference_mode() and bool(pick) and pick[0] != index and (target, index) not in self.reference_matches
 
 	def pick_reference(self, position : int) -> None:
 		"""the face at position in the shown frame becomes the target's reference face, picking it again unpicks it"""
@@ -1806,19 +1851,22 @@ class BatchPage(SourceSelection, QWidget):
 	def refresh_face_picker(self, item : Dict[str, Any], result : dict) -> None:
 		"""round crops of the faces in the shown frame, largest first, the one that gets changed ringed: the picked one,
 		the closest to it when it was picked on another frame, or the one at Position before anything is picked"""
-		if not self.reference_mode() or result.get('error'):
-			self.face_picker.hide()
-			return
 		target = item.get('target')
 		index = self.preview_frame_index(target)
 		pick = self.reference_pick(target)
 		faces = sorted((face for face in result.get('faces') or [] if face.get('position', -1) >= 0), key = lambda face: face.get('position'))
-		if pick and pick[0] != index:
-			# the face that looks most like the picked person, a preview of this frame changes that one
-			matches = [ face for face in faces if face.get('selected') ]
-			if matches:
-				self.reference_matches[(target, index)] = min(matches, key = lambda face: face.get('distance', 1.0)).get('position')
-		frame = self.scaled_frame(item)
+		if self.reference_mode() and pick and pick[0] != index:
+			# the face that looks most like the picked person, a preview of this frame changes that one, None for nobody
+			matches = [ face for face in faces if face.get('selected') ] if not result.get('error') else []
+			self.reference_matches[(target, index)] = min(matches, key = lambda face: face.get('distance', 1.0)).get('position') if matches else None
+		if self.preview_waits_for_match:
+			self.preview_waits_for_match = False
+			self.schedule_preview()
+		if not self.reference_mode() or result.get('error'):
+			self.face_picker.hide()
+			return
+		scanned = self.scanned_frame if self.scanned_frame and self.scanned_frame[0] == result.get('tag') else None
+		frame = scanned[1] if scanned else self.scaled_frame(item)
 		crops = []
 		if frame is not None and result.get('width'):
 			scale = frame.shape[1] / result.get('width')
@@ -1833,7 +1881,8 @@ class BatchPage(SourceSelection, QWidget):
 		if pick and pick[0] == index:
 			ringed = pick[1]
 		elif pick:
-			ringed = self.reference_matches.get((target, index), -1)
+			match = self.reference_matches.get((target, index))
+			ringed = -1 if match is None else match
 		else:
 			ringed = self.default_position()
 		# every face within the Distance of the reference is changed, not just the closest one
@@ -1846,6 +1895,8 @@ class BatchPage(SourceSelection, QWidget):
 			hint = 'No faces in this frame to pick from'
 		elif pick and pick[0] == index:
 			hint = 'The ringed face is changed in %s · click it again to unpick' % name
+		elif pick and ringed < 0:
+			hint = 'Picked on frame %d, no face here looks like it, none is changed · click a face to pick it here instead' % pick[0]
 		elif pick:
 			hint = 'Picked on frame %d, the ringed face looks most like it · click a face to pick it here instead' % pick[0]
 		elif len(crops) == 1:

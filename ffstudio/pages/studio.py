@@ -26,9 +26,9 @@ from ffstudio.session import CONTENT_RESULT_PREFIX, Session, folder_is_writable
 from ffstudio.widgets import DisabledToolTipFilter, DriveLabel, GroupChip, PreviewView, ProcessorArea, ProcessorButton, Splitter, Thumbnail, add_edit_button, attach_landmarks_cycle, collect_drop_paths, guard_wheel, landmarks_mode, with_drive_bar
 
 STUDIO_GROUPS = [ 'face_selector', 'face_masker', 'face_detector', 'face_aligner', 'face_tracker', 'output_creation', 'frame_extraction', 'frame_distribution', 'voice_extractor', 'workflow' ]
-# settings that cannot change how a single preview frame looks
 # options whose value grays out other rows, besides the models (refresh_locks)
 LOCK_DRIVERS = [ 'face_selector_mode', 'processors', 'execution_providers', 'output_video_encoder' ]
+# settings that cannot change how a single preview frame looks
 LIVE_IGNORED_GROUPS = [ 'paths', 'output_creation', 'frame_extraction', 'frame_distribution', 'voice_extractor', 'workflow', 'execution', 'download', 'memory', 'misc' ]
 # bigger frames are previewed on a copy this many pixels high (or wide, when upright), which is a little quicker
 PREVIEW_MAX_SIDE = 1080

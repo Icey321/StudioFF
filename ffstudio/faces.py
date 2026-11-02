@@ -240,8 +240,11 @@ def alike_faces(result : Dict[str, Any], schema = None) -> Tuple[int, str]:
 	if result.get('error') or result.get('mode') != 'reference' or len(selected) < 2:
 		return 0, ''
 	distances = sorted(face.get('distance') for face in selected if face.get('distance') is not None)
-	lower = math.ceil(distances[1] / step - 1) * step if len(distances) > 1 else 0
-	if lower > distances[0]:
+	# the probe rounds the distances to 3 decimals, the true one can be up to half a thousandth off either way.
+	# facefusion takes a face below the Distance, so the setting goes a step under the second face and above the first
+	slack = 0.0005
+	lower = math.floor((distances[1] - slack) / step - 1e-9) * step if len(distances) > 1 else 0
+	if lower > distances[0] + slack:
 		return len(selected), 'Set Distance to %.2f or lower to change one' % lower
 	return len(selected), 'Too alike for Distance to tell apart'
 

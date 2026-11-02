@@ -5,6 +5,7 @@ from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QBoxLayout, QButtonGroup, QFrame, QHBoxLayout, QSizePolicy, QVBoxLayout, QWidget
 from qfluentwidgets import BodyLabel, CaptionLabel, CheckBox, ComboBox, FlowLayout, FluentIcon, LineEdit, Slider, SpinBox, SwitchButton, ToolTipFilter
 
+from ffstudio.face_mapping import FACE_PROCESSORS
 from ffstudio.schema import Schema, format_scalar, same_value
 from ffstudio.widgets import ChoiceButton, DecimalBox, DisabledToolTipFilter, InfoButton, NumberBox, RangeSlider, ResetButton, StarButton, guard_wheel
 
@@ -37,6 +38,16 @@ MODE_TIPS =\
 	'one': 'One: changes only the first face, after sorting by Order and the Gender, Race and Age filters.\nIt picks again on every frame, so in a video it can jump from one person to another.',
 	'reference': 'Reference: changes the faces that look like the face at Position in the reference Frame,\nwithin the Distance, on every frame. Order, Gender, Race and Age are not used.\nThe only mode that can give different people different sources (Face Mapping).'
 }
+# what each gender choice does, the tooltips of the gender buttons
+GENDER_TIPS =\
+{
+	None: 'Any: faces of any gender.',
+	'auto': 'Same as Source: only faces of the same gender as the largest source face.',
+	'male': 'Male: only faces read as male.',
+	'female': 'Female: only faces read as female.'
+}
+# the button rows with a tooltip on each choice
+BUTTON_TIPS = { 'face_selector_gender': GENDER_TIPS, 'face_selector_mode': MODE_TIPS }
 # the face selector options each mode leaves unused: reference never sorts or filters, many and one never look at a
 # reference face, and many takes every face, so their order does not matter either. a pair is locked by its first option
 REFERENCE_OPTIONS = [ 'reference_face_position', 'reference_face_distance', 'reference_frame_index' ]
@@ -56,8 +67,7 @@ def unused_locks(mode : str, reason : str = '') -> Dict[str, Tuple[Any, str]]:
 	return { dest: (KEEP_VALUE, reason or 'Not used in %s mode' % mode.capitalize()) for dest in UNUSED_BY_MODE.get(mode, []) }
 
 
-# the processors that work on faces, the face groups do nothing without one of them on
-FACE_PROCESSORS = [ 'age_modifier', 'deep_swapper', 'expression_restorer', 'face_debugger', 'face_editor', 'face_enhancer', 'face_swapper', 'lip_syncer' ]
+# the face groups do nothing without one of the face processors on
 FACE_OPTION_GROUPS = [ 'face_detector', 'face_aligner', 'face_selector', 'face_tracker', 'face_masker' ]
 # the face processors that read each face mask option (facefusion processors/modules/*/core.py)
 MASK_TYPE_USERS = [ processor for processor in FACE_PROCESSORS if processor != 'face_editor' ]
@@ -209,13 +219,6 @@ class ChoiceControl(OptionControl):
 class ButtonChoiceControl(OptionControl):
 	"""a row of buttons for short choices, the face selector gender ones with an icon each"""
 	ICONS = { None: (ANY_TEXT, None, FluentIcon.PEOPLE), 'auto': (SOURCE_MATCH_TEXT, None, FluentIcon.LINK), 'male': ('Male', 'male', None), 'female': ('Female', 'female', None) }
-	# what each gender choice does, the tooltips of the buttons
-	TIPS =	{
-		None: 'Any: faces of any gender.',
-		'auto': 'Same as Source: only faces of the same gender as the largest source face.',
-		'male': 'Male: only faces read as male.',
-		'female': 'Female: only faces read as female.'
-	}
 
 	def __init__(self, option : Dict[str, Any], parent : Optional[QWidget] = None) -> None:
 		super().__init__(option, parent)
@@ -231,12 +234,10 @@ class ButtonChoiceControl(OptionControl):
 			text, symbol, icon = self.ICONS.get(item, (str(item).capitalize(), None, None))
 			button = ChoiceButton(text, symbol, icon, self)
 			button.setCheckable(True)
-			if option.get('dest') == 'face_selector_gender':
-				button.setToolTip(self.TIPS.get(item, ''))
-				button.installEventFilter(DisabledToolTipFilter(button))
-			if item in MODE_TIPS and option.get('dest') == 'face_selector_mode':
-				button.setToolTip(MODE_TIPS.get(item))
-				# also while the row is grayed out, the tip still says what the mode does
+			tips = BUTTON_TIPS.get(option.get('dest')) or {}
+			if item in tips:
+				button.setToolTip(tips.get(item))
+				# also while the row is grayed out, the tip still says what the choice does
 				button.installEventFilter(DisabledToolTipFilter(button))
 			self.group.addButton(button, index)
 			layout.addWidget(button)
