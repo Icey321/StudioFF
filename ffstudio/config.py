@@ -17,6 +17,8 @@ SCHEMA_FILE = os.path.join(DATA_DIR, 'schema.json')
 PREVIEW_DIR = os.path.join(DATA_DIR, 'preview')
 # copies of avif, heic, jfif and flash video files, see media.usable_path
 CONVERTED_DIR = os.path.join(DATA_DIR, 'converted')
+# the faces cut out of source photos that show several, see media.split_faces
+SOURCE_FACES_DIR = os.path.join(DATA_DIR, 'source_faces')
 
 
 def replace_path_prefix(value : Any, old_prefix : str, new_prefix : str) -> Any:

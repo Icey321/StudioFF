@@ -1,7 +1,7 @@
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from PySide6.QtCore import QSize, Qt, Signal
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QFont, QFontMetrics
 from PySide6.QtWidgets import QBoxLayout, QButtonGroup, QFrame, QHBoxLayout, QSizePolicy, QVBoxLayout, QWidget
 from qfluentwidgets import BodyLabel, CaptionLabel, CheckBox, ComboBox, FlowLayout, FluentIcon, LineEdit, Slider, SpinBox, SwitchButton, ToolTipFilter
 
@@ -29,6 +29,23 @@ REQUIRED_CHOICES =\
 PAIRED_OPTIONS =\
 {
 	'face_selector_age_start': ('face_selector_age_end', 'filter the detected faces based on their age, between the two grips')
+}
+# what the two ends of a face editor slider do, shown beside the slider
+SLIDER_END_WORDS ={
+	'face_editor_eyebrow_direction': ('down', 'up'),
+	'face_editor_eye_gaze_horizontal': ('left', 'right'),
+	'face_editor_eye_gaze_vertical': ('down', 'up'),
+	'face_editor_eye_open_ratio': ('closed', 'open'),
+	'face_editor_lip_open_ratio': ('closed', 'open'),
+	'face_editor_mouth_grim': ('less', 'more'),
+	'face_editor_mouth_pout': ('less', 'more'),
+	'face_editor_mouth_purse': ('less', 'more'),
+	'face_editor_mouth_smile': ('frown', 'smile'),
+	'face_editor_mouth_position_horizontal': ('left', 'right'),
+	'face_editor_mouth_position_vertical': ('down', 'up'),
+	'face_editor_head_pitch': ('down', 'up'),
+	'face_editor_head_yaw': ('left', 'right'),
+	'face_editor_head_roll': ('left', 'right')
 }
 PAIRED_PARTNERS = { partner: dest for dest, (partner, _) in PAIRED_OPTIONS.items() }
 # what facefusion does in each face selector mode, the tooltips of the mode buttons
@@ -312,7 +329,12 @@ class RangeControl(OptionControl):
 		self.slider.setRange(0, round((self.maximum - self.minimum) / self.step))
 		self.slider.setMinimumWidth(80)
 		self.slider.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+		low_word, high_word = SLIDER_END_WORDS.get(option.get('dest'), ('', ''))
+		if low_word:
+			layout.addWidget(self.end_label(low_word, Qt.AlignmentFlag.AlignRight))
 		layout.addWidget(self.slider, 1)
+		if high_word:
+			layout.addWidget(self.end_label(high_word, Qt.AlignmentFlag.AlignLeft))
 
 		if self.is_float:
 			self.spin = DecimalBox(self)
@@ -328,6 +350,15 @@ class RangeControl(OptionControl):
 		self.slider.valueChanged.connect(self.on_slider)
 		self.spin.valueChanged.connect(self.on_spin)
 		guard_wheel(self.slider, self.spin)
+
+	def end_label(self, word : str, alignment : Qt.AlignmentFlag) -> CaptionLabel:
+		label = CaptionLabel(word, self)
+		label.setTextColor('#606060', '#a0a0a0')
+		# one width for every end word, so the sliders of all rows are equally long
+		metrics = QFontMetrics(label.font())
+		label.setFixedWidth(max(metrics.horizontalAdvance(end_word) for words in SLIDER_END_WORDS.values() for end_word in words) + 4)
+		label.setAlignment(alignment | Qt.AlignmentFlag.AlignVCenter)
+		return label
 
 	def on_slider(self, position : int) -> None:
 		if not self.updating:

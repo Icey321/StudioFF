@@ -56,6 +56,50 @@ def copy_location(path : str) -> Optional[Tuple[str, str]]:
 	return folder, os.path.join(folder, os.path.splitext(os.path.basename(path))[0] + copy_extension)
 
 
+# a source photo with several faces becomes one square picture per face: this many times the face box wide, so the whole head shows
+HEAD_SIZE = 2.0
+# the head's middle is above the face box's middle, by this share of the box height
+HEAD_RISE = 0.12
+# a crowd photo makes no more source faces than this, the largest faces first
+SPLIT_FACES_LIMIT = 16
+
+
+def crop_head(frame : numpy.ndarray, box : List[float]) -> numpy.ndarray:
+	"""a square of the frame around the whole head of a face, moved inside the frame rather than cut when the head is near an edge"""
+	height, width = frame.shape[:2]
+	x1, y1, x2, y2 = box
+	side = int(min(round(HEAD_SIZE * max(x2 - x1, y2 - y1)), width, height))
+	left = int(min(max(round((x1 + x2) / 2 - side / 2), 0), width - side))
+	top = int(min(max(round((y1 + y2) / 2 - HEAD_RISE * (y2 - y1) - side / 2), 0), height - side))
+	return frame[top:top + side, left:left + side]
+
+
+def split_faces(path : str, faces : List[dict]) -> List[Tuple[str, int]]:
+	"""saves each face of a photo as its own picture, named after the photo and counted from the left ("Beach 1.png"), once
+	and kept. [(picture path, the face's position, 0 for the largest)] left to right, empty when the photo cannot be read"""
+	from ffstudio.config import SOURCE_FACES_DIR
+
+	frame = read_image(path)
+	if frame is None:
+		return []
+	try:
+		modified = os.path.getmtime(path)
+	except OSError:
+		return []
+	# a folder per photo and version, so two beach.jpg files in different folders do not meet
+	folder = os.path.join(SOURCE_FACES_DIR, hashlib.sha1(('%s|%f' % (os.path.abspath(path), modified)).encode()).hexdigest()[:16])
+	os.makedirs(folder, exist_ok = True)
+	name = os.path.splitext(os.path.basename(path))[0]
+	largest = sorted(faces, key = lambda face: face.get('position', 0))[:SPLIT_FACES_LIMIT]
+	crops = []
+	for number, face in enumerate(sorted(largest, key = lambda face: face.get('box')[0]), 1):
+		crop_path = os.path.join(folder, '%s %d.png' % (name, number))
+		if not os.path.isfile(crop_path) and not write_image(crop_path, crop_head(frame, face.get('box'))):
+			return []
+		crops.append((crop_path, face.get('position', 0)))
+	return crops
+
+
 def needs_conversion(paths : List[str]) -> bool:
 	"""whether usable_path would have to make a copy of any of these files first, which can take a while for a video"""
 	return any(location and not os.path.isfile(location[1]) for location in (copy_location(path) for path in paths if path and os.path.isfile(path)))

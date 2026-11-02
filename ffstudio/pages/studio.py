@@ -15,7 +15,7 @@ from qfluentwidgets import Action, BodyLabel, CaptionLabel, FlowLayout, FluentIc
 from ffstudio.config import APP_DIR, PREVIEW_DIR
 from ffstudio.face_mapping import FACE_PROCESSORS, FRAME_PROCESSORS, GROUP_PREFIX, LEAVE, PEOPLE_FILE, SELECTED, FaceMappingCard, box_overlap, face_map, group_images, group_value, is_kept, is_mapped, merge_people, people_dir, person_color, person_name, plan_passes
 from ffstudio.faces import FACE_CHECK_SAMPLES, FACE_GROUPS, MASK_GROUPS, FaceProbe, alike_faces, describe_faces, describe_landmarks, describe_mask, face_landmarks, face_tag, faces_text_color, no_face, read_mask
-from ffstudio.media import VideoReader, animation_extension, browse_dir, is_animated_webp, is_animation, format_length, format_seconds, format_timecode, media_kind, needs_conversion, read_frame, read_image, thumbnail, to_pixmap, usable_path, write_image
+from ffstudio.media import VideoReader, animation_extension, browse_dir, is_animated_webp, is_animation, format_length, format_seconds, format_timecode, media_kind, needs_conversion, read_frame, read_image, split_faces, thumbnail, to_pixmap, usable_path, write_image
 from ffstudio.nsfw import BLOCKED_STATUS, NsfwDialog, describe_result, show_blocked_bar
 from ffstudio.option_panel import FavoritesPanel, OptionPanel
 from ffstudio.option_widgets import FILTER_OPTIONS, KEEP_VALUE, setting_locks, unused_locks
@@ -134,6 +134,8 @@ class SourceSelection:
 	SOURCE_KEYS = ('source_paths', 'unused_source_paths', 'source_names', 'source_groups', 'removed_sources')
 	# at most this many removed sources are kept for the Restore button
 	REMOVED_SOURCES_LIMIT = 200
+	# the settings that change which faces FaceFusion finds in a photo, the selector's picks do not matter there
+	SOURCE_FACE_GROUPS = [ 'face_detector', 'face_aligner', 'execution' ]
 
 	def load_sources(self) -> None:
 		paths_key, unused_key, names_key, groups_key, removed_key = self.SOURCE_KEYS
@@ -229,6 +231,45 @@ class SourceSelection:
 		if accepted:
 			self.source_anchor = accepted[0]
 		self.set_sources(self.source_paths + accepted)
+		self.find_source_faces([ path for path in accepted if media_kind(path) == 'image' ])
+
+	def find_source_faces(self, paths : List[str]) -> None:
+		"""looks for the faces in photos just added, one that shows several is split by on_source_faces"""
+		if not paths or not self.session.is_configured():
+			return
+		args = self.session.option_args(groups = self.SOURCE_FACE_GROUPS)
+		for path in paths:
+			self.face_probe.find_source_faces(path, args)
+
+	def on_source_faces(self, result : dict) -> None:
+		path = result.get('tag')
+		faces = result.get('faces') or []
+		if result.get('error') or len(faces) < 2 or path not in self.source_paths:
+			return
+		# the pictures are cut off the ui thread
+		self.session.background.run(lambda: split_faces(path, faces), lambda crops: self.replace_with_faces(path, crops), [])
+
+	def replace_with_faces(self, path : str, crops : List[Tuple[str, int]]) -> None:
+		"""a photo with several faces gives way to one source per face, left to right, in its place. of a photo that was in use
+		only its largest face is, as FaceFusion would have taken it, the others wait to be picked"""
+		if len(crops) < 2 or path not in self.source_paths:
+			return
+		faces = [ crop for crop, _ in crops ]
+		added = [ (crop, position) for crop, position in crops if crop not in self.source_paths ]
+		used = path not in self.unused_sources
+		index = self.source_paths.index(path)
+		paths = self.source_paths[:index] + [ crop for crop, _ in added ] + self.source_paths[index + 1:]
+		self.unused_sources = [ source for source in self.unused_sources if source != path ] + [ crop for crop, position in added if not (used and position == 0) ]
+		self.source_names.pop(path, None)
+		self.source_groups = [ dict(group, paths = list(dict.fromkeys(item for source in group.get('paths') or [] for item in (faces if source == path else [ source ])))) for group in self.source_groups ]
+		if self.source_anchor == path:
+			self.source_anchor = next((crop for crop, _ in added if crop not in self.unused_sources), '')
+		self.source_paths = paths
+		self.prune_groups()
+		self.store_sources()
+		self.source_card.refresh(paths)
+		self.on_sources_changed('list')
+		self.session.notify.emit('info', 'Faces found', '%s shows (%d) faces, each is a source now.' % (os.path.basename(path), len(faces)))
 
 	def remove_source(self, path : str) -> None:
 		self.set_sources([ source for source in self.source_paths if source != path ])
@@ -1062,6 +1103,7 @@ class StudioPage(SourceSelection, QWidget):
 		# face detection on the shown frame, rerun shortly after the frame or a face setting changes
 		self.face_probe = FaceProbe(session, self)
 		self.face_probe.scanned.connect(self.on_faces_scanned)
+		self.face_probe.source_faces_found.connect(self.on_source_faces)
 		self.face_probe.loading.connect(self.on_faces_loading)
 		self.faces_timer = QTimer(self)
 		self.faces_timer.setSingleShot(True)
@@ -1601,6 +1643,9 @@ class StudioPage(SourceSelection, QWidget):
 			# between two passes nothing runs, the preview follows the last one
 			self.live_pending = True
 			return
+		if self.session.runner.is_running() and self.preview_mode and self.pending_output and not self.chain and self.session.runner.worker is not None:
+			# a change made while a preview is being made ends it at once, the worker finishes it unseen and makes the new one next
+			self.session.runner.stop()
 		if self.session.runner.is_running():
 			# let the running preview finish and show, then run once more with the latest settings
 			self.live_pending = self.preview_mode and self.session.facefusion_running

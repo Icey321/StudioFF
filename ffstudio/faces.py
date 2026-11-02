@@ -34,6 +34,8 @@ class FaceProbe(QObject):
 	# the people found in a whole target, and how many of its frames were looked at so far
 	people_found = Signal(dict)
 	people_progress = Signal(int, int)
+	# the faces found in a photo added as a source, the result's tag is the photo's path
+	source_faces_found = Signal(dict)
 
 	def __init__(self, session : Session, parent : Optional[QObject] = None) -> None:
 		super().__init__(parent)
@@ -45,6 +47,8 @@ class FaceProbe(QObject):
 		self.running : Optional[Dict[str, Any]] = None
 		self.waiting : Optional[Dict[str, Any]] = None
 		self.waiting_people : Optional[Dict[str, Any]] = None
+		# source photos wait in line, none is dropped for a newer one
+		self.waiting_sources : List[Dict[str, Any]] = []
 		self.errors : List[str] = []
 		# its models let go after the same time as the preview worker's, and when a whole run needs the memory
 		self.idle_timer = QTimer(self)
@@ -53,7 +57,7 @@ class FaceProbe(QObject):
 		session.busy_changed.connect(self.on_busy_changed)
 
 	def is_idle(self) -> bool:
-		return self.running is None and self.waiting is None and self.waiting_people is None
+		return self.running is None and self.waiting is None and self.waiting_people is None and not self.waiting_sources
 
 	def start_idle_timer(self) -> None:
 		minutes = int(self.session.config.get('preview_keep_loaded_minutes') or 0)
@@ -79,12 +83,21 @@ class FaceProbe(QObject):
 		if self.running is None:
 			self.send_next()
 
+	def find_source_faces(self, path : str, args : List[str]) -> None:
+		"""asks which faces a photo shows, the answer comes by source_faces_found"""
+		self.request_id += 1
+		self.waiting_sources.append({ 'id': self.request_id, 'source_path': path, 'frame': path, 'reference': None, 'sources': [], 'args': args, 'tag': path })
+		if self.running is None:
+			self.send_next()
+
 	def is_finding_people(self) -> bool:
 		return any(request and request.get('people') for request in [ self.running, self.waiting_people ])
 
 	def emit_result(self, request : Dict[str, Any], result : Dict[str, Any]) -> None:
 		result['tag'] = request.get('tag')
-		if request.get('people'):
+		if request.get('source_path'):
+			self.source_faces_found.emit(result)
+		elif request.get('people'):
 			self.people_found.emit(result)
 		else:
 			self.scanned.emit(result)
@@ -92,6 +105,8 @@ class FaceProbe(QObject):
 	def send_next(self) -> None:
 		if self.waiting_people:
 			request, self.waiting_people = self.waiting_people, None
+		elif self.waiting_sources:
+			request = self.waiting_sources.pop(0)
 		else:
 			request, self.waiting = self.waiting, None
 		if request is None:
@@ -100,15 +115,23 @@ class FaceProbe(QObject):
 		self.idle_timer.stop()
 		if self.python_path != self.session.python_path:
 			# stop forgets the waiting requests, the other kind still wants its turn
-			waiting, waiting_people = self.waiting, self.waiting_people
+			waiting, waiting_people, waiting_sources = self.waiting, self.waiting_people, self.waiting_sources
 			self.stop()
-			self.waiting, self.waiting_people = waiting, waiting_people
+			self.waiting, self.waiting_people, self.waiting_sources = waiting, waiting_people, waiting_sources
 		if not self.is_running() and not self.start():
 			self.emit_result(request, { 'id': request.get('id'), 'faces': [], 'people': [], 'error': 'Could not start FaceFusion' })
+			if self.waiting_sources:
+				self.send_next()
 			return
 		if request.get('people'):
 			self.running = request
 			line = json.dumps({ key: request.get(key) for key in [ 'id', 'people', 'start', 'end', 'samples', 'crops', 'args' ] })
+			self.process.write((line + '\n').encode('utf-8'))
+			return
+		if request.get('source_path'):
+			# the photo is read where it is, no frame to write
+			self.running = request
+			line = json.dumps({ key: request.get(key) for key in [ 'id', 'frame', 'reference', 'sources', 'args' ] })
 			self.process.write((line + '\n').encode('utf-8'))
 			return
 		os.makedirs(FACES_DIR, exist_ok = True)
@@ -147,6 +170,7 @@ class FaceProbe(QObject):
 		self.idle_timer.stop()
 		self.waiting = None
 		self.waiting_people = None
+		self.waiting_sources = []
 		self.running = None
 		if self.process:
 			process, self.process = self.process, None

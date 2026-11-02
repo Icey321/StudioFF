@@ -719,6 +719,7 @@ class BatchPage(SourceSelection, QWidget):
 		# the faces and the mask facefusion sees in the previewed frame, drawn over the preview
 		self.face_probe = FaceProbe(session, self)
 		self.face_probe.scanned.connect(self.on_faces_scanned)
+		self.face_probe.source_faces_found.connect(self.on_source_faces)
 		self.face_probe.loading.connect(self.on_faces_loading)
 		self.face_probe.people_found.connect(self.on_face_check_result)
 		self.session.runner.began.connect(self.on_run_began)
