@@ -229,6 +229,8 @@ class PreviewWorker(QObject):
 		# a stopped preview the worker is still making, and when it was stopped
 		self.cancelled_id : Optional[int] = None
 		self.cancelled_at = 0.0
+		# the newest request, held back while the worker still finishes a stopped preview, so stopped ones never pile up
+		self.held_line = ''
 		self.failures = 0
 		self.idle_minutes = WORKER_IDLE_MINUTES
 		self.idle_timer = QTimer(self)
@@ -267,6 +269,9 @@ class PreviewWorker(QObject):
 		self.request_id += 1
 		self.running_id = self.request_id
 		line = json.dumps({ 'id': self.request_id, 'script': script, 'args': args })
+		if self.cancelled_id is not None:
+			self.held_line = line
+			return
 		self.process.write((line + '\n').encode('utf-8'))
 
 	def start(self, python_path : str, facefusion_root : str, environment : Optional[QProcessEnvironment]) -> None:
@@ -290,14 +295,20 @@ class PreviewWorker(QObject):
 		"""ends the running preview for its runner at once, the worker finishes it unseen and keeps its models loaded"""
 		if self.running_id is None:
 			return
-		self.cancelled_id, self.running_id = self.running_id, None
-		self.cancelled_at = time.monotonic()
+		if self.held_line:
+			# never sent, the worker is still on an earlier stopped one
+			self.held_line = ''
+			self.running_id = None
+		else:
+			self.cancelled_id, self.running_id = self.running_id, None
+			self.cancelled_at = time.monotonic()
 		self.done.emit(None)
 
 	def stop(self) -> None:
 		"""quits the worker and frees its models, a running preview ends as failed"""
 		self.idle_timer.stop()
 		self.cancelled_id = None
+		self.held_line = ''
 		if self.process:
 			process, self.process = self.process, None
 			process.finished.disconnect(self.on_finished)
@@ -346,6 +357,9 @@ class PreviewWorker(QObject):
 			self.cancelled_id = None
 			if self.running_id is None and self.idle_minutes > 0:
 				self.idle_timer.start()
+			if self.held_line:
+				line, self.held_line = self.held_line, ''
+				self.process.write((line + '\n').encode('utf-8'))
 			if self.running_id is not None:
 				self.began.emit()
 			return
@@ -369,6 +383,7 @@ class PreviewWorker(QObject):
 		self.process = None
 		self.idle_timer.stop()
 		self.cancelled_id = None
+		self.held_line = ''
 		if self.running_id is not None:
 			self.running_id = None
 			self.failures += 1
