@@ -247,6 +247,7 @@ class OptionPanel(QWidget):
 			running = self.drag.get('animations').pop(widget, None)
 			if running:
 				running.stop()
+				running.deleteLater()
 			if not animate:
 				widget.move(widget.x(), top)
 				continue
@@ -261,6 +262,7 @@ class OptionPanel(QWidget):
 		"""the groups go back into the layout in the new order, the dragged one glides into its spot"""
 		for animation in self.drag.get('animations').values():
 			animation.stop()
+			animation.deleteLater()
 		self.scroll_timer.stop()
 		self.drop_spot.hide()
 		self.ghost.hide()
@@ -505,6 +507,8 @@ class FavoritesPanel(OptionPanel):
 		card = self.cards.get('favorites')
 		if not schema or not card:
 			return
-		changed = len([ dest for dest in self.rows if not same_value(self.session.values.get(dest), page_default(self.session, dest)) ])
-		count = len(set(self.rows.values()))
+		# a paired row (Age) is one option, however many of its values changed
+		rows = set(self.rows.values())
+		changed = len([ row for row in rows if any(not same_value(self.session.values.get(dest), page_default(self.session, dest)) for dest in row.dests()) ])
+		count = len(rows)
 		card.set_subtitle(('%d option%s' % (count, '' if count == 1 else 's') + (' · %d changed' % changed if changed else '')) if count else 'none yet')

@@ -213,7 +213,9 @@ class ChoiceControl(OptionControl):
 		super().set_option(option)
 		self.fill()
 		self.set_value(current if current in (option.get('choices') or []) else option.get('default'))
-		self.emit_changed()
+		# only a value that had to change is saved, an unchanged one would set off the page's previews again
+		if self.value() != current:
+			self.emit_changed()
 
 
 class ButtonChoiceControl(OptionControl):
