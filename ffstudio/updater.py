@@ -187,8 +187,12 @@ def read_update_result() -> Optional[Tuple[bool, str]]:
 	try:
 		with open(RESULT_FILE, encoding = 'utf-8-sig') as result_file:
 			line = result_file.read().strip()
-		os.remove(RESULT_FILE)
 	except OSError:
 		return None
+	try:
+		os.remove(RESULT_FILE)
+	except OSError:
+		# still told, a file that cannot be removed only says it again at the next start
+		pass
 	state, _, text = line.partition(' ')
 	return state == 'ok', text

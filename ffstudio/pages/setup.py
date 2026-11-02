@@ -555,6 +555,9 @@ class SetupPage(QWidget):
 		if not folder or not env_kind:
 			self.session.notify.emit('error', 'Cannot install', 'Choose an install folder and environment type.')
 			return
+		if os.path.isfile(folder):
+			self.session.notify.emit('error', 'Folder is a file', 'The install folder is a file. Choose an empty or new folder.')
+			return
 		if os.path.exists(folder) and os.listdir(folder) and not is_facefusion_root(folder):
 			self.session.notify.emit('error', 'Folder not empty', 'Choose an empty or new folder.')
 			return

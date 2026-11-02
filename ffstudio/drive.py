@@ -17,9 +17,14 @@ LOCK = threading.Lock()
 
 
 def drive_name(folder : str) -> str:
-	"""C: for a local folder, \\\\server\\share for a network one"""
-	drive = os.path.splitdrive(os.path.abspath(folder))[0]
-	return drive.rstrip('\\/') or folder
+	"""C: for a local folder, \\\\server\\share for a network one, the mount point where there are no drive letters"""
+	folder = os.path.abspath(folder)
+	drive = os.path.splitdrive(folder)[0]
+	if drive:
+		return drive.rstrip('\\/')
+	while not os.path.ismount(folder) and os.path.dirname(folder) != folder:
+		folder = os.path.dirname(folder)
+	return folder
 
 
 def existing_folder(folder : str) -> str:

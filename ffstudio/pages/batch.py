@@ -601,6 +601,8 @@ class BatchPage(SourceSelection, QWidget):
 		# then it looks for faces in the targets, whether one has any by target and face settings (see face_key)
 		self.face_checking = False
 		self.face_queue : List[str] = []
+		# bumped by every face check, the answer of a scan left over from a stopped check is let go
+		self.face_serial = 0
 		self.face_total = 0
 		self.face_word = ''
 		self.face_results : Dict[Tuple, bool] = {}
@@ -719,6 +721,7 @@ class BatchPage(SourceSelection, QWidget):
 		self.face_probe.scanned.connect(self.on_faces_scanned)
 		self.face_probe.loading.connect(self.on_faces_loading)
 		self.face_probe.people_found.connect(self.on_face_check_result)
+		self.session.runner.began.connect(self.on_run_began)
 		self.faces_timer = QTimer(self)
 		self.faces_timer.setSingleShot(True)
 		self.faces_timer.setInterval(250)
@@ -1707,6 +1710,12 @@ class BatchPage(SourceSelection, QWidget):
 		self.preview_clock.start()
 		self.tick_preview_progress()
 
+	def on_run_began(self) -> None:
+		"""a preview made to wait for a stopped one counts its time from here"""
+		if self.preview_running:
+			self.preview_started = time.monotonic()
+			self.preview_floor = 0.0
+
 	def tick_preview_progress(self) -> None:
 		"""moves the preview bar along the time Batch previews usually take, like Studio's"""
 		elapsed = time.monotonic() - self.preview_started
@@ -2531,6 +2540,7 @@ class BatchPage(SourceSelection, QWidget):
 		if not self.face_queue:
 			return False
 		self.face_then_run = then_run
+		self.face_serial += 1
 		self.face_checking = True
 		self.face_total = len(self.face_queue)
 		self.face_word = self.targets_word(self.face_queue)
@@ -2573,11 +2583,11 @@ class BatchPage(SourceSelection, QWidget):
 		self.progress.setValue(int(done / max(self.face_total, 1) * 1000))
 		self.status_label.setText('Looking for faces in the %s%s  ·  %d of %d' % (self.face_word, ' before the batch' if self.face_then_run else '', done + 1, self.face_total))
 		args = self.face_args()
-		self.face_probe.find_people(path, None, None, list(args), '', tag = ('batch faces', self.face_key(target, args)), samples = FACE_CHECK_SAMPLES)
+		self.face_probe.find_people(path, None, None, list(args), '', tag = ('batch faces', self.face_key(target, args), self.face_serial), samples = FACE_CHECK_SAMPLES)
 
 	def on_face_check_result(self, result : dict) -> None:
 		tag = result.get('tag')
-		if not self.face_checking or not isinstance(tag, tuple) or tag[0] != 'batch faces':
+		if not self.face_checking or not isinstance(tag, tuple) or tag[0] != 'batch faces' or tag[2] != self.face_serial:
 			return
 		key = tag[1]
 		# a check that failed leaves the target to run, facefusion says what is wrong then

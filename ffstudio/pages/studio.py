@@ -1068,6 +1068,7 @@ class StudioPage(SourceSelection, QWidget):
 		self.faces_timer.setInterval(250)
 		self.faces_timer.timeout.connect(self.scan_faces)
 		self.face_probe.people_found.connect(self.on_people_found)
+		self.session.runner.began.connect(self.on_run_began)
 		self.face_probe.people_progress.connect(lambda done, total: self.mapping_card.set_finding(done, total))
 		# the faces of the last frame scan, a right click on a box names the face it belongs to
 		self.shown_faces : List[dict] = []
@@ -1904,6 +1905,12 @@ class StudioPage(SourceSelection, QWidget):
 			self.status_label.setText('Ready')
 			self.detail_label.setText('')
 			self.progress_bar.setValue(0)
+
+	def on_run_began(self) -> None:
+		"""a preview made to wait for a stopped one counts its time from here"""
+		if self.preview_mode and self.preview_clock.isActive():
+			self.preview_started = time.monotonic()
+			self.preview_floor = 0.0
 
 	def end_preview_progress(self) -> None:
 		# show the bar full for a moment so a finished preview does not look cut off

@@ -34,6 +34,8 @@ class ProcessRunner(QObject):
 	log = Signal(str)
 	progress = Signal(str, float, str)
 	finished = Signal(int, float)
+	# a run queued behind a stopped preview on the worker only now begins
+	began = Signal()
 
 	def __init__(self, parent : Optional[QObject] = None) -> None:
 		super().__init__(parent)
@@ -85,6 +87,7 @@ class ProcessRunner(QObject):
 		self.fallback = (program, args, working_dir, environment)
 		worker.output.connect(self.on_worker_output)
 		worker.done.connect(self.on_worker_done)
+		worker.began.connect(self.on_worker_began)
 		self.started.emit(' '.join(quote_arg(part) for part in [ program ] + args) + '   (on the preview worker)')
 		worker.run(program, working_dir, environment, args[1:], os.path.basename(args[0]))
 		return True
@@ -93,10 +96,15 @@ class ProcessRunner(QObject):
 		self.buffer += text
 		self.flush_buffer(final = False)
 
+	def on_worker_began(self) -> None:
+		self.start_time = time.monotonic()
+		self.began.emit()
+
 	def on_worker_done(self, exit_code : Optional[int]) -> None:
 		worker, self.worker = self.worker, None
 		worker.output.disconnect(self.on_worker_output)
 		worker.done.disconnect(self.on_worker_done)
+		worker.began.disconnect(self.on_worker_began)
 		self.flush_buffer(final = True)
 		fallback, self.fallback = self.fallback, None
 		if self.cancelled:
@@ -207,6 +215,8 @@ class PreviewWorker(QObject):
 	# facefusion's output as it comes, progress bars included, without the result lines
 	output = Signal(str)
 	done = Signal(object)
+	# the run asked for while a stopped one was still being finished starts now
+	began = Signal()
 
 	def __init__(self, parent : Optional[QObject] = None) -> None:
 		super().__init__(parent)
@@ -336,6 +346,8 @@ class PreviewWorker(QObject):
 			self.cancelled_id = None
 			if self.running_id is None and self.idle_minutes > 0:
 				self.idle_timer.start()
+			if self.running_id is not None:
+				self.began.emit()
 			return
 		if result.get('id') != self.running_id:
 			return
