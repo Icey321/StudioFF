@@ -22,7 +22,7 @@ from ffstudio.pages.setup import SYSTEM_GROUPS, form_row, section_card
 from ffstudio.platforms import show_in_folder
 from ffstudio.pages.studio import LOCK_DRIVERS, LIVE_IGNORED_GROUPS, PREVIEW_MAX_SIDE, NameTagsView, SettingsColumn, SourceCard, SourceSelection, StudioPage, elastic, estimated_progress, preview_step_floor, run_tag_values, tool_button
 from ffstudio.session import OptionStore, Session, describe_error, folder_is_writable
-from ffstudio.widgets import DriveLabel, FacePicker, IconCountButton, PreviewView, Splitter, add_edit_button, attach_landmarks_cycle, collect_drop_paths, guard_wheel, landmarks_mode, with_drive_bar
+from ffstudio.widgets import DriveLabel, FacePicker, IconCountButton, PreviewView, Splitter, SwapIcon, add_edit_button, attach_landmarks_cycle, collect_drop_paths, guard_wheel, landmarks_mode, with_drive_bar
 
 TARGET_FILTERS = [ ('*.*', 'All files'), ('*.mp4', 'MP4 videos'), ('*.jpg', 'JPG images'), ('*.png', 'PNG images'), ('*.mov', 'MOV videos'), ('*.webm', 'WebM videos'), ('*.gif', 'GIF animations') ]
 DEFAULT_TEMPLATE = '{target}_{source}'
@@ -638,6 +638,10 @@ class BatchPage(SourceSelection, QWidget):
 		self.preview_frame = None
 		# the frame the running preview was made from, the result is compared with it even if another frame shows by then
 		self.preview_run_frame = None
+		# the last finished preview, shown as target or result by the switch above the preview
+		self.preview_result = QPixmap()
+		self.preview_target = QPixmap()
+		self.shown_view = 'target'
 		self.removed_count = 0
 		self.load_sources()
 		# the batch has its own processors and options, the system settings from Setup are shared
@@ -1047,6 +1051,10 @@ class BatchPage(SourceSelection, QWidget):
 		refresh = tool_button(FluentIcon.SYNC, 'Make the preview now', card)
 		refresh.clicked.connect(lambda: self.schedule_preview(True))
 		header.addWidget(refresh)
+		self.swap_button = tool_button(SwapIcon(), 'Swap between the target and the result of the last preview. Clicking again flips back', card)
+		self.swap_button.clicked.connect(self.swap_view)
+		self.swap_button.setEnabled(False)
+		header.addWidget(self.swap_button)
 		column.addLayout(header)
 		self.preview_view = PreviewView('Select an output to preview it', card)
 		self.preview_view.setAcceptDrops(False)
@@ -1482,6 +1490,25 @@ class BatchPage(SourceSelection, QWidget):
 		elif not self.preview_running:
 			self.show_target()
 
+	def swap_view(self) -> None:
+		"""flips between the target and the result, so they can be compared without moving the mouse"""
+		if not self.preview_result.isNull():
+			self.show_view('result' if self.shown_view == 'target' else 'target')
+
+	def show_view(self, view : str) -> None:
+		self.shown_view = view
+		self.swap_button.setEnabled(not self.preview_result.isNull())
+		if view == 'result':
+			self.preview_view.set_compare(self.preview_target, self.preview_result)
+		else:
+			self.preview_view.set_pixmap(self.preview_target)
+
+	def forget_result(self) -> None:
+		"""another target or frame shows, the result of the last preview no longer belongs to it"""
+		self.preview_result = QPixmap()
+		self.shown_view = 'target'
+		self.swap_button.setEnabled(False)
+
 	def show_target(self) -> None:
 		"""with Auto off the selected output shows its target, the preview button makes the preview of it"""
 		item = self.preview_item()
@@ -1492,6 +1519,7 @@ class BatchPage(SourceSelection, QWidget):
 		if frame is None:
 			self.preview_label.setText('Could not read %s' % os.path.basename(item.get('target')))
 			return
+		self.forget_result()
 		self.preview_view.set_pixmap(to_pixmap(frame))
 		self.preview_view.set_faces([])
 		self.preview_frame = frame
@@ -1595,6 +1623,7 @@ class BatchPage(SourceSelection, QWidget):
 		frame = self.scaled_frame(item)
 		if frame is None:
 			return
+		self.forget_result()
 		self.preview_view.set_pixmap(to_pixmap(frame))
 		self.preview_view.set_faces([])
 		self.preview_frame = frame
@@ -1634,6 +1663,7 @@ class BatchPage(SourceSelection, QWidget):
 		"""another target or frame shows right away, so the faces drawn over it line up while the preview runs"""
 		frame_key = (item.get('target'), self.preview_frame_index(item.get('target')))
 		if frame_key != self.preview_frame_key:
+			self.forget_result()
 			self.preview_view.set_pixmap(to_pixmap(frame))
 			self.preview_view.set_faces([])
 			self.preview_frame_key = frame_key
@@ -1644,6 +1674,7 @@ class BatchPage(SourceSelection, QWidget):
 		item = self.preview_item()
 		if not item:
 			self.preview_run = None
+			self.forget_result()
 			self.preview_view.set_pixmap(QPixmap())
 			self.preview_label.setText('')
 			return
@@ -1750,7 +1781,9 @@ class BatchPage(SourceSelection, QWidget):
 		name = self.preview_name()
 		if exit_code == 0 and os.path.exists(output_path):
 			self.session.remember_preview_seconds(self.preview_estimate, elapsed)
-			self.preview_view.set_compare(to_pixmap(self.preview_run_frame), to_pixmap(read_frame(output_path)))
+			self.preview_target = to_pixmap(self.preview_run_frame)
+			self.preview_result = to_pixmap(read_frame(output_path))
+			self.show_view('result')
 			result = self.check_results.get(self.preview_run.get('target'))
 			if result and result.get('blocked'):
 				# one clean frame says nothing about the rest, Run Batch checks the whole video
@@ -1761,6 +1794,7 @@ class BatchPage(SourceSelection, QWidget):
 		elif exit_code == -1:
 			self.preview_label.setText('Preview stopped')
 		elif self.session.nsfw_block_message(True):
+			self.forget_result()
 			self.preview_view.set_pixmap(to_pixmap(self.preview_run_frame))
 			self.preview_label.setText('⛔ %s in %s, FaceFusion refused to process it' % (BLOCKED_TITLE, name))
 		else:

@@ -361,6 +361,28 @@ class FaceFusionIcon(StarIcon):
 		painter.restore()
 
 
+# two stacked arrows on a 16 x 16 grid, the upper one points right and the lower one left: each a shaft and a head
+SWAP_LINES = [ ((2, 5), (14, 5)), ((10.5, 1.8), (14, 5)), ((10.5, 8.2), (14, 5)), ((14, 11), (2, 11)), ((5.5, 7.8), (2, 11)), ((5.5, 14.2), (2, 11)) ]
+
+
+class SwapIcon(FaceFusionIcon):
+	"""two stacked arrows, one pointing left and one right, for a button that swaps between two images"""
+
+	def render(self, painter : QPainter, rect, theme = Theme.AUTO, indexes = None, **attributes) -> None:
+		rect = QRectF(rect)
+		scale = min(rect.width(), rect.height()) / 16
+		painter.save()
+		painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+		color = QColor(255, 255, 255) if isDarkTheme() else QColor(0, 0, 0)
+		painter.setPen(QPen(color, 1.4 * scale, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+		path = QPainterPath()
+		for start, end in SWAP_LINES:
+			path.moveTo(rect.topLeft() + QPointF(*start) * scale)
+			path.lineTo(rect.topLeft() + QPointF(*end) * scale)
+		painter.drawPath(path)
+		painter.restore()
+
+
 class StarButton(TransparentToolButton):
 	"""tool button with a star outline, filled in the theme color when on"""
 
