@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
 import cv2
+import numpy
 from PySide6.QtCore import QEvent, QPoint, QRectF, QSize, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QColor, QDesktopServices, QPainter, QPixmap
 from PySide6.QtWidgets import QFileDialog, QGridLayout, QHBoxLayout, QSizePolicy, QVBoxLayout, QWidget
@@ -1109,6 +1110,8 @@ class StudioPage(SourceSelection, QWidget):
 		self.face_probe.scanned.connect(self.on_faces_scanned)
 		self.face_probe.source_faces_found.connect(self.on_source_faces)
 		self.face_probe.loading.connect(self.on_faces_loading)
+		# the last scan of the shown frame, a face mapping preview of that frame finds its people in it
+		self.frame_scan = None
 		self.faces_timer = QTimer(self)
 		self.faces_timer.setSingleShot(True)
 		self.faces_timer.setInterval(250)
@@ -2174,6 +2177,7 @@ class StudioPage(SourceSelection, QWidget):
 		card = self.target_card
 		if tag != (self.target_path, card.current_frame_index()) or self.view != 'target':
 			return
+		self.frame_scan = None if result.get('error') else result
 		faces = (result.get('faces') or []) if card.faces_button.isChecked() else []
 		mask = read_mask(result.get('mask')) if card.mask_button.isChecked() else None
 		people = self.mapping_card.active_people()
@@ -2357,10 +2361,28 @@ class StudioPage(SourceSelection, QWidget):
 		# facefusion's face selector map swaps everyone in one run, only when nobody is left unchanged: a run that
 		# matches faces to the closest person has no way to keep a look-alike of a mapped person as they are
 		together = not passes[0].get('many') and len(passes) == len(self.mapping_card.active_people())
-		self.chain = { 'id': self.chain_id, 'passes': passes, 'located': [], 'steps': [], 'index': 0, 'target': target, 'output': output_path, 'info': info, 'preview': preview, 'video': video, 'animation': animation, 'together': together, 'scans': {}, 'started': time.monotonic() }
+		self.chain = { 'id': self.chain_id, 'passes': passes, 'located': [], 'steps': [], 'index': 0, 'target': target, 'output': output_path, 'info': info, 'preview': preview, 'video': video, 'animation': animation, 'together': together, 'scans': self.reused_scans(info) if preview else {}, 'started': time.monotonic() }
 		self.pending_info = info
 		self.refresh_run_buttons()
 		self.locate_next()
+
+	def reused_scans(self, info : dict) -> dict:
+		"""the target view's scan of the previewed frame, when it saw exactly the picture the preview runs on with the
+		same face settings and people. a frame shrunk for the preview is scanned again: a small face can be found at one
+		size and missed at the other, and the positions facefusion counts would no longer match"""
+		scan = self.frame_scan
+		request = (scan or {}).get('request') or {}
+		frame, scanned = info.get('frame'), request.get('frame')
+		if not scan or scan.get('tag') != (info.get('target'), info.get('frame_index')) or frame is None or scanned is None:
+			return {}
+		if frame.shape != scanned.shape or not (frame is scanned or numpy.array_equal(frame, scanned)):
+			return {}
+		if request.get('args') != self.session.option_args(groups = FACE_GROUPS + (MASK_GROUPS if request.get('mask') else [])):
+			return {}
+		people_file = self.people_file()
+		if request.get('people_file') != people_file or people_file and os.path.isfile(people_file) and os.path.getmtime(people_file) >= request.get('sent', 0):
+			return {}
+		return { 0: scan }
 
 	def end_chain(self) -> None:
 		preview = self.chain.get('preview')

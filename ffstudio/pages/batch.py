@@ -81,6 +81,12 @@ FRAMES_LIMIT = 2000
 BATCH_SELECTOR_MODE = 'many'
 
 
+def short_name(path : str) -> str:
+	"""a long file name as its first and last 10 letters plus the extension, so the preview line does not wrap"""
+	stem, extension = os.path.splitext(os.path.basename(path))
+	return (stem[:10] + '...' + stem[-10:] if len(stem) > 23 else stem) + extension
+
+
 def upgrade_template(template : str) -> str:
 	for old, new in OLD_PLACEHOLDERS.items():
 		template = template.replace(old, new)
@@ -1049,9 +1055,10 @@ class BatchPage(SourceSelection, QWidget):
 		self.live_button.setChecked(self.session.config.get('batch_live_preview') is not False)
 		self.live_button.toggled.connect(self.on_live_toggled)
 		header.addWidget(self.live_button)
-		refresh = tool_button(FluentIcon.SYNC, 'Make the preview now', card)
-		refresh.clicked.connect(lambda: self.schedule_preview(True))
-		header.addWidget(refresh)
+		# while a preview runs it is its Stop button, the bar runs along the bottom of the picture
+		self.refresh_button = tool_button(FluentIcon.SYNC, 'Make the preview now', card)
+		self.refresh_button.clicked.connect(lambda: self.stop_preview() if self.preview_running else self.schedule_preview(True))
+		header.addWidget(self.refresh_button)
 		self.swap_button = tool_button(SwapIcon(), 'Swap between the target and the result of the last preview. Clicking again flips back', card)
 		self.swap_button.clicked.connect(self.swap_view)
 		self.swap_button.setEnabled(False)
@@ -1101,19 +1108,6 @@ class BatchPage(SourceSelection, QWidget):
 		self.scrub_timer.setSingleShot(True)
 		self.scrub_timer.setInterval(40)
 		self.scrub_timer.timeout.connect(self.show_scrubbed_frame)
-		# the bar and its Stop button only show while a preview runs
-		self.preview_row = QWidget(card)
-		bar_row = QHBoxLayout(self.preview_row)
-		bar_row.setContentsMargins(0, 0, 0, 0)
-		bar_row.setSpacing(8)
-		self.preview_bar = ProgressBar(self.preview_row)
-		self.preview_bar.setRange(0, 1000)
-		bar_row.addWidget(self.preview_bar, 1, Qt.AlignmentFlag.AlignVCenter)
-		self.preview_stop_button = tool_button(FluentIcon.CLOSE, 'Stop making this preview', self.preview_row)
-		self.preview_stop_button.clicked.connect(self.stop_preview)
-		bar_row.addWidget(self.preview_stop_button)
-		self.preview_row.hide()
-		column.addWidget(self.preview_row)
 		self.preview_label = elastic(CaptionLabel('', card))
 		self.preview_label.setTextColor('#707070', '#9a9a9a')
 		self.preview_label.setWordWrap(True)
@@ -1518,14 +1512,14 @@ class BatchPage(SourceSelection, QWidget):
 		self.shown_key = self.run_key(item)
 		frame = self.scaled_frame(item)
 		if frame is None:
-			self.preview_label.setText('Could not read %s' % os.path.basename(item.get('target')))
+			self.preview_label.setText('Could not read %s' % short_name(item.get('target')))
 			return
 		self.forget_result()
 		self.preview_view.set_pixmap(to_pixmap(frame))
 		self.preview_view.set_faces([])
 		self.preview_frame = frame
 		self.preview_frame_key = (item.get('target'), self.preview_frame_index(item.get('target')))
-		self.preview_label.setText('%s  ·  target, Auto is off' % os.path.basename(item.get('target')))
+		self.preview_label.setText('%s  ·  target, Auto is off' % short_name(item.get('target')))
 		self.schedule_face_scan()
 
 	def follow_selection(self) -> None:
@@ -1688,13 +1682,13 @@ class BatchPage(SourceSelection, QWidget):
 		self.preview_waiting = False
 		if not self.session.facefusion_video_ready(item.get('target')):
 			# a gif's frame is read from its video, made off the ui thread first
-			self.preview_label.setText('Preparing %s…' % os.path.basename(item.get('target')))
+			self.preview_label.setText('Preparing %s…' % short_name(item.get('target')))
 			self.session.prepare_facefusion_video(item.get('target'), self.run_preview)
 			return
 		frame = self.scaled_frame(item)
 		run_frame = self.run_frame(item)
 		if frame is None or run_frame is None:
-			self.preview_label.setText('Could not read %s' % os.path.basename(item.get('target')))
+			self.preview_label.setText('Could not read %s' % short_name(item.get('target')))
 			return
 		if self.needs_match(item):
 			# the frame shows and is scanned first, on_faces_scanned starts the preview again once the match is known
@@ -1738,8 +1732,9 @@ class BatchPage(SourceSelection, QWidget):
 		self.preview_started = time.monotonic()
 		self.preview_floor = 0.0
 		self.preview_estimate = self.session.preview_key('batch_preview_seconds')
-		self.preview_bar.setValue(0)
-		self.preview_row.show()
+		self.preview_view.set_progress(0.0)
+		self.refresh_button.setIcon(FluentIcon.CLOSE)
+		self.refresh_button.setToolTip('Stop making this preview')
 		self.preview_clock.start()
 		self.tick_preview_progress()
 
@@ -1756,7 +1751,7 @@ class BatchPage(SourceSelection, QWidget):
 		ratio = estimated_progress(elapsed, expected, self.preview_floor)
 		left = expected - elapsed
 		name = self.preview_name()
-		self.preview_bar.setValue(int(ratio * 1000))
+		self.preview_view.set_progress(ratio)
 		self.preview_label.setText('Making the preview of %s…  %d%%' % (name, ratio * 100) + ('  ·  about %d s left' % round(left) if left >= 1 and self.preview_floor < 0.9 else ''))
 
 	def preview_name(self) -> str:
@@ -1764,7 +1759,7 @@ class BatchPage(SourceSelection, QWidget):
 		if not self.preview_run:
 			return ''
 		target = self.preview_run.get('target')
-		return os.path.basename(target) + (' #%d' % self.preview_frame_index(target) if media_kind(target) == 'video' else '')
+		return short_name(target) + (' #%d' % self.preview_frame_index(target) if media_kind(target) == 'video' else '')
 
 	def stop_preview(self) -> None:
 		if not self.preview_running:
@@ -1777,7 +1772,9 @@ class BatchPage(SourceSelection, QWidget):
 	def on_preview_finished(self, exit_code : int, elapsed : float) -> None:
 		self.preview_running = False
 		self.preview_clock.stop()
-		self.preview_row.hide()
+		self.preview_view.set_progress(None)
+		self.refresh_button.setIcon(FluentIcon.SYNC)
+		self.refresh_button.setToolTip('Make the preview now')
 		output_path = PREVIEW_RESULT
 		name = self.preview_name()
 		if exit_code == 0 and os.path.exists(output_path):
@@ -1791,7 +1788,7 @@ class BatchPage(SourceSelection, QWidget):
 				flagged = self.flagged_words(self.preview_run.get('target'))
 				self.preview_label.setText('%s  ·  %s  ·  This frame is OK, but Run Batch skips this %s: %s' % (name, format_seconds(elapsed),'video' if result.get('kind') == 'video' else 'target', flagged or BLOCKED_TITLE))
 			else:
-				self.preview_label.setText('%s  ·  %s  ·  drag the divider to compare' % (name, format_seconds(elapsed)))
+				self.preview_label.setText('%s  ·  %s' % (name, format_seconds(elapsed)))
 		elif exit_code == -1:
 			self.preview_label.setText('Preview stopped')
 		elif self.session.nsfw_block_message(True):

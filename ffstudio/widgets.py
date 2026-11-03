@@ -709,6 +709,8 @@ class PreviewView(QWidget):
 		self.badge = ''
 		# a red border around the picture, when face detection found no face in it
 		self.warning = False
+		# a thin bar along the bottom edge while a preview is made, 0 to 1, None hides it
+		self.progress : Optional[float] = None
 		# detected faces drawn over the image: (box in frame pixels, tag, selected) and optionally a color for the box,
 		# plus the frame size the boxes belong to
 		self.faces : List[tuple] = []
@@ -750,6 +752,11 @@ class PreviewView(QWidget):
 	def set_warning(self, warning : bool) -> None:
 		if warning != self.warning:
 			self.warning = warning
+			self.update()
+
+	def set_progress(self, ratio : Optional[float]) -> None:
+		if ratio != self.progress:
+			self.progress = ratio
 			self.update()
 
 	def set_faces(self, faces : List[tuple], frame_size : Tuple[int, int] = (0, 0), mask = None, landmarks : Optional[List[tuple]] = None) -> None:
@@ -935,6 +942,15 @@ class PreviewView(QWidget):
 			painter.setPen(QPen(themeColor(), 2))
 			painter.setBrush(Qt.BrushStyle.NoBrush)
 			painter.drawRoundedRect(rect.adjusted(1, 1, -1, -1), 8, 8)
+
+		if self.progress is not None:
+			# inside the rounded corners, a dark track so the bar shows on light and dark pictures alike
+			painter.save()
+			painter.setClipPath(path)
+			track = QRectF(rect.left(), rect.bottom() - 4, rect.width(), 4)
+			painter.fillRect(track, QColor(0, 0, 0, 110))
+			painter.fillRect(QRectF(track.left(), track.top(), track.width() * min(1.0, max(0.0, self.progress)), track.height()), themeColor())
+			painter.restore()
 
 	def paint_badge(self, painter : QPainter, position : QPointF, text : str, align_right : bool = False) -> None:
 		font = QFont(self.font())

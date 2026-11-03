@@ -1,6 +1,7 @@
 import json
 import math
 import os
+import time
 from typing import Any, Dict, List, Optional, Tuple
 
 import cv2
@@ -73,7 +74,7 @@ class FaceProbe(QObject):
 
 	def scan(self, frame : numpy.ndarray, reference : Optional[numpy.ndarray], sources : List[str], args : List[str], tag : Any = None, mask : bool = False, people_file : Optional[str] = None) -> None:
 		self.request_id += 1
-		self.waiting = { 'id': self.request_id, 'frame': frame, 'reference': reference, 'sources': sources, 'args': args, 'tag': tag, 'mask': mask, 'people_file': people_file }
+		self.waiting = { 'id': self.request_id, 'frame': frame, 'reference': reference, 'sources': sources, 'args': args, 'tag': tag, 'mask': mask, 'people_file': people_file, 'sent': time.time() }
 		if self.running is None:
 			self.send_next()
 
@@ -100,6 +101,8 @@ class FaceProbe(QObject):
 		elif request.get('people'):
 			self.people_found.emit(result)
 		else:
+			# what was scanned, so a face mapping preview of the same frame can reuse the scan
+			result['request'] = request
 			self.scanned.emit(result)
 
 	def send_next(self) -> None:
