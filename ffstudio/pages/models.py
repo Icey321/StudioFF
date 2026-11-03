@@ -49,6 +49,11 @@ class SizeBarDelegate(TableItemDelegate):
 	"""draws the share (0 to 1) stored in the cell's user role as a bar"""
 
 	def paint(self, painter : QPainter, option, index) -> None:
+		# the table only keeps its own delegate's selected, hovered and pressed rows current
+		main = self.parent().delegate
+		self.selectedRows = main.selectedRows
+		self.hoverRow = main.hoverRow
+		self.pressedRow = main.pressedRow
 		super().paint(painter, option, index)
 		share = index.data(Qt.ItemDataRole.UserRole)
 		if share is None:
