@@ -12,7 +12,7 @@ from PySide6.QtGui import QColor, QDesktopServices, QPainter, QPixmap
 from PySide6.QtWidgets import QFileDialog, QGridLayout, QHBoxLayout, QSizePolicy, QVBoxLayout, QWidget
 from qfluentwidgets import Action, BodyLabel, CaptionLabel, FlowLayout, FluentIcon, Flyout, FlyoutAnimationType, FlyoutViewBase, IndeterminateProgressBar, LineEdit, PrimaryPushButton, ProgressBar, PushButton, RoundMenu, ScrollArea, SearchLineEdit, SegmentedWidget, SimpleCardWidget, SingleDirectionScrollArea, Slider, StrongBodyLabel, SubtitleLabel, TogglePushButton, ToolTipFilter, TransparentPushButton, TransparentToolButton, themeColor
 
-from ffstudio.config import APP_DIR, PREVIEW_DIR
+from ffstudio.config import APP_DIR, PREVIEW_DIR, PREVIEW_IMAGE_QUALITY
 from ffstudio.face_mapping import FACE_PROCESSORS, FRAME_PROCESSORS, GROUP_PREFIX, LEAVE, PEOPLE_FILE, SELECTED, FaceMappingCard, box_overlap, face_map, group_images, group_value, is_kept, is_mapped, merge_people, people_dir, person_color, person_name, plan_passes
 from ffstudio.faces import FACE_CHECK_SAMPLES, FACE_GROUPS, MASK_GROUPS, FaceProbe, alike_faces, describe_faces, describe_landmarks, describe_mask, face_landmarks, face_tag, faces_text_color, no_face, read_mask
 from ffstudio.media import VideoReader, animation_extension, browse_dir, is_animated_webp, is_animation, format_length, format_seconds, format_timecode, media_kind, needs_conversion, read_frame, read_image, split_faces, thumbnail, to_pixmap, usable_path, write_image
@@ -32,6 +32,10 @@ LOCK_DRIVERS = [ 'face_selector_mode', 'processors', 'execution_providers', 'out
 LIVE_IGNORED_GROUPS = [ 'paths', 'output_creation', 'frame_extraction', 'frame_distribution', 'voice_extractor', 'workflow', 'execution', 'download', 'memory', 'misc' ]
 # bigger frames are previewed on a copy this many pixels high (or wide, when upright), which is a little quicker
 PREVIEW_MAX_SIDE = 1080
+PREVIEW_FRAME = os.path.join(PREVIEW_DIR, 'frame.jpg')
+# a face mapping preview's reference faces are the faces of the previewed frame itself, each is about 0.003 from its own
+# face after facefusion copies the frame, while two different people are rarely closer than 0.15
+PREVIEW_MAP_DISTANCE = 0.05
 # the outputs of the passes of a face mapping run before the last one
 PASSES_DIR = os.path.join(PREVIEW_DIR, 'passes')
 SOURCE_FILTERS = [ 'Images and audio (*.jpg *.jpeg *.jfif *.png *.webp *.avif *.heic *.heif *.bmp *.tif *.tiff *.mp3 *.wav *.flac *.m4a *.aac *.ogg *.opus)', 'All files (*)' ]
@@ -1880,8 +1884,8 @@ class StudioPage(SourceSelection, QWidget):
 		if scale < 1:
 			frame = cv2.resize(frame, (max(1, round(width * scale)), max(1, round(height * scale))), interpolation = cv2.INTER_AREA)
 		os.makedirs(PREVIEW_DIR, exist_ok = True)
-		frame_path = os.path.join(PREVIEW_DIR, 'frame.png')
-		output_path = os.path.join(PREVIEW_DIR, 'result.png')
+		frame_path = PREVIEW_FRAME
+		output_path = os.path.join(PREVIEW_DIR, 'result.jpg')
 		for path in [ frame_path, output_path ]:
 			try:
 				os.remove(path)
@@ -1894,7 +1898,7 @@ class StudioPage(SourceSelection, QWidget):
 			self.start_chain(passes, frame_path, output_path, info, preview = True)
 			return
 		values = dict(self.session.values)
-		values.update({ 'reference_frame_index': 0, 'trim_frame_start': None, 'trim_frame_end': None, 'workflow_mode': 'auto' })
+		values.update({ 'reference_frame_index': 0, 'trim_frame_start': None, 'trim_frame_end': None, 'workflow_mode': 'auto', 'output_image_quality': PREVIEW_IMAGE_QUALITY })
 		# a single frame has no sound to sync lips to
 		processors = self.session.processors()
 		values['processors'] = [ processor for processor in processors if processor != 'lip_syncer' ]
@@ -2090,7 +2094,7 @@ class StudioPage(SourceSelection, QWidget):
 				else:
 					# an image gives no reason when it is refused, the check confirms it and finds what was flagged
 					self.detail_label.setText('Confirming with the NSFW check…')
-					self.check_content(True, os.path.join(PREVIEW_DIR, 'frame.png') if self.preview_mode else '')
+					self.check_content(True, PREVIEW_FRAME if self.preview_mode else '')
 			else:
 				status, message = self.session.describe_run_error()
 				self.status_label.setText(status if self.session.run_error() else 'Failed (exit code %d)' % exit_code)
@@ -2353,7 +2357,7 @@ class StudioPage(SourceSelection, QWidget):
 		# facefusion's face selector map swaps everyone in one run, only when nobody is left unchanged: a run that
 		# matches faces to the closest person has no way to keep a look-alike of a mapped person as they are
 		together = not passes[0].get('many') and len(passes) == len(self.mapping_card.active_people())
-		self.chain = { 'id': self.chain_id, 'passes': passes, 'located': [], 'steps': [], 'index': 0, 'target': target, 'output': output_path, 'info': info, 'preview': preview, 'video': video, 'animation': animation, 'together': together, 'started': time.monotonic() }
+		self.chain = { 'id': self.chain_id, 'passes': passes, 'located': [], 'steps': [], 'index': 0, 'target': target, 'output': output_path, 'info': info, 'preview': preview, 'video': video, 'animation': animation, 'together': together, 'scans': {}, 'started': time.monotonic() }
 		self.pending_info = info
 		self.refresh_run_buttons()
 		self.locate_next()
@@ -2399,6 +2403,11 @@ class StudioPage(SourceSelection, QWidget):
 		if not chain.get('preview'):
 			self.status_label.setText('Face mapping · finding %s' % item.get('label'))
 			self.detail_label.setText('')
+		# the faces found in a frame do not depend on whose sources they are for, people in the same frame share one scan
+		scanned = chain.get('scans').get(item.get('frame') if chain.get('video') else 0)
+		if scanned:
+			self.on_pass_located(('pass', chain.get('id'), done), scanned)
+			return
 		frame = read_frame(chain.get('target'), item.get('frame') if chain.get('video') else 0)
 		if frame is None:
 			self.fail_chain('Could not read the reference frame of %s.' % item.get('label'))
@@ -2413,6 +2422,7 @@ class StudioPage(SourceSelection, QWidget):
 		if result.get('error'):
 			self.fail_chain(result.get('error'))
 			return
+		chain['scans'][item.get('frame') if chain.get('video') else 0] = result
 		faces = result.get('faces') or []
 		# the face of this person, where several look like them the one at the place it was found
 		candidates = [ face for face in faces if face.get('person') == item.get('person') ]
@@ -2460,7 +2470,9 @@ class StudioPage(SourceSelection, QWidget):
 			output_path = os.path.join(PASSES_DIR, 'animation.mp4')
 		if len(passes) == 1:
 			chain['steps'] = [ { 'kind': 'pass', 'item': passes[0], 'output': output_path, 'all': True } ]
-		elif chain.get('together'):
+		elif chain.get('together') or chain.get('preview'):
+			# a preview matches each person only to their own face in the frame (PREVIEW_MAP_DISTANCE), so the people
+			# left as they are stay unchanged in one run too
 			chain['steps'] = [ { 'kind': 'pass', 'items': passes, 'output': output_path, 'all': True } ]
 		else:
 			image_target = not chain.get('video')
@@ -2542,7 +2554,7 @@ class StudioPage(SourceSelection, QWidget):
 		preview = chain.get('preview')
 		values = dict(self.session.values)
 		if preview:
-			values.update({ 'reference_frame_index': 0, 'trim_frame_start': None, 'trim_frame_end': None, 'workflow_mode': 'auto' })
+			values.update({ 'reference_frame_index': 0, 'trim_frame_start': None, 'trim_frame_end': None, 'workflow_mode': 'auto', 'output_image_quality': PREVIEW_IMAGE_QUALITY })
 		processors = list(values.get('processors') or [])
 		sources = list(item.get('sources') or [])
 		target = chain.get('target')
@@ -2567,6 +2579,8 @@ class StudioPage(SourceSelection, QWidget):
 				# one source list for everyone, each person's map takes the largest face of their own sources
 				sources = list(dict.fromkeys(path for other in step.get('items') for path in other.get('sources')))
 				values.update({ 'face_selector_mode': 'reference', 'face_selector_maps': [ face_map(other, sources, chain.get('video')) for other in step.get('items') ] })
+				if preview:
+					values['reference_face_distance'] = PREVIEW_MAP_DISTANCE
 			elif item.get('many'):
 				# everyone mapped, nobody filtered out, like the reference runs that never filter
 				values.update({ 'face_selector_mode': 'many', 'face_selector_gender': None, 'face_selector_race': None, 'face_selector_age_start': None, 'face_selector_age_end': None })

@@ -15,6 +15,8 @@ LEGACY_DATA_DIR = os.path.join(APPDATA_DIR, 'FaceFusionStudio')
 CONFIG_FILE = os.path.join(DATA_DIR, 'config.json')
 SCHEMA_FILE = os.path.join(DATA_DIR, 'schema.json')
 PREVIEW_DIR = os.path.join(DATA_DIR, 'preview')
+# preview frames go to facefusion as jpg, which reads and writes about 0.3 s faster than png, at a quality the eye cannot tell apart
+PREVIEW_IMAGE_QUALITY = 95
 # copies of avif, heic, jfif and flash video files, see media.usable_path
 CONVERTED_DIR = os.path.join(DATA_DIR, 'converted')
 # the faces cut out of source photos that show several, see media.split_faces

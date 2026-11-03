@@ -11,7 +11,7 @@ from PySide6.QtGui import QColor, QCursor, QFont, QFontMetrics, QKeySequence, QP
 from PySide6.QtWidgets import QAbstractItemView, QApplication, QFileDialog, QHBoxLayout, QListWidgetItem, QToolTip, QVBoxLayout, QWidget
 from qfluentwidgets import Action, BodyLabel, CaptionLabel, ComboBox, FluentIcon, Flyout, FlyoutAnimationType, LineEdit, ListItemDelegate, ListWidget, MessageBox, PrimaryPushButton, ProgressBar, PushButton, RoundMenu, SegmentedWidget, SimpleCardWidget, Slider, StrongBodyLabel, SubtitleLabel, TogglePushButton, ToggleToolButton, ToolTipFilter, TransparentPushButton, getFont, isDarkTheme, themeColor
 
-from ffstudio.config import APP_DIR, PREVIEW_DIR
+from ffstudio.config import APP_DIR, PREVIEW_DIR, PREVIEW_IMAGE_QUALITY
 from ffstudio.faces import FACE_CHECK_SAMPLES, FACE_GROUPS, MASK_GROUPS, FaceProbe, alike_faces, describe_faces, describe_landmarks, describe_mask, face_landmarks, face_tag, faces_text_color, no_face, read_mask
 from ffstudio.media import VideoReader, animation_extension, browse_dir, extension, is_animation, format_length, format_seconds, format_timecode, media_kind, needs_conversion, read_frame, thumbnail, to_pixmap, usable_path, video_length, write_image
 from ffstudio.nsfw import BLOCKED_TITLE, NsfwDialog, show_blocked_bar
@@ -29,6 +29,7 @@ DEFAULT_TEMPLATE = '{target}_{source}'
 # the placeholders of the first batch file names, read as the tags that replaced them
 OLD_PLACEHOLDERS = { '{target_name}': '{target}', '{source_name}': '{source}', '{target_extension}': '', '{index}': '{n}' }
 LIST_LIMIT = 500
+PREVIEW_RESULT = os.path.join(PREVIEW_DIR, 'batch_result.jpg')
 # wide enough for the drive text under "Output folder"
 LABEL_WIDTH = 190
 TARGET_FILES_FILTER = 'Images, videos and GIFs (*.jpg *.jpeg *.jfif *.png *.webp *.avif *.heic *.heif *.bmp *.tif *.tiff *.mp4 *.mov *.mkv *.avi *.webm *.m4v *.wmv *.mpg *.mpeg *.flv *.f4v *.gif);;All files (*)'
@@ -1703,8 +1704,8 @@ class BatchPage(SourceSelection, QWidget):
 			self.schedule_face_scan()
 			return
 		os.makedirs(PREVIEW_DIR, exist_ok = True)
-		frame_path = os.path.join(PREVIEW_DIR, 'batch_frame.png')
-		output_path = os.path.join(PREVIEW_DIR, 'batch_result.png')
+		frame_path = os.path.join(PREVIEW_DIR, 'batch_frame.jpg')
+		output_path = PREVIEW_RESULT
 		for path in [ frame_path, output_path ]:
 			try:
 				os.remove(path)
@@ -1712,7 +1713,7 @@ class BatchPage(SourceSelection, QWidget):
 				pass
 		write_image(frame_path, run_frame)
 		values = self.run_values()
-		values.update({ 'reference_frame_index': 0, 'trim_frame_start': None, 'trim_frame_end': None, 'workflow_mode': 'auto' })
+		values.update({ 'reference_frame_index': 0, 'trim_frame_start': None, 'trim_frame_end': None, 'workflow_mode': 'auto', 'output_image_quality': PREVIEW_IMAGE_QUALITY })
 		values.update(self.reference_values(item, True))
 		# a single frame has no sound to sync lips to
 		processors = list(values.get('processors') or [])
@@ -1777,7 +1778,7 @@ class BatchPage(SourceSelection, QWidget):
 		self.preview_running = False
 		self.preview_clock.stop()
 		self.preview_row.hide()
-		output_path = os.path.join(PREVIEW_DIR, 'batch_result.png')
+		output_path = PREVIEW_RESULT
 		name = self.preview_name()
 		if exit_code == 0 and os.path.exists(output_path):
 			self.session.remember_preview_seconds(self.preview_estimate, elapsed)
