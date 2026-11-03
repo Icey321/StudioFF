@@ -1,10 +1,10 @@
 import os
 from typing import Optional
 
-from PySide6.QtCore import QThread, QUrl, Qt, Signal
-from PySide6.QtGui import QDesktopServices, QKeySequence, QShortcut
+from PySide6.QtCore import QRectF, QThread, QUrl, Qt, Signal
+from PySide6.QtGui import QColor, QDesktopServices, QKeySequence, QPainter, QShortcut
 from PySide6.QtWidgets import QHBoxLayout, QStackedWidget, QTableWidgetItem, QVBoxLayout, QWidget
-from qfluentwidgets import BodyLabel, CaptionLabel, ComboBox, FluentIcon, MessageBox, PrimaryPushButton, ProgressBar, PushButton, SearchLineEdit, SegmentedWidget, SubtitleLabel, TableWidget
+from qfluentwidgets import BodyLabel, CaptionLabel, ComboBox, FluentIcon, MessageBox, PrimaryPushButton, ProgressBar, PushButton, SearchLineEdit, SegmentedWidget, SubtitleLabel, TableItemDelegate, TableWidget, themeColor
 
 from ffstudio.pages.setup import form_row, section_card
 from ffstudio.session import Session
@@ -43,6 +43,28 @@ def installed_sizes(folder : str) -> dict:
 				except OSError:
 					pass
 	return sizes
+
+
+class SizeBarDelegate(TableItemDelegate):
+	"""draws the share (0 to 1) stored in the cell's user role as a bar"""
+
+	def paint(self, painter : QPainter, option, index) -> None:
+		super().paint(painter, option, index)
+		share = index.data(Qt.ItemDataRole.UserRole)
+		if share is None:
+			return
+		rect = QRectF(option.rect).adjusted(8, 0, -8, 0)
+		rect.setTop(rect.center().y() - 6)
+		rect.setHeight(12)
+		painter.save()
+		painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+		painter.setPen(Qt.PenStyle.NoPen)
+		track = QColor(128, 128, 128, 60)
+		painter.setBrush(track)
+		painter.drawRoundedRect(rect, 4, 4)
+		painter.setBrush(themeColor())
+		painter.drawRoundedRect(QRectF(rect.left(), rect.top(), max(3.0, rect.width() * share), rect.height()), 4, 4)
+		painter.restore()
 
 
 class ScopeTab(QWidget):
@@ -185,15 +207,18 @@ class ModelsPage(QWidget):
 		header.addWidget(open_button)
 		list_layout.addLayout(header)
 		self.table = TableWidget(list_card)
-		self.table.setColumnCount(2)
-		self.table.setHorizontalHeaderLabels([ 'Model', 'Size' ])
+		self.table.setColumnCount(3)
+		self.table.setHorizontalHeaderLabels([ 'Model', 'Share of the largest model', 'Size' ])
+		self.table.setItemDelegateForColumn(1, SizeBarDelegate(self.table))
 		self.table.verticalHeader().hide()
 		self.table.setBorderVisible(True)
 		self.table.setBorderRadius(6)
 		self.table.horizontalHeader().setStretchLastSection(False)
 		self.table.horizontalHeader().setSectionResizeMode(0, self.table.horizontalHeader().ResizeMode.Stretch)
-		self.table.setColumnWidth(1, 120)
-		self.table.horizontalHeaderItem(1).setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+		self.table.horizontalHeader().setSectionResizeMode(1, self.table.horizontalHeader().ResizeMode.Interactive)
+		self.table.setColumnWidth(1, 420)
+		self.table.setColumnWidth(2, 120)
+		self.table.horizontalHeaderItem(2).setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 		self.table.setEditTriggers(TableWidget.EditTrigger.NoEditTriggers)
 		self.table.setSelectionBehavior(TableWidget.SelectionBehavior.SelectRows)
 		self.table.setSelectionMode(TableWidget.SelectionMode.ExtendedSelection)
@@ -263,11 +288,15 @@ class ModelsPage(QWidget):
 		self.files = files
 		self.refresh_scope_tabs()
 		self.table.setRowCount(len(files))
+		largest = max([ size for _, size in files ], default = 1) or 1
 		for row, (name, size) in enumerate(files):
 			self.table.setItem(row, 0, QTableWidgetItem(name))
+			bar_item = QTableWidgetItem()
+			bar_item.setData(Qt.ItemDataRole.UserRole, size / largest)
+			self.table.setItem(row, 1, bar_item)
 			size_item = QTableWidgetItem(format_size(size))
 			size_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-			self.table.setItem(row, 1, size_item)
+			self.table.setItem(row, 2, size_item)
 		total = sum(size for _, size in files)
 		self.summary.setText('(%d) model%s · %.2f GB' % (len(files), '' if len(files) == 1 else 's', total / 1073741824) if self.session.facefusion_root else 'FaceFusion is not set up yet')
 		self.summary.setToolTip(models_dir(self.session.facefusion_root))
