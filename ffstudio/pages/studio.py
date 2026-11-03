@@ -1156,6 +1156,7 @@ class StudioPage(SourceSelection, QWidget):
 		left.setSpacing(12)
 		self.source_card = SourceCard(self)
 		self.target_card = TargetCard(self)
+		self.target_card.preview.set_badge('Target')
 		self.mapping_card = FaceMappingCard(self, self.find_people)
 		self.mapping_card.changed.connect(self.on_mapping_changed)
 		self.mapping_card.renamed.connect(self.save_mapping)
@@ -1421,7 +1422,7 @@ class StudioPage(SourceSelection, QWidget):
 		else:
 			self.release_result_reader()
 			self.target_card.preview.hint = 'Drop a target image or video here\nor click to browse'
-			self.target_card.preview.set_badge('')
+			self.target_card.preview.set_badge('Target')
 			self.schedule_face_scan()
 			if self.target_card.reader:
 				self.target_card.show_frame()
@@ -1461,7 +1462,7 @@ class StudioPage(SourceSelection, QWidget):
 			preview.set_badge('')
 		else:
 			preview.set_pixmap(to_pixmap(after))
-			preview.set_badge('Result' if after is not None else '')
+			preview.set_badge('Result' if after is not None else '', right = True)
 			preview.hint = hint
 
 	def prepare_result(self, path : str) -> None:

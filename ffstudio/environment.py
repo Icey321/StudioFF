@@ -333,8 +333,13 @@ PREREQUISITES : Dict[str, Tuple[str, str, str]] =\
 {
 	'git': ('Git.Git', 'Git', 'downloads FaceFusion and updates it later'),
 	'uv': ('astral-sh.uv', 'uv', 'creates the Python 3.13 environment and downloads Python 3.13 itself'),
-	'ffmpeg': ('Gyan.FFmpeg', 'FFmpeg', 'reads and writes video and audio (includes ffprobe)'),
+	'ffmpeg': ('Gyan.FFmpeg', 'FFmpeg 7.0.2','reads and writes video and audio (includes ffprobe)'),
 	'curl': ('cURL.cURL', 'curl', 'downloads the models FaceFusion needs')
+}
+# the version facefusion's install guide names, a newer ffmpeg is not what facefusion is tested with
+PINNED_VERSIONS : Dict[str, str] =\
+{
+	'ffmpeg': '7.0.2'
 }
 
 
@@ -354,4 +359,5 @@ def find_missing_prerequisites(need_uv : bool, need_git : bool) -> List[str]:
 
 
 def winget_install_args(key : str) -> List[str]:
-	return [ 'install', '--id', PREREQUISITES[key][0], '--exact', '--silent', '--accept-package-agreements', '--accept-source-agreements' ]
+	version = [ '--version', PINNED_VERSIONS[key] ] if key in PINNED_VERSIONS else []
+	return [ 'install', '--id', PREREQUISITES[key][0], '--exact', *version, '--silent', '--accept-package-agreements', '--accept-source-agreements' ]

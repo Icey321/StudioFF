@@ -707,6 +707,7 @@ class PreviewView(QWidget):
 		self.scaled_cache = {}
 		self.hint = hint
 		self.badge = ''
+		self.badge_right = False
 		# a red border around the picture, when face detection found no face in it
 		self.warning = False
 		# a thin bar along the bottom edge while a preview is made, 0 to 1, None hides it
@@ -745,8 +746,9 @@ class PreviewView(QWidget):
 	def is_comparing(self) -> bool:
 		return not self.pixmap.isNull() and not self.compare_pixmap.isNull()
 
-	def set_badge(self, text : str) -> None:
+	def set_badge(self, text : str, right : bool = False) -> None:
 		self.badge = text
+		self.badge_right = right
 		self.update()
 
 	def set_warning(self, warning : bool) -> None:
@@ -922,8 +924,12 @@ class PreviewView(QWidget):
 			painter.setFont(font)
 			painter.drawText(rect, Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap, self.hint)
 
-		if self.badge and not self.is_comparing():
-			self.paint_badge(painter, QPointF(10, 10), self.badge)
+		if self.badge and not self.pixmap.isNull() and not self.is_comparing():
+			# a result sits top right, as in the compare view, the target top left
+			if self.badge_right:
+				self.paint_badge(painter, QPointF(self.width() - 10, 10), self.badge, align_right = True)
+			else:
+				self.paint_badge(painter, QPointF(10, 10), self.badge)
 
 		if self.selected is False:
 			painter.fillPath(path, QColor(0, 0, 0, 150) if dark else QColor(255, 255, 255, 170))
@@ -1052,12 +1058,12 @@ class PreviewView(QWidget):
 			tip = center + QPointF(direction * 10, 0)
 			base = center + QPointF(direction * 4, 0)
 			painter.drawPolygon(QPolygonF([ tip, base + QPointF(0, -5), base + QPointF(0, 5) ]))
+		# the labels sit in the corners of the view, where the single picture's badge sits, hidden while little of their side shows
 		before_label, after_label = self.compare_labels
-		top = image_rect.top() + 10
 		if before_label and split_x - image_rect.left() > 80:
-			self.paint_badge(painter, QPointF(image_rect.left() + 10, top), before_label)
+			self.paint_badge(painter, QPointF(10, 10), before_label)
 		if after_label and image_rect.right() - split_x > 80:
-			self.paint_badge(painter, QPointF(image_rect.right() - 10, top), after_label, align_right = True)
+			self.paint_badge(painter, QPointF(self.width() - 10, 10), after_label, align_right = True)
 
 	def paint_check(self, painter : QPainter, center : QPointF) -> None:
 		painter.setPen(Qt.PenStyle.NoPen)

@@ -1067,6 +1067,8 @@ class BatchPage(SourceSelection, QWidget):
 		self.preview_view = PreviewView('Select an output to preview it', card)
 		self.preview_view.setAcceptDrops(False)
 		self.preview_view.setMinimumHeight(180)
+		# a single picture here is always the target, the result only shows in the compare view
+		self.preview_view.set_badge('Target')
 		column.addWidget(self.preview_view, 1)
 		self.preview_view.face_clicked.connect(self.on_preview_face_clicked)
 		# in Reference mode: the faces of the shown frame, a click picks the person to change in this target
@@ -1733,7 +1735,8 @@ class BatchPage(SourceSelection, QWidget):
 		self.preview_floor = 0.0
 		self.preview_estimate = self.session.preview_key('batch_preview_seconds')
 		self.preview_view.set_progress(0.0)
-		self.refresh_button.setIcon(FluentIcon.CLOSE)
+		# red like Face Mapping's remove button, so it reads as a cancel
+		self.refresh_button.setIcon(FluentIcon.CLOSE.colored(QColor('#d13438'), QColor('#ff6b6b')))
 		self.refresh_button.setToolTip('Stop making this preview')
 		self.preview_clock.start()
 		self.tick_preview_progress()
