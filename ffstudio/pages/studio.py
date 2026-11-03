@@ -686,7 +686,8 @@ class TargetCard(SimpleCardWidget):
 		self.progress_label.setTextColor('#707070', '#9a9a9a')
 		self.progress_label.installEventFilter(ToolTipFilter(self.progress_label))
 		result_row.addWidget(self.progress_label)
-		self.preview_stop_button = tool_button(FluentIcon.CLOSE, 'Stop making this preview', self)
+		# red like Batch's preview Stop, so it reads as a cancel
+		self.preview_stop_button = tool_button(FluentIcon.CLOSE.colored(QColor('#d13438'), QColor('#ff6b6b')), 'Stop making this preview', self)
 		self.preview_stop_button.clicked.connect(self.page.stop)
 		result_row.addWidget(self.preview_stop_button)
 		# Auto previews the frame by itself whenever something changes, the refresh button previews it now
