@@ -1011,11 +1011,22 @@ class BatchPage(SourceSelection, QWidget):
 
 	def refresh_locks(self) -> None:
 		"""the rows the chosen face selector mode does not read are grayed out, so are the rows the processors and models
-		leave unused. the targets are a mix of images and videos, those count"""
+		leave unused, and the video or image rows when every output in the list is the other kind"""
 		locks = unused_locks(self.store.values.get('face_selector_mode') or BATCH_SELECTOR_MODE)
 		if self.store.schema:
-			locks.update(setting_locks(self.store.schema, self.store.values))
+			locks.update(setting_locks(self.store.schema, self.store.values, self.output_kind()))
 		self.settings_column.set_locks(locks)
+
+	def output_kind(self) -> str:
+		"""'image' or 'video' when every output in the list is that kind. a mix, an image with audio (it makes a video and
+		reads both kinds of options) or an empty list give ''"""
+		kinds = set()
+		for item in getattr(self, 'items', []):
+			kind = media_kind(item.get('target'))
+			if kind == 'image' and any(media_kind(path) == 'audio' for path in item.get('sources')):
+				kind = ''
+			kinds.add(kind)
+		return kinds.pop() if len(kinds) == 1 else ''
 
 	def show_settings(self, shown : bool) -> None:
 		self.settings_column.setVisible(shown)
@@ -2159,6 +2170,7 @@ class BatchPage(SourceSelection, QWidget):
 		summary = '%d faces × %d targets = %d outputs' % (faces, targets, len(self.items)) if faces else '%d targets' % targets
 		self.summary.setText(summary + ('  ·  %d removed' % self.removed_count if self.removed_count else ''))
 		self.remove_button.setEnabled(bool(self.items))
+		self.refresh_locks()
 		self.fit_header_buttons()
 		self.refresh_name_preview()
 		self.watch_output_folders()

@@ -3,7 +3,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from PySide6.QtCore import QEasingCurve, QEvent, QObject, QPoint, QPropertyAnimation, QRect, QRectF, Qt, QTimer
 from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import QAbstractScrollArea, QApplication, QGraphicsDropShadowEffect, QGraphicsOpacityEffect, QLabel, QVBoxLayout, QWidget
-from qfluentwidgets import CaptionLabel, FluentIcon, ToolTipFilter, themeColor
+from qfluentwidgets import CaptionLabel, FluentIcon, ToolTipFilter, TransparentPushButton, themeColor
 
 from ffstudio import splash
 from ffstudio.option_widgets import PAIRED_PARTNERS, REQUIRED_CHOICES, OptionRow
@@ -30,6 +30,8 @@ GROUP_ICONS =\
 	'paths': FluentIcon.FOLDER
 }
 PROCESSOR_ICON = FluentIcon.ROBOT
+# groups with a Reset All button in their title, it shows while one of their options is changed
+RESET_ALL_GROUPS = [ 'face_editor' ]
 
 
 def page_default(store : Any, dest : str) -> Any:
@@ -141,6 +143,8 @@ class OptionPanel(QWidget):
 				self.group_rows[group].append(row)
 			self.cards[group] = card
 			self.layout_.addWidget(card)
+			if group in RESET_ALL_GROUPS:
+				self.add_reset_all(group, card)
 			if self.order_key:
 				card.header.setToolTip('Click to open or close, drag to move this group')
 				card.header.installEventFilter(ToolTipFilter(card.header, 1000))
@@ -149,6 +153,23 @@ class OptionPanel(QWidget):
 		self.refresh_visibility()
 		self.refresh_subtitles()
 		self.refresh_favorites()
+
+	def add_reset_all(self, group : str, card : CollapsibleCard) -> None:
+		button = TransparentPushButton(FluentIcon.RETURN, 'Reset All', card.header)
+		button.setToolTip('Put every option of %s back to its default' % self.session.schema.group_title(group))
+		button.installEventFilter(ToolTipFilter(button))
+		button.clicked.connect(lambda: self.reset_group(group))
+		# hidden it keeps its room, the chevron next to it stays put
+		policy = button.sizePolicy()
+		policy.setRetainSizeWhenHidden(True)
+		button.setSizePolicy(policy)
+		card.add_tool(button)
+		card.reset_all_button = button
+
+	def reset_group(self, group : str) -> None:
+		for row in self.group_rows.get(group, []):
+			if not row.is_default():
+				row.reset()
 
 	def ordered_groups(self) -> List[str]:
 		saved = (self.session.config.get(self.order_key) or []) if self.order_key else []
@@ -363,6 +384,7 @@ class OptionPanel(QWidget):
 		self.locks = dict(locks)
 		for row in set(self.rows.values()):
 			row.set_lock(self.locks.get(row.dest))
+		self.refresh_visibility()
 
 	def set_groups(self, groups : List[str]) -> None:
 		if groups != self.groups:
@@ -375,7 +397,9 @@ class OptionPanel(QWidget):
 			return
 		active = self.session.processors()
 		for group, card in self.cards.items():
-			allowed = group not in schema.processors or group in active
+			# a group whose rows are all grayed out (the target or processors leave them unused) hides until one applies
+			rows = self.group_rows.get(group, [])
+			allowed = (group not in schema.processors or group in active) and any(row.applies() for row in rows)
 			if self.filter_text:
 				title_hit = all(word in schema.group_title(group).lower() for word in self.filter_text.split())
 				hits = 0
@@ -419,6 +443,8 @@ class OptionPanel(QWidget):
 				if not same_value(self.session.values.get(dest), page_default(self.session, dest)):
 					changed += 1
 			card.set_subtitle('%d options' % len(options) + (' · %d changed' % changed if changed else ''))
+			if hasattr(card, 'reset_all_button'):
+				card.reset_all_button.setVisible(bool(changed))
 
 	def on_value_changed(self, dest : str, _ : Any) -> None:
 		schema = self.session.schema
@@ -436,6 +462,8 @@ class OptionPanel(QWidget):
 		for dependent, (driver, _) in REQUIRED_CHOICES.items():
 			if driver == dest and dependent in self.rows:
 				self.rows[dependent].refresh_available()
+		if any(driver == dest for driver, _ in REQUIRED_CHOICES.values()):
+			self.refresh_visibility()
 		self.refresh_subtitles()
 
 

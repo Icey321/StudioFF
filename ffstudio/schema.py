@@ -40,6 +40,19 @@ SHORT_LABELS =\
 	'face_occluder_model': 'Occluder',
 	'face_parser_model': 'Parser'
 }
+# labels named in plainer words than facefusion's, the option is still passed by its own name
+RENAMED_LABELS =\
+{
+	'face_editor_mouth_grim': 'face_editor_mouth_grin',
+	'face_editor_head_pitch': 'face_editor_head_tilt_vertical',
+	'face_editor_head_yaw': 'face_editor_head_turn',
+	'face_editor_head_roll': 'face_editor_head_tilt_horizontal'
+}
+# rows shown in front of another row of their group, option -> the option it goes before
+MOVED_BEFORE =\
+{
+	'face_editor_head_yaw': 'face_editor_head_pitch'
+}
 # output options keep their image, audio or video word, the output box has a Quality, Encoder, Scale and FPS of several
 SPLIT_AFTER_ONE_PREFIXES = [ 'output_' ]
 
@@ -54,7 +67,7 @@ class Schema:
 		self.options : Dict[str, Dict[str, Any]] = data.get('options', {})
 		self.dependencies : Dict[str, Dict[str, Any]] = data.get('dependencies', {})
 		self.processors : List[str] = data.get('processors', [])
-		self.options = add_map_options(self.options)
+		self.options = move_options(add_map_options(self.options))
 
 	@staticmethod
 	def load(path : str = SCHEMA_FILE) -> Optional['Schema']:
@@ -85,7 +98,7 @@ class Schema:
 		return GROUP_TITLES.get(group) or humanize(group)
 
 	def option_label(self, option : Dict[str, Any]) -> str:
-		dest = option.get('dest')
+		dest = RENAMED_LABELS.get(option.get('dest'), option.get('dest'))
 		group = option.get('group')
 		if group in self.processors and dest.startswith(group + '_'):
 			dest = dest[len(group) + 1:]
@@ -93,7 +106,7 @@ class Schema:
 
 	def split_label(self, option : Dict[str, Any]) -> Tuple[str, str]:
 		"""the label without its leading group words, plus those words: face_selector_gender gives ('Gender', 'Face selector')"""
-		dest = option.get('dest')
+		dest = RENAMED_LABELS.get(option.get('dest'), option.get('dest'))
 		group = option.get('group')
 		if dest in SHORT_LABELS:
 			return SHORT_LABELS.get(dest), self.group_title(group)
@@ -129,6 +142,15 @@ def add_map_options(options : Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, 
 			if map_option.get('after') == dest and map_dest not in options:
 				added[map_dest] = { 'dest': map_dest, 'flag': None, 'help': map_option.get('help'), 'default': 0, 'choices': None, 'range': None, 'type': 'int', 'multiple': False, 'group': 'face_selector', 'mapped': True }
 	return added
+
+
+def move_options(options : Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+	"""the options with the MOVED_BEFORE rows in front of the row they go before"""
+	order = [ dest for dest in options if dest not in MOVED_BEFORE or MOVED_BEFORE.get(dest) not in options ]
+	for dest, before in MOVED_BEFORE.items():
+		if dest in options and before in options:
+			order.insert(order.index(before), dest)
+	return { dest: options.get(dest) for dest in order }
 
 
 def face_map_args(values : Dict[str, Any]) -> List[str]:

@@ -151,8 +151,11 @@ class SourceSelection:
 		self.source_names : Dict[str, str] = { path: name for path, name in (config.get(names_key) or {}).items() if path in self.source_paths }
 		# faces grouped with the Group button, {id, name, paths}, the id stays when the group is renamed so a face mapping keeps it
 		self.source_groups : List[dict] = [ dict(group) for group in config.get(groups_key) or [] ]
-		# sources the user took out, {path, index, name, used, groups}, the Restore button puts them back as they were, also after a restart
-		self.removed_sources : List[dict] = [ dict(entry) for entry in config.get(removed_key) or [] if entry.get('path') not in self.source_paths and os.path.exists(entry.get('path') or '') ]
+		# sources the user took out, {path, index, name, used, groups, start}, the Restore button puts them back as they were,
+		# also after one restart. on the start after that they are forgotten (one from before start was kept counts as last start's)
+		last_start = self.session.start_number - 1
+		removed = [ dict(entry, start = entry.get('start', last_start)) for entry in config.get(removed_key) or [] ]
+		self.removed_sources : List[dict] = [ entry for entry in removed if entry.get('start') >= last_start and entry.get('path') not in self.source_paths and os.path.exists(entry.get('path') or '') ]
 		self.prune_groups()
 		self.source_anchor = ''
 
@@ -281,7 +284,7 @@ class SourceSelection:
 
 	def set_sources(self, paths : List[str]) -> None:
 		# what leaves the list is remembered with its place, name, use and groups, the newest first
-		gone = [ dict(path = path, index = index, name = self.source_names.get(path, ''), used = path not in self.unused_sources, groups = [ dict(group) for group in self.source_groups if path in (group.get('paths') or []) ]) for index, path in enumerate(self.source_paths) if path not in paths ]
+		gone = [ dict(path = path, index = index, name = self.source_names.get(path, ''), used = path not in self.unused_sources, groups = [ dict(group) for group in self.source_groups if path in (group.get('paths') or []) ], start = self.session.start_number) for index, path in enumerate(self.source_paths) if path not in paths ]
 		self.removed_sources = [ entry for entry in gone + self.removed_sources if entry.get('path') not in paths ][:self.REMOVED_SOURCES_LIMIT]
 		self.source_paths = paths
 		self.unused_sources = [ path for path in self.unused_sources if path in paths ]
@@ -930,7 +933,7 @@ class SettingsColumn(QWidget):
 		# the processors' groups and the others in one list, dragged into any order by their titles
 		self.option_panel = OptionPanel(store, STUDIO_GROUPS, expanded = [ 'face_selector' ], parent = content, favorites = True, info_icons = True, short_labels = True, expansion_key = expansion_key, order_key = order_key)
 		layout.addWidget(self.option_panel)
-		self.no_match_label = CaptionLabel('No settings match your search. Options of processors that are switched off are hidden.', content)
+		self.no_match_label = CaptionLabel('No settings match your search. Options of processors that are switched off, and groups the target does not use, are hidden.', content)
 		self.no_match_label.setWordWrap(True)
 		self.no_match_label.setTextColor('#707070', '#9a9a9a')
 		self.no_match_label.hide()

@@ -867,6 +867,10 @@ class OptionRow(QFrame):
 		self.label.setTextColor(*(self.label_colors if available else ('#a0a0a0', '#6a6a6a')))
 		self.control_area.setToolTip('' if available else tip)
 
+	def applies(self) -> bool:
+		"""false while the row is grayed out, by a lock or a choice that is not checked"""
+		return self.control_area.isEnabledTo(self)
+
 	def is_default(self) -> bool:
 		stored, default = self.stored_value(), self.default_value()
 		if self.partner:

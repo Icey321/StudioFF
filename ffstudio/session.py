@@ -146,6 +146,9 @@ class Session(QObject):
 	def __init__(self) -> None:
 		super().__init__()
 		self.config = AppConfig()
+		# counts the times StudioFF was started, removed sources can be restored in the start they left and the next one
+		self.start_number = int(self.config.get('start_number') or 0) + 1
+		self.config.set('start_number', self.start_number)
 		self.schema : Optional[Schema] = Schema.load()
 		self.values : Dict[str, Any] = {}
 		self.runner = ProcessRunner(self)
