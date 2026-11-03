@@ -87,7 +87,7 @@ class ScopeTab(QWidget):
 			size_item = QTableWidgetItem(format_size(sizes[model]) if model in sizes else '—')
 			size_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 			self.table.setItem(row, 2, size_item)
-		installed = [ sizes[model] for _, model in models if model in sizes ]
+		installed = [ sizes[model] for model in sorted({ model for _, model in models if model in sizes }) ]
 		self.summary.setText('(%d) models · (%d) installed%s' % (len(models), len(installed), ' · ' + format_size(sum(installed)) if installed else '') if models else 'FaceFusion has not listed its models yet')
 		self.apply_filter(self.search.text())
 
