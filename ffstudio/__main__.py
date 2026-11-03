@@ -18,8 +18,8 @@ def instance_name() -> str:
 	return 'FaceFusionStudio-' + hashlib.sha1(os.path.normcase(os.path.abspath(DATA_DIR)).encode()).hexdigest()[:12]
 
 
-def wake_running_instance() -> bool:
-	"""asks an app that is already open to come to the front, true when there was one"""
+def wake_running_instance(message : bytes = b'show') -> bool:
+	"""asks an app that is already open to come to the front, or to restart, true when there was one"""
 	socket = QLocalSocket()
 	socket.connectToServer(instance_name())
 	if not socket.waitForConnected(500):
@@ -28,7 +28,7 @@ def wake_running_instance() -> bool:
 		import ctypes
 		# this process got the focus from the double-click, let the open app take it
 		ctypes.windll.user32.AllowSetForegroundWindow(-1)
-	socket.write(b'show')
+	socket.write(message)
 	socket.waitForBytesWritten(500)
 	socket.disconnectFromServer()
 	return True
@@ -42,10 +42,15 @@ def listen_for_instances(app : QApplication, opened : Dict[str, QWidget]) -> Non
 	def on_connection() -> None:
 		socket = server.nextPendingConnection()
 		if socket:
+			socket.readyRead.connect(lambda: on_message(bytes(socket.readAll().data())))
 			socket.disconnected.connect(socket.deleteLater)
+
+	def on_message(message : bytes) -> None:
 		window = opened.get('window')
 		# while still starting, the splash already shows it is on its way
-		if window:
+		if window and message == b'restart':
+			window.quit_app(restart = True)
+		elif window:
 			if window.isMinimized() or not window.isVisible():
 				# back to how it was, maximized stays maximized, also from the tray
 				window.show_from_tray()
@@ -61,14 +66,19 @@ def main() -> None:
 	parser.add_argument('--page', default = 'studio', help = 'page to show for --screenshot')
 	parser.add_argument('--theme', help = 'override the theme (auto, light, dark)')
 	parser.add_argument('--size', default = '1500x960')
+	parser.add_argument('--restart', action = 'store_true', help = 'ask the open app to close and open again, the taskbar menu\'s Restart StudioFF')
+	parser.add_argument('--after', type = int, help = 'wait for this process to end first, a restarting app passes its own')
 	args = parser.parse_args()
+	from ffstudio import taskbar
+	if args.after:
+		taskbar.wait_for_exit(args.after)
 	migrate_data_dir()
 	from ffstudio.updater import remove_retired_files
 	remove_retired_files()
 
 	if sys.platform == 'win32':
 		import ctypes
-		ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID('FaceFusionStudio')
+		ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(taskbar.APP_ID)
 
 	QApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
 	app = QApplication(sys.argv)
@@ -77,7 +87,7 @@ def main() -> None:
 	app.setDesktopFileName('studioff')
 
 	if not args.screenshot:
-		if wake_running_instance():
+		if wake_running_instance(b'restart' if args.restart else b'show'):
 			return
 		opened : Dict[str, QWidget] = {}
 		listen_for_instances(app, opened)
@@ -123,6 +133,8 @@ def main() -> None:
 		opened['window'] = window
 		splash.step()
 		window.restore_window_state()
+		taskbar.set_window_relaunch(window)
+		taskbar.set_jump_list()
 		QTimer.singleShot(0, splash.finish)
 
 	sys.exit(app.exec())

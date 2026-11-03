@@ -220,6 +220,7 @@ class MainWindow(FluentWindow):
 			self.tray.setToolTip(APP_NAME)
 			menu = QMenu(self)
 			menu.addAction('Show ' + APP_NAME, self.show_from_tray)
+			menu.addAction('Restart', lambda: self.quit_app(restart = True))
 			menu.addAction('Quit', self.quit_app)
 			self.tray.setContextMenu(menu)
 			self.tray.activated.connect(lambda reason: self.show_from_tray() if reason in (QSystemTrayIcon.ActivationReason.Trigger, QSystemTrayIcon.ActivationReason.DoubleClick) else None)
@@ -235,14 +236,36 @@ class MainWindow(FluentWindow):
 		self.raise_()
 		self.activateWindow()
 
-	def quit_app(self) -> None:
+	def quit_app(self, restart : bool = False) -> None:
 		self.quitting = True
-		if self.tray:
-			self.tray.hide()
-		self.show()
-		self.close()
+		# the window only comes back for the "Stop and quit?" question, a quit from the tray otherwise shows nothing
+		if self.quit_question() and not self.isVisible():
+			self.show_from_tray()
+		closed = self.close()
 		# a declined "Stop and quit?" leaves the app open
 		self.quitting = False
+		if not closed:
+			return
+		if self.tray:
+			self.tray.hide()
+		if restart:
+			from ffstudio.taskbar import start_again
+			start_again()
+		# a hidden window closing is not the last window closing, so this ends the app
+		QApplication.quit()
+
+	def quit_question(self) -> Optional[tuple]:
+		"""the title and text of the question to ask before quitting, none when nothing is lost"""
+		# a run with its memory freed has no process left, but closing still loses the output it was making
+		freed = self.studio_page.freed or self.batch_page.running and self.batch_page.paused and self.batch_page.current < 0
+		if not (self.session.runner.is_running() or freed) or self.update_closing:
+			return None
+		paused = self.studio_page.paused or self.batch_page.running and self.batch_page.paused
+		if freed:
+			return 'A run is paused with its memory freed', 'Quit anyway? The output being made is lost and the run cannot be resumed.'
+		if paused:
+			return 'A run is paused', 'Stop "%s" and quit? The run cannot be resumed.' % self.session.task
+		return 'FaceFusion is still running', 'Stop "%s" and quit?' % self.session.task
 
 	def closeEvent(self, event) -> None:
 		action = self.session.config.get('close_action') or 'close'
@@ -257,17 +280,10 @@ class MainWindow(FluentWindow):
 				self.showMinimized()
 			return
 		self.save_window_state()
-		# a run with its memory freed has no process left, but closing still loses the output it was making
-		freed = self.studio_page.freed or self.batch_page.running and self.batch_page.paused and self.batch_page.current < 0
-		if (self.session.runner.is_running() or freed) and not self.update_closing:
+		question = self.quit_question()
+		if question:
 			from qfluentwidgets import MessageBox
-			paused = self.studio_page.paused or self.batch_page.running and self.batch_page.paused
-			if freed:
-				box = MessageBox('A run is paused with its memory freed', 'Quit anyway? The output being made is lost and the run cannot be resumed.', self)
-			elif paused:
-				box = MessageBox('A run is paused', 'Stop "%s" and quit? The run cannot be resumed.' % self.session.task, self)
-			else:
-				box = MessageBox('FaceFusion is still running', 'Stop "%s" and quit?' % self.session.task, self)
+			box = MessageBox(*question, self)
 			if not box.exec():
 				event.ignore()
 				return

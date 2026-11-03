@@ -9,7 +9,7 @@ from PySide6.QtWidgets import QAbstractButton, QApplication, QButtonGroup, QFile
 from qfluentwidgets import BodyLabel, CaptionLabel, CheckBox, ColorPickerButton, ComboBox, EditableComboBox, FluentIcon, HyperlinkButton, IconWidget, InfoBarIcon, LineEdit, MessageBox, PrimaryPushButton, ProgressBar, PushButton, SearchLineEdit, SimpleCardWidget, SingleDirectionScrollArea, StrongBodyLabel, SubtitleLabel, SwitchButton, ToolTipFilter, TransparentToolButton, isDarkTheme
 
 from ffstudio import APP_REPOSITORY, APP_VERSION, TESTED_FACEFUSION_COMMIT, TESTED_FACEFUSION_DATE
-from ffstudio.environment import PREREQUISITES, check_dependencies, compare_github_commits, create_process_environment, fetch_github_build, fetch_latest_release, find_conda, find_conda_base, find_facefusion_folders, find_missing_prerequisites, find_python_candidates, has_nvidia_gpu, is_facefusion_root, is_newer_version, probe_python_version, read_facefusion_build, read_facefusion_version, switch_facefusion_commit, version_tuple, winget_install_args
+from ffstudio.environment import PINNED_VERSIONS, PREREQUISITES, check_dependencies, compare_github_commits, create_process_environment, fetch_github_build, fetch_latest_release, find_conda, find_conda_base, find_facefusion_folders, find_missing_prerequisites, find_python_candidates, has_nvidia_gpu, is_facefusion_root, is_newer_version, probe_python_version, read_facefusion_build, read_ffmpeg_version, read_facefusion_version, switch_facefusion_commit, version_tuple, winget_install_args
 from ffstudio.main_window import DEFAULT_ACCENT, apply_theme
 from ffstudio.option_panel import OptionPanel
 from ffstudio.option_widgets import setting_locks
@@ -542,6 +542,16 @@ class SetupPage(QWidget):
 			self.dependency_status.set_status('warning', 'Missing on PATH: %s. FaceFusion needs ffmpeg, ffprobe and curl, and installing needs git.' % ', '.join(missing))
 		else:
 			self.dependency_status.set_status('success', 'git, ffmpeg, ffprobe and curl were found')
+		# the updates card's FFmpeg row follows too, the install may have just added ffmpeg
+		self.refresh_ffmpeg_label()
+
+	def refresh_ffmpeg_label(self) -> None:
+		version = read_ffmpeg_version()
+		pinned = PINNED_VERSIONS['ffmpeg']
+		if version == pinned:
+			self.ffmpeg_label.setText('%s  ·  the version FaceFusion recommends' % version)
+		else:
+			self.ffmpeg_label.setText('%s  ·  FaceFusion recommends %s' % (version or 'Not found', pinned))
 
 	def env_python_path(self) -> str:
 		if self.env_combo.currentData() == 'conda':
@@ -648,6 +658,10 @@ class SetupPage(QWidget):
 		self.windows_label = BodyLabel(read_os_version(), card)
 		self.windows_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
 		layout.addLayout(form_row('Operating System',[ self.windows_label ], card, UPDATE_LABEL_WIDTH))
+		# filled by refresh_ffmpeg_label once the install card checks what is on PATH
+		self.ffmpeg_label = BodyLabel('', card)
+		self.ffmpeg_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+		layout.addLayout(form_row('FFmpeg Installed', [ self.ffmpeg_label ], card, UPDATE_LABEL_WIDTH))
 		self.installed_label = BodyLabel('', card)
 		self.installed_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
 		layout.addLayout(form_row('FaceFusion Installed', [ self.installed_label ], card, UPDATE_LABEL_WIDTH))

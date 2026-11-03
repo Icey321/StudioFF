@@ -327,13 +327,30 @@ def check_dependencies() -> Dict[str, bool]:
 	return { name: bool(shutil.which(name)) for name in [ 'git', 'ffmpeg', 'ffprobe', 'curl' ] }
 
 
+def read_ffmpeg_version() -> str:
+	"""the version the ffmpeg on PATH reports, 7.0.2 out of "ffmpeg version 7.0.2-full_build-www.gyan.dev", '' without one"""
+	ffmpeg = shutil.which('ffmpeg')
+	if not ffmpeg:
+		return ''
+	try:
+		output = subprocess.run([ ffmpeg, '-hide_banner', '-version' ], capture_output = True, text = True, timeout = 10, creationflags = CREATE_NO_WINDOW).stdout
+	except (OSError, subprocess.SubprocessError):
+		return ''
+	words = output.split()
+	if words[:2] != [ 'ffmpeg', 'version' ] or len(words) < 3:
+		return ''
+	# a git build reports something like N-118000-g1234abcd, which is kept whole
+	version = words[2].lstrip('n').split('-')[0]
+	return version if version[:1].isdigit() else words[2]
+
+
 # what the install needs, winget package id and the plain reason shown before anything is installed
 # ffprobe comes with the ffmpeg package
 PREREQUISITES : Dict[str, Tuple[str, str, str]] =\
 {
 	'git': ('Git.Git', 'Git', 'downloads FaceFusion and updates it later'),
 	'uv': ('astral-sh.uv', 'uv', 'creates the Python 3.13 environment and downloads Python 3.13 itself'),
-	'ffmpeg': ('Gyan.FFmpeg', 'FFmpeg 7.0.2','reads and writes video and audio (includes ffprobe)'),
+	'ffmpeg': ('Gyan.FFmpeg', 'FFmpeg 7.0.2', 'reads and writes video and audio (includes ffprobe)'),
 	'curl': ('cURL.cURL', 'curl', 'downloads the models FaceFusion needs')
 }
 # the version facefusion's install guide names, a newer ffmpeg is not what facefusion is tested with
