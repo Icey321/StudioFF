@@ -658,8 +658,15 @@ class BatchPage(SourceSelection, QWidget):
 			session.config.set('batch_mode_unlocked', True)
 			self.store.set_value('face_selector_mode', BATCH_SELECTOR_MODE)
 		stored = session.config.get('batch') or {}
-		# runs the user took out of the list, they stay out until restored, also after a restart
-		self.removed : set = { (tuple(sources), target) for sources, target in stored.get('removed') or [] }
+		# runs the user took out of the list, Restore puts them back in the start they left and the next one. on the start
+		# after that they stay out but are forgotten, like removed sources (one stored before starts were kept counts as last start's)
+		last_start = session.start_number - 1
+		removed = [ ((tuple(entry[0]), entry[1]), entry[2] if len(entry) > 2 else last_start) for entry in stored.get('removed') or [] ]
+		# the start each run was removed in, a run removed in this start has no entry
+		self.removed_starts : Dict[Tuple, int] = { key: start for key, start in removed if start >= last_start }
+		self.removed : set = set(self.removed_starts)
+		# the runs that stay out for good, only adding the file again or reading the target folder again brings them back
+		self.forgotten : Dict[Tuple, int] = { key: start for key, start in removed if start < last_start }
 		# targets dropped on the list or added with Add Files, planned with the files of the target folder
 		self.target_files : List[str] = [ path for path in stored.get('target_files') or [] if isinstance(path, str) ]
 		# the frame of each video target the preview shows, picked on the timeline under the preview, also after a restart
@@ -1481,6 +1488,7 @@ class BatchPage(SourceSelection, QWidget):
 		# a file added again comes back with all its outputs
 		added = { os.path.normcase(path) for path in files }
 		self.removed = { key for key in self.removed if os.path.normcase(key[1] or '') not in added }
+		self.forgotten = { key: start for key, start in self.forgotten.items() if os.path.normcase(key[1] or '') not in added }
 		if files:
 			self.refresh_matches(True)
 
@@ -1496,6 +1504,7 @@ class BatchPage(SourceSelection, QWidget):
 		"""the files of the target folder as they are now, the ones removed from the list come back too, added files stay removed"""
 		folder = set(self.folder_targets())
 		self.removed = { key for key in self.removed if key[1] not in folder }
+		self.forgotten = { key: start for key, start in self.forgotten.items() if key[1] not in folder }
 		self.refresh_matches(True)
 
 	# preview of the selected output, made on a smaller copy of its target with the settings of the batch
@@ -2152,8 +2161,10 @@ class BatchPage(SourceSelection, QWidget):
 		taken : set = set()
 		items = []
 		runs = self.runs()
+		# a restored run removed again counts from the start it is removed in then
+		self.removed_starts = { key: start for key, start in self.removed_starts.items() if key in self.removed }
 		self.removed_count = sum(1 for run in runs if self.run_key(run) in self.removed)
-		for run in [ run for run in runs if self.run_key(run) not in self.removed ]:
+		for run in [ run for run in runs if self.run_key(run) not in self.removed and self.run_key(run) not in self.forgotten ]:
 			path, replaces = build_output(template, self.name_tag_values(run), output_dir, self.output_extension(run), subfolders, taken, animated = is_animation(run.get('target') or ''))
 			key = os.path.normcase(path)
 			name = os.path.relpath(path, output_dir) if subfolders and output_dir else os.path.basename(path)
@@ -2512,7 +2523,7 @@ class BatchPage(SourceSelection, QWidget):
 			'output_dir': self.output_dir(),
 			'template': self.output_name_edit.text().strip(),
 			'subfolders': self.subfolders_button.isChecked(),
-			'removed': [ [ list(sources), target ] for sources, target in list(self.removed)[:REMOVED_LIMIT] ],
+			'removed': ([ [ list(sources), target, self.removed_starts.get((sources, target), self.session.start_number) ] for sources, target in self.removed ] + [ [ list(sources), target, start ] for (sources, target), start in self.forgotten.items() ])[:REMOVED_LIMIT],
 			# the first frame needs no entry, the newest picks are kept
 			'preview_frames': dict([ (target, index) for target, index in self.preview_frames.items() if index > 0 ][-FRAMES_LIMIT:]),
 			'reference_picks': dict(list(self.reference_picks.items())[-FRAMES_LIMIT:])
