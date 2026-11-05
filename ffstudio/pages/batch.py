@@ -788,6 +788,9 @@ class BatchPage(SourceSelection, QWidget):
 		self.target_dir.setText(stored.get('target_dir', ''))
 		self.target_dir.setPlaceholderText('Folder with the target images or videos')
 		self.target_dir.setClearButtonEnabled(True)
+		# files added to or deleted from the folder since show up in the list
+		target_reload = add_edit_button(self.target_dir, FluentIcon.SYNC, 'Read the target folder again, so the list shows the files in it now, also the ones removed from the list')
+		target_reload.clicked.connect(self.reload_target_folder)
 		self.target_filter = ComboBox(card)
 		patterns = [ pattern for pattern, _ in TARGET_FILTERS ]
 		for pattern, name in TARGET_FILTERS:
@@ -1489,6 +1492,12 @@ class BatchPage(SourceSelection, QWidget):
 		self.removed.clear()
 		self.refresh_matches(True)
 
+	def reload_target_folder(self) -> None:
+		"""the files of the target folder as they are now, the ones removed from the list come back too, added files stay removed"""
+		folder = set(self.folder_targets())
+		self.removed = { key for key in self.removed if key[1] not in folder }
+		self.refresh_matches(True)
+
 	# preview of the selected output, made on a smaller copy of its target with the settings of the batch
 
 	def on_live_toggled(self, checked : bool) -> None:
@@ -1790,8 +1799,11 @@ class BatchPage(SourceSelection, QWidget):
 		self.refresh_button.setIcon(FluentIcon.SYNC)
 		self.refresh_button.setToolTip('Make the preview now')
 		output_path = PREVIEW_RESULT
-		name = self.preview_name()
-		if exit_code == 0 and os.path.exists(output_path):
+		name = self.preview_name() if self.preview_run else ''
+		if self.preview_run is None:
+			# the list was emptied while it ran, the preview stays empty
+			self.preview_label.setText('')
+		elif exit_code == 0 and os.path.exists(output_path):
 			self.session.remember_preview_seconds(self.preview_estimate, elapsed)
 			self.preview_target = to_pixmap(self.preview_run_frame)
 			self.preview_result = to_pixmap(read_frame(output_path))
@@ -2176,6 +2188,25 @@ class BatchPage(SourceSelection, QWidget):
 		self.watch_output_folders()
 		self.sync_timeline()
 		self.follow_selection()
+		if not self.items:
+			self.clear_preview()
+
+	def clear_preview(self) -> None:
+		"""the list is empty, the preview shows its hint again instead of the last output"""
+		self.preview_timer.stop()
+		self.stop_preview()
+		self.preview_run = None
+		self.preview_waiting = False
+		self.preview_waits_for_match = False
+		self.shown_key = None
+		self.preview_frame = None
+		self.preview_frame_key = None
+		self.forget_result()
+		self.preview_target = QPixmap()
+		self.preview_view.set_pixmap(QPixmap())
+		self.preview_view.set_faces([])
+		self.preview_label.setText('')
+		self.schedule_face_scan()
 
 	def refresh_name_preview(self) -> None:
 		"""what the next run would call its files, which moves on once a run made the files before"""
