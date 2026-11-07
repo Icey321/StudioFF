@@ -61,8 +61,9 @@ Pick the section for your system. Every way needs an internet connection and a f
    - **Already have FaceFusion v4?** The app looks for it in the usual places (next to the StudioFF folder, your user folder,
      Documents, Desktop, Downloads and the top of each local drive) and fills in the folder and its Python.
      Check them, or pick them yourself with **Browse** and **Detect**, then press **Save and load options**.
-   - **No FaceFusion v4 yet?** Install FaceFusion's `v4` branch yourself first. FaceFusion v4 needs **Python 3.13 or newer**,
-     so a FaceFusion 3.x environment (Python 3.12) can't run it.
+   - **No FaceFusion v4 yet?** Install FaceFusion's [`v4` branch](https://github.com/facefusion/facefusion/tree/v4) yourself
+     first, or use FaceFusion's [easy installation](https://buymeacoffee.com/facefusion/extras). FaceFusion v4 needs
+     **Python 3.13 or newer**, so a FaceFusion 3.x environment (Python 3.12) can't run it.
 
 StudioFF updates itself from **Settings** when a new release is out.
 
@@ -87,6 +88,19 @@ version has not been run on Linux yet. macOS has never been tried on a real comp
    Python 3.13 environment).
 
 Update with `git pull` in the StudioFF folder.
+
+## Uninstall
+
+StudioFF has no uninstaller and adds nothing to the Windows Apps list or the registry.
+
+- **Windows:** delete the StudioFF folder (its `.venv` is inside), the **StudioFF** shortcuts on the desktop and in the
+  Start menu, and the settings folder `%APPDATA%\StudioFF`.
+- **Linux:** delete the StudioFF folder, `~/.local/share/applications/studioff.desktop`,
+  `~/.local/share/icons/hicolor/256x256/apps/studioff.png` and `~/.config/StudioFF`.
+- **macOS:** delete the StudioFF folder and `~/Library/Application Support/StudioFF`.
+
+FaceFusion is a separate install and stays; delete its folder (and its conda or venv environment) to remove it too.
+If `install.ps1` installed uv, remove it with `winget uninstall astral-sh.uv`.
 
 ## Layout
 

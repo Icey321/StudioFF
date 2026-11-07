@@ -1,21 +1,19 @@
 import hashlib
 import os
 import re
-import shutil
-import subprocess
 import tempfile
 import time
 from typing import Any, Dict, List, Optional
 
-from PySide6.QtCore import QStandardPaths, QThread, QTimer, Qt, Signal
+from PySide6.QtCore import QStandardPaths, QTimer, Qt
 from PySide6.QtWidgets import QApplication, QFileDialog, QHBoxLayout, QTableWidgetItem, QVBoxLayout, QWidget
 from qfluentwidgets import BodyLabel, CaptionLabel, CheckBox, ComboBox, FlowLayout, FluentIcon, PrimaryPushButton, ProgressBar, PushButton, SingleDirectionScrollArea, StrongBodyLabel, SubtitleLabel, TableWidget
 
 from ffstudio.benchmark_report import RESOLUTIONS, format_processors, render_report
-from ffstudio.environment import CREATE_NO_WINDOW, create_process_environment, read_facefusion_version
+from ffstudio.environment import read_facefusion_version
+from ffstudio.hardware import HardwareProbe
 from ffstudio.media import format_length
 from ffstudio.pages.setup import form_row, section_card
-from ffstudio.platforms import read_cpu_name, read_memory_total
 from ffstudio.session import Session
 from ffstudio.widgets import NumberBox, guard_wheel
 
@@ -37,43 +35,6 @@ COLUMN_TIPS =\
 # where each stage of one run sits within that run on the overall progress bar
 STAGE_SPAN = { 'Checking content': (0.0, 0.03), 'Extracting frames': (0.03, 0.06), 'Processing frames': (0.06, 0.92), 'Merging video': (0.92, 0.97), 'Adding audio': (0.97, 1.0) }
 HISTORY_LIMIT = 200
-
-
-class HardwareProbe(QThread):
-	"""collects gpu, cpu, memory and onnxruntime details without blocking the window"""
-	probed = Signal(dict)
-
-	def __init__(self, python_path : str) -> None:
-		super().__init__()
-		self.python_path = python_path
-
-	def run(self) -> None:
-		info : Dict[str, str] = {}
-		cpu = read_cpu_name()
-		info['CPU'] = '%s · %d threads' % (cpu or 'Unknown', os.cpu_count() or 0)
-		memory = read_memory_total()
-		info['Memory'] = '%.0f GB' % (memory / 1073741824) if memory else 'Unknown'
-		info['GPU'] = 'No NVIDIA GPU found'
-		if shutil.which('nvidia-smi'):
-			try:
-				output = subprocess.run([ 'nvidia-smi', '--query-gpu=name,memory.total,driver_version', '--format=csv,noheader,nounits' ], capture_output = True, text = True, timeout = 10, creationflags = CREATE_NO_WINDOW).stdout
-				gpus = []
-				for line in output.strip().splitlines():
-					name, vram, driver = [ part.strip() for part in line.split(',')[:3] ]
-					gpus.append('%s · %.0f GB · driver %s' % (name, float(vram) / 1024, driver))
-				info['GPU'] = '\n'.join(gpus) or info['GPU']
-			except (OSError, ValueError, subprocess.SubprocessError):
-				pass
-		if os.path.isfile(self.python_path):
-			environment = create_process_environment(self.python_path)
-			script = 'import onnxruntime; print(onnxruntime.__version__); print(", ".join(provider.replace("ExecutionProvider", "").replace("Tensorrt", "TensorRT") for provider in onnxruntime.get_available_providers()))'
-			try:
-				output = subprocess.run([ self.python_path, '-c', script ], capture_output = True, text = True, timeout = 60, creationflags = CREATE_NO_WINDOW, env = { key: environment.value(key) for key in environment.keys() }).stdout.strip().splitlines()
-				if len(output) >= 2:
-					info['ONNX Runtime'] = '%s · %s' % (output[0], output[1])
-			except (OSError, subprocess.SubprocessError):
-				pass
-		self.probed.emit(info)
 
 
 class BenchmarkPage(QWidget):

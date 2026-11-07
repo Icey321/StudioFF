@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Creates the UI environment (.venv) and an app launcher entry, the Linux and macOS counterpart of install.ps1.
-# FaceFusion v4 itself lives in its own environment; install it from the app's FaceFusion page.
+# FaceFusion v4 itself lives in its own environment and is installed separately; pick it on the app's FaceFusion page.
 # Based on tokenwizard's Linux fork, https://github.com/tokenwizard/StudioFF
 set -euo pipefail
 cd "$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")"

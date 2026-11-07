@@ -161,6 +161,22 @@ def read_cpu_name() -> str:
 	return platform.processor()
 
 
+def read_cpu_speed() -> float:
+	"""the processor's rated speed in GHz, 0 when unknown. not the boost speed, which no simple source reports"""
+	try:
+		if IS_WINDOWS:
+			import winreg
+			with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r'HARDWARE\DESCRIPTION\System\CentralProcessor\0') as key:
+				return int(winreg.QueryValueEx(key, '~MHz')[0]) / 1000
+		if IS_MAC:
+			return int(subprocess.run([ 'sysctl', '-n', 'hw.cpufrequency' ], capture_output = True, text = True, timeout = 5).stdout.strip()) / 1e9
+		# linux: the highest speed the kernel allows, in kHz
+		with open('/sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_max_freq', encoding = 'utf-8') as speed_file:
+			return int(speed_file.read().strip()) / 1e6
+	except (OSError, ValueError, subprocess.SubprocessError):
+		return 0
+
+
 def read_memory_total() -> int:
 	"""bytes of ram, 0 when unknown"""
 	try:

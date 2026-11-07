@@ -10,6 +10,7 @@ from qfluentwidgets import BodyLabel, CaptionLabel, CheckBox, ColorPickerButton,
 
 from ffstudio import APP_REPOSITORY, APP_VERSION, FACEFUSION_MANAGEMENT, TESTED_FACEFUSION_COMMIT, TESTED_FACEFUSION_DATE
 from ffstudio.environment import PINNED_VERSIONS, PREREQUISITES, check_dependencies, compare_github_commits, create_process_environment, fetch_github_build, fetch_latest_release, find_conda, find_conda_base, find_facefusion_folders, find_missing_prerequisites, find_python_candidates, has_nvidia_gpu, is_facefusion_root, is_newer_version, probe_python_version, read_facefusion_build, read_ffmpeg_version, read_facefusion_version, switch_facefusion_commit, version_tuple, winget_install_args
+from ffstudio.hardware import HardwareProbe
 from ffstudio.main_window import DEFAULT_ACCENT, apply_theme
 from ffstudio.option_panel import OptionPanel
 from ffstudio.option_widgets import setting_locks
@@ -32,6 +33,21 @@ REPOSITORY_URL = 'https://github.com/facefusion/facefusion.git'
 DEFAULT_REPOSITORY = 'facefusion/facefusion'
 # the branch StudioFF drives, the install clones it and the tested commit is on it
 FACEFUSION_BRANCH = 'v4'
+FACEFUSION_BRANCH_PAGE = 'https://github.com/facefusion/facefusion/tree/v4'
+# FaceFusion's own easy installer
+FACEFUSION_EASY_INSTALL_PAGE = 'https://buymeacoffee.com/facefusion/extras'
+FACEFUSION_DISCORD_PAGE = 'https://discord.com/channels/1141812857462341693/1323967539188858911'
+# the hardware rows under Operating System on the FaceFusion page, with their tooltips
+HARDWARE_ROWS = [
+	('CPU', 'The processor, how many threads it runs at once and its rated speed (not its boost speed)'),
+	('System RAM', ''),
+	('GPU', 'The graphics card and its own memory. Without NVIDIA, Windows lists every video card it has but can\'t tell their memory'),
+	('GPU Driver', ''),
+	('CUDA', 'The newest CUDA the NVIDIA driver supports'),
+	('ONNX Runtime', 'The version in FaceFusion\'s Python and the providers it can run on')
+]
+# where each row's text is in what HardwareProbe sends
+HARDWARE_KEYS = { 'CPU': 'System CPU', 'System RAM': 'Memory', 'GPU': 'System GPU' }
 # the update card's labels are longer than the other cards'
 UPDATE_LABEL_WIDTH = 170
 CONDA_ENV_NAME = 'facefusion-v4'
@@ -175,6 +191,12 @@ class ScrollPage(QWidget):
 		self.content_layout.setSpacing(12)
 		self.scroll.setWidget(self.content)
 
+	shown = Signal()
+
+	def showEvent(self, event) -> None:
+		super().showEvent(event)
+		self.shown.emit()
+
 
 class SetupPage(QWidget):
 	# the github answer arrives from a worker thread
@@ -238,12 +260,16 @@ class SetupPage(QWidget):
 		# the FaceFusion sections, each its own card, on a page of their own just above Settings in the side bar
 		# they stay built and run from here, the rest of the app reaches them through this page
 		self.facefusion_page = ScrollPage('FaceFusion', 'facefusion', parent)
+		# the hardware rows are read the first time the page shows, not at every start
+		self.hardware_probe : Optional[HardwareProbe] = None
+		self.facefusion_page.shown.connect(lambda: self.probe_hardware(again = False))
 		# its own startup check, apart from the StudioFF one in Settings
 		if FACEFUSION_MANAGEMENT:
 			self.facefusion_startup_switch = startup_switch(self.facefusion_page.header, 'Check for FaceFusion Updates at Startup', 'Look for a new FaceFusion release each time the app opens. An orange dot on the FaceFusion icon means one is out', self.session.config.get('check_facefusion_updates_at_startup') is not False, self.facefusion_page)
 			self.facefusion_startup_switch.checkedChanged.connect(self.on_facefusion_startup_check_toggled)
 		page_content = self.facefusion_page.content
 		self.facefusion_page.content_layout.addWidget(self.create_update_card(page_content))
+		self.facefusion_page.content_layout.addWidget(self.create_system_card(page_content))
 		# a visible division, the cards below are about installing FaceFusion rather than updating it
 		self.facefusion_page.content_layout.addSpacing(12)
 		divider = QFrame(page_content)
@@ -465,6 +491,8 @@ class SetupPage(QWidget):
 		self.session.config.save()
 		self.refresh_status()
 		self.session.check_python()
+		# the ONNX Runtime row comes from FaceFusion's Python, which may have just changed
+		self.probe_hardware(again = True)
 		if not self.session.is_configured():
 			self.session.notify.emit('error', 'Incomplete setup', 'Both the FaceFusion folder and %s are required.' % PYTHON_NAME)
 			return
@@ -662,13 +690,6 @@ class SetupPage(QWidget):
 			card, layout = section_card('FaceFusion updates', 'StudioFF uses the %s branch of FaceFusion on GitHub (%s). This checks your FaceFusion folder against that branch. An orange dot on the FaceFusion icon means a newer release is out.' % (FACEFUSION_BRANCH, DEFAULT_REPOSITORY), parent)
 		else:
 			card, layout = section_card('FaceFusion', 'StudioFF uses the %s branch of FaceFusion (%s). This shows the FaceFusion in your folder and the commit this StudioFF was tested with.' % (FACEFUSION_BRANCH, DEFAULT_REPOSITORY), parent)
-		self.windows_label = BodyLabel(read_os_version(), card)
-		self.windows_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-		layout.addLayout(form_row('Operating System',[ self.windows_label ], card, UPDATE_LABEL_WIDTH))
-		# filled by refresh_ffmpeg_label once the install card checks what is on PATH
-		self.ffmpeg_label = BodyLabel('', card)
-		self.ffmpeg_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-		layout.addLayout(form_row('FFmpeg Installed', [ self.ffmpeg_label ], card, UPDATE_LABEL_WIDTH))
 		self.installed_label = BodyLabel('', card)
 		self.installed_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
 		layout.addLayout(form_row('FaceFusion Installed', [ self.installed_label ], card, UPDATE_LABEL_WIDTH))
@@ -684,6 +705,30 @@ class SetupPage(QWidget):
 		self.tested_status = StatusLine(card)
 		layout.addLayout(form_row('Tested with', [ self.tested_label ], card, UPDATE_LABEL_WIDTH))
 		layout.addLayout(form_row('', [ self.tested_status ], card, UPDATE_LABEL_WIDTH))
+		link_rows = [
+			('Get FaceFusion', [
+				(FACEFUSION_EASY_INSTALL_PAGE, 'Easy Installation', FluentIcon.LINK, 'FaceFusion\'s own installer page: ' + FACEFUSION_EASY_INSTALL_PAGE),
+				(FACEFUSION_BRANCH_PAGE, 'FaceFusion v4 on GitHub', FluentIcon.GITHUB, FACEFUSION_BRANCH_PAGE)
+			]),
+			('Support', [
+				(FACEFUSION_DISCORD_PAGE, 'FaceFusion Discord', FluentIcon.CHAT, 'FaceFusion\'s Discord, for help with FaceFusion itself')
+			])
+		]
+		for caption, row_links in link_rows:
+			links = QHBoxLayout()
+			links.setSpacing(4)
+			links_caption = BodyLabel(caption, card)
+			links_caption.setFixedWidth(UPDATE_LABEL_WIDTH)
+			links.addWidget(links_caption)
+			links.addSpacing(4)
+			for url, text, icon, tip in row_links:
+				link = HyperlinkButton(url, text, card, icon)
+				link.setToolTip(tip)
+				link.installEventFilter(ToolTipFilter(link))
+				link.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+				links.addWidget(link)
+			links.addStretch(1)
+			layout.addLayout(links)
 		buttons = QHBoxLayout()
 		buttons.addSpacing(UPDATE_LABEL_WIDTH + 8)
 		self.update_button = PrimaryPushButton(FluentIcon.UPDATE, 'Check for FaceFusion Updates', card)
@@ -727,6 +772,59 @@ class SetupPage(QWidget):
 		# filled in by the update check: where the installed commit stands against the tested one
 		self.tested_compare : Dict[str, Any] = {}
 		return card
+
+	def create_system_card(self, parent : QWidget) -> QWidget:
+		card, layout = section_card('System Info', 'This computer, to check it suits FaceFusion or to paste into a request for help.', parent)
+		self.windows_label = BodyLabel(read_os_version(), card)
+		self.windows_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+		layout.addLayout(form_row('Operating System',[ self.windows_label ], card, UPDATE_LABEL_WIDTH))
+		# filled by probe_hardware the first time the page shows
+		self.hardware_labels : Dict[str, BodyLabel] = {}
+		for name, tip in HARDWARE_ROWS:
+			label = BodyLabel('…', card)
+			label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+			if tip:
+				label.setToolTip(tip)
+				label.installEventFilter(ToolTipFilter(label))
+			self.hardware_labels[name] = label
+			layout.addLayout(form_row(name, [ label ], card, UPDATE_LABEL_WIDTH))
+		# filled by refresh_ffmpeg_label once the install card checks what is on PATH
+		self.ffmpeg_label = BodyLabel('', card)
+		self.ffmpeg_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+		layout.addLayout(form_row('FFmpeg Installed', [ self.ffmpeg_label ], card, UPDATE_LABEL_WIDTH))
+		copy_row = QHBoxLayout()
+		copy_row.addSpacing(UPDATE_LABEL_WIDTH + 8)
+		copy_button = PushButton(FluentIcon.COPY, 'Copy System Info', card)
+		copy_button.setToolTip('Copies the StudioFF version, these rows and the FaceFusion ones as text, to paste into a request for help')
+		copy_button.installEventFilter(ToolTipFilter(copy_button))
+		copy_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+		copy_button.clicked.connect(self.copy_system_info)
+		copy_row.addWidget(copy_button)
+		copy_row.addStretch(1)
+		layout.addLayout(copy_row)
+		return card
+
+	def probe_hardware(self, again : bool) -> None:
+		"""again: read it once more even if it was read before, only if it was"""
+		if (self.hardware_probe is not None) != again or (self.hardware_probe and self.hardware_probe.isRunning()):
+			return
+		self.hardware_probe = HardwareProbe(self.session.python_path)
+		self.hardware_probe.probed.connect(self.on_hardware_probed)
+		self.hardware_probe.start()
+
+	def on_hardware_probed(self, info : Dict[str, str]) -> None:
+		for name, label in self.hardware_labels.items():
+			label.setText(info.get(HARDWARE_KEYS.get(name, name)) or 'Unknown')
+
+	def copy_system_info(self) -> None:
+		lines = [ 'StudioFF v%s' % APP_VERSION, 'Operating System: %s' % self.windows_label.text() ]
+		for name, label in self.hardware_labels.items():
+			# a second graphics card goes on its own indented line
+			lines.append('%s: %s' % (name, label.text().replace('\n', '\n    ')))
+		for name, label in [ ('FFmpeg Installed', self.ffmpeg_label), ('FaceFusion Installed', self.installed_label), ('Tested with', self.tested_label) ]:
+			lines.append('%s: %s' % (name, label.text()))
+		QApplication.clipboard().setText('\n'.join(lines))
+		self.session.notify.emit('success', 'Copied', 'The system info is on the clipboard, ready to paste.')
 
 	def show_tested_status(self) -> None:
 		commit = self.installed_build.get('commit', '')
