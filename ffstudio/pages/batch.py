@@ -2884,13 +2884,16 @@ class BatchPage(SourceSelection, QWidget):
 		self.skip_button.setEnabled(busy and self.running and self.current >= 0 and not self.confirming and not self.prechecking)
 
 	def on_progress(self, title : str, ratio : float, status : str) -> None:
-		# the nsfw analysis before the frames fills its own bar quickly, only the frames count toward the output
+		# the stages around the frames, Extracting, Merging, only name the stage: only the frames count toward the output
+		if self.running and self.current >= 0 and title and title.lower() != PROCESSING_TITLE:
+			self.status_label.setText('%s  ·  %s %d%%' % (self.run_task, title[:1].upper() + title[1:], int(ratio * 100)))
+			return
 		if self.running and self.current >= 0 and title.lower() == PROCESSING_TITLE:
 			item = self.items[self.current]
 			item['progress'] = ratio
 			item['speed'] = status.split('  ·  ')[0]
 			self.refresh_item(self.current)
-			self.status_label.setText('%s  ·  processing %d%%' % (self.run_task, int(ratio * 100)))
+			self.status_label.setText('%s  ·  Processing %d%%' % (self.run_task, int(ratio * 100)))
 			total = self.started_count + len(self.queued())
 			self.progress.setValue(int((self.started_count - 1 + ratio) / max(total, 1) * 1000))
 

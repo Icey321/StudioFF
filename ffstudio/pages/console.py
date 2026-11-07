@@ -4,8 +4,8 @@ import time
 from collections import deque
 from typing import List, Optional, Tuple
 
-from PySide6.QtGui import QColor, QFont, QGuiApplication, QSyntaxHighlighter, QTextCharFormat, QTextCursor, QTextDocument
-from PySide6.QtCore import QStandardPaths
+from PySide6.QtGui import QColor, QFont, QGuiApplication, QPainter, QPaintEvent, QResizeEvent, QSyntaxHighlighter, QTextCharFormat, QTextCursor, QTextDocument
+from PySide6.QtCore import QRect, QStandardPaths, Qt
 from PySide6.QtWidgets import QFileDialog, QHBoxLayout, QVBoxLayout, QWidget
 from qfluentwidgets import BodyLabel, CaptionLabel, FluentIcon, PlainTextEdit, PushButton, SubtitleLabel, SwitchButton, ToolTipFilter, isDarkTheme, qconfig
 
@@ -42,6 +42,84 @@ SUCCESS_PATTERN = re.compile(r'\b(?:[Ss]uccessfully|[Ff]inished|[Cc]ompleted|[Dd
 FUNCTION_PATTERN = re.compile(r'(?<=, in )[\w<>.]+$')
 WARNING_PATTERN = re.compile(r'\b\w*Warning\b|^WARNING\b|^warning:')
 TOOL_ERROR_PATTERN = re.compile(r'^(?:ERROR|error|fatal)\b:?')
+# a finished facefusion stage: · Extracting  3.2 s  1240/1240 frames
+STAGE_PREFIX = '  · '
+# the line number column, (light, dark)
+GUTTER_COLORS = { 'background': ('#f0f0f0', '#2b2b2b'), 'border': ('#dcdcdc', '#3a3a3a'), 'number': ('#9a9a9a', '#7a7a7a') }
+
+
+def stage_name(title : str) -> str:
+	"""facefusion names its stages in lower case, extracting reads Extracting"""
+	return title[:1].upper() + title[1:]
+
+
+class LineNumbers(QWidget):
+	"""the numbers left of the log, one per log line however many rows it wraps to"""
+
+	def __init__(self, editor : 'LogView') -> None:
+		super().__init__(editor)
+		self.editor = editor
+
+	def paintEvent(self, event : QPaintEvent) -> None:
+		editor = self.editor
+		index = 1 if isDarkTheme() else 0
+		painter = QPainter(self)
+		painter.fillRect(event.rect(), QColor(GUTTER_COLORS['background'][index]))
+		painter.setPen(QColor(GUTTER_COLORS['border'][index]))
+		painter.drawLine(self.width() - 1, event.rect().top(), self.width() - 1, event.rect().bottom())
+		painter.setFont(editor.font())
+		painter.setPen(QColor(GUTTER_COLORS['number'][index]))
+		height = editor.fontMetrics().height()
+		block = editor.firstVisibleBlock()
+		top = editor.blockBoundingGeometry(block).translated(editor.contentOffset()).top()
+		while block.isValid() and top <= event.rect().bottom():
+			if block.isVisible():
+				painter.drawText(QRect(0, int(top), self.width() - 8, height), Qt.AlignmentFlag.AlignRight, str(editor.line_number(block.blockNumber())))
+			top += editor.blockBoundingRect(block).height()
+			block = block.next()
+
+
+class LogView(PlainTextEdit):
+	"""the log with its line numbers, counted from the last Clear: lines the log drops keep their count, so a number told to someone still points at the same line"""
+
+	def __init__(self, parent : QWidget) -> None:
+		super().__init__(parent)
+		# lines dropped off the top since the last Clear
+		self.dropped = 0
+		self.numbers = LineNumbers(self)
+		self.blockCountChanged.connect(lambda _: self.place_numbers())
+		self.updateRequest.connect(self.on_update_request)
+		qconfig.themeChanged.connect(self.numbers.update)
+		self.place_numbers()
+
+	def line_number(self, block_number : int) -> int:
+		return self.dropped + block_number + 1
+
+	def numbers_width(self) -> int:
+		digits = max(3, len(str(self.line_number(self.blockCount()))))
+		return self.fontMetrics().horizontalAdvance('9' * digits) + 16
+
+	def place_numbers(self) -> None:
+		width = self.numbers_width()
+		self.setViewportMargins(width, 0, 0, 0)
+		rect = self.contentsRect()
+		self.numbers.setGeometry(rect.left(), rect.top(), width, rect.height())
+
+	def on_update_request(self, rect : QRect, dy : int) -> None:
+		if dy:
+			self.numbers.scroll(0, dy)
+		else:
+			self.numbers.update(0, rect.y(), self.numbers.width(), rect.height())
+
+	def resizeEvent(self, event : QResizeEvent) -> None:
+		super().resizeEvent(event)
+		self.place_numbers()
+
+	def numbered_text(self) -> str:
+		"""the log as Save Log writes it, each line with its number: '  14 | text'"""
+		lines = self.toPlainText().split('\n')
+		width = len(str(self.line_number(len(lines) - 1)))
+		return '\n'.join('%*d | %s' % (width, self.line_number(index), line) for index, line in enumerate(lines))
 
 
 class ConsoleHighlighter(QSyntaxHighlighter):
@@ -83,6 +161,9 @@ class ConsoleHighlighter(QSyntaxHighlighter):
 		if text.startswith('— '):
 			key = 'success' if ' finished ' in text else 'warning' if ' stopped ' in text else 'error'
 			self.setFormat(0, len(text), self.formats.get(key))
+			return
+		if text.startswith(STAGE_PREFIX):
+			self.setFormat(0, len(text), self.formats.get('muted'))
 			return
 		if text.startswith(WHY_PREFIX) or text.startswith(FIX_PREFIX):
 			self.setFormat(0, len(text), self.formats.get('error' if text.startswith(WHY_PREFIX) else 'keyword'))
@@ -143,7 +224,7 @@ class ConsolePage(QWidget):
 		header.addWidget(clear_button)
 		layout.addLayout(header)
 
-		self.output = PlainTextEdit(self)
+		self.output = LogView(self)
 		self.output.setReadOnly(True)
 		self.output.setMaximumBlockCount(MAX_BLOCKS)
 		self.output.setLineWrapMode(PlainTextEdit.LineWrapMode.WidgetWidth)
@@ -155,12 +236,15 @@ class ConsolePage(QWidget):
 		layout.addWidget(self.output, 1)
 
 		# per runner, the schema can be read while facefusion runs: the task name and the error lines of its current command
-		self.runs = { session.runner: { 'task': '', 'errors': [] }, session.schema_runner: { 'task': "Reading FaceFusion's options", 'errors': [] } }
+		# and the stage facefusion is on: its name, when it began, how far it got and its last status
+		self.runs = { session.runner: { 'task': '', 'errors': [], 'stage': None }, session.schema_runner: { 'task': "Reading FaceFusion's options", 'errors': [], 'stage': None } }
 		for runner in [ session.runner, session.schema_runner ]:
 			runner.started.connect(self.on_started)
 			runner.log.connect(self.on_log)
+			runner.progress.connect(self.on_progress)
 			runner.finished.connect(self.on_finished)
-		session.busy_changed.connect(lambda busy, task: self.task_label.setText(task if busy else 'Idle'))
+		self.task_text = 'Idle'
+		session.busy_changed.connect(lambda busy, task: self.show_task(task if busy else 'Idle'))
 
 	def add_switch(self, header : QHBoxLayout, text : str, key : str, tip : str) -> SwitchButton:
 		label = BodyLabel(text, self)
@@ -182,10 +266,17 @@ class ConsolePage(QWidget):
 			return text
 		return hide_private(text, names, folders, self.program_folders, files)
 
+	def show_task(self, task : str) -> None:
+		self.task_text = task
+		# the task can name a file, NSFW check: photo.png
+		self.task_label.setText(self.shown(task))
+
 	def clear(self) -> None:
 		self.lines.clear()
 		self.file_names.clear()
+		self.output.dropped = 0
 		self.output.clear()
+		self.output.place_numbers()
 
 	def save_log(self) -> None:
 		folder = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.DocumentsLocation)
@@ -195,7 +286,7 @@ class ConsolePage(QWidget):
 			return
 		try:
 			with open(path, 'w', encoding = 'utf-8') as log_file:
-				log_file.write(self.output.toPlainText() + '\n')
+				log_file.write(self.output.numbered_text() + '\n')
 		except OSError as error:
 			self.session.notify.emit('error', 'Log not saved', str(error))
 			return
@@ -218,8 +309,12 @@ class ConsolePage(QWidget):
 		self.output.setPlainText('\n'.join(self.shown(line) for line in self.lines).lstrip('\n'))
 		self.output.moveCursor(QTextCursor.MoveOperation.End)
 		self.output.moveCursor(QTextCursor.MoveOperation.StartOfBlock)
+		self.show_task(self.task_text)
 
 	def append(self, line : str) -> None:
+		if len(self.lines) == self.lines.maxlen:
+			# the log drops its first line now, the numbers of the others stay
+			self.output.dropped += 1
 		self.lines.append(line)
 		self.output.appendPlainText(self.shown(line))
 		self.output.moveCursor(QTextCursor.MoveOperation.End)
@@ -231,6 +326,7 @@ class ConsolePage(QWidget):
 		run = self.runs.get(self.sender())
 		if run is not None:
 			run['errors'] = []
+			run['stage'] = None
 			# set_task comes before the runner starts
 			if self.sender() is self.session.runner:
 				run['task'] = self.session.task
@@ -243,12 +339,38 @@ class ConsolePage(QWidget):
 			run['errors'].append(line)
 		self.append(line)
 
+	def on_progress(self, title : str, ratio : float, status : str) -> None:
+		run = self.runs.get(self.sender())
+		if run is None or not title:
+			return
+		stage = run['stage']
+		if stage is None or stage['title'] != title:
+			self.end_stage(run)
+			run['stage'] = { 'title': title, 'start': time.monotonic(), 'ratio': ratio, 'status': status }
+			return
+		stage['ratio'] = ratio
+		stage['status'] = status
+
+	def end_stage(self, run : dict) -> None:
+		"""one line for the stage facefusion just left: how long it took and its last status"""
+		stage = run.get('stage')
+		if stage is None:
+			return
+		run['stage'] = None
+		status = stage['status'].replace('  ·  ', '  ')
+		self.append('%s%s  %s%s' % (STAGE_PREFIX, stage_name(stage['title']), format_seconds(time.monotonic() - stage['start']), '  ' + status if status else ''))
+
 	def on_finished(self, exit_code : int, elapsed : float) -> None:
+		run = self.runs.get(self.sender()) or { 'task': '', 'errors': [], 'stage': None }
+		# the stage it failed in, unless it got to the end of it
+		stage = run.get('stage')
+		failed_stage = stage_name(stage['title']) if stage and stage['ratio'] < 1.0 else ''
+		self.end_stage(run)
 		if exit_code in [ 0, -1 ]:
 			self.append('— %s after %s' % ('finished' if exit_code == 0 else 'stopped', format_seconds(elapsed)))
 			return
-		run = self.runs.get(self.sender()) or { 'task': '', 'errors': [] }
-		self.append('— %s failed after %s (exit code %d)' % (run['task'] or 'The command', format_seconds(elapsed), exit_code))
+		during = ' while %s' % failed_stage if failed_stage else ''
+		self.append('— %s failed%s after %s (exit code %d)' % (run['task'] or 'The command', during, format_seconds(elapsed), exit_code))
 		why, fix = self.explain_failure(run['errors'], self.sender() is self.session.runner)
 		self.append(WHY_PREFIX + why)
 		if fix:

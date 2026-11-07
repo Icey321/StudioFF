@@ -2001,7 +2001,8 @@ class StudioPage(SourceSelection, QWidget):
 	def on_progress(self, title : str, ratio : float, status : str) -> None:
 		if not self.session.task or self.session.task_is_preview:
 			return
-		self.status_label.setText('%s · %s' % (self.session.task, title) if title else self.session.task)
+		# the stage facefusion is on, Extracting, Processing, Merging
+		self.status_label.setText('%s · %s' % (self.session.task, title[:1].upper() + title[1:]) if title else self.session.task)
 		self.detail_label.setText('%d%%  %s' % (round(ratio * 100), status))
 		self.run_ratio = ratio
 		if not self.preview_clock.isActive():
