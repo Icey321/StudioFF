@@ -582,7 +582,7 @@ class TargetCard(SimpleCardWidget):
 		layout = QVBoxLayout(self)
 		layout.setContentsMargins(16, 12, 12, 14)
 		layout.setSpacing(8)
-		header = card_header('Target', self)
+		header = card_header('Target Preview', self)
 		self.info_label = elastic(CaptionLabel('', self))
 		self.info_label.setTextColor('#707070', '#9a9a9a')
 		header.insertWidget(1, self.info_label, 1)
