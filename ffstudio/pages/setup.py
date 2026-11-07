@@ -277,7 +277,7 @@ class SetupPage(QWidget):
 		divider.setFixedHeight(4)
 		divider.setStyleSheet('background: %s; border: none' % ('#4a4a4a' if isDarkTheme() else '#c8c8c8'))
 		self.facefusion_page.content_layout.addWidget(divider)
-		installation_row, installation_box = title_row('FaceFusion Installation', page_content)
+		installation_row, installation_box = title_row('FaceFusion Connection', page_content)
 		installation_row.setContentsMargins(0, 8, 0, 0)
 		self.facefusion_page.content_layout.addWidget(installation_box)
 		install_card = self.create_install_card(page_content)
