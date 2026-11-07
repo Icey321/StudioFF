@@ -6,7 +6,7 @@ from typing import List, Optional, Tuple
 
 from PySide6.QtGui import QColor, QFont, QGuiApplication, QPainter, QPaintEvent, QResizeEvent, QSyntaxHighlighter, QTextCharFormat, QTextCursor, QTextDocument
 from PySide6.QtCore import QRect, QStandardPaths, Qt
-from PySide6.QtWidgets import QFileDialog, QHBoxLayout, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QFileDialog, QHBoxLayout, QSizePolicy, QVBoxLayout, QWidget
 from qfluentwidgets import BodyLabel, CaptionLabel, FluentIcon, PlainTextEdit, PushButton, SubtitleLabel, SwitchButton, ToolTipFilter, isDarkTheme, qconfig
 
 from ffstudio.media import format_seconds
@@ -34,6 +34,8 @@ COLORS ={
 COMMAND_TOKEN_PATTERN = re.compile(r'"[^"]*"|\S+')
 TAG_PATTERN = re.compile(r'^\[[\w.\-]+\]')
 NUMBER_PATTERN = re.compile(r'(?<![\w.])\d+(?:\.\d+)*%?')
+# both numbers of a resolution, 428x500: NUMBER_PATTERN takes the 500 for part of a word
+RESOLUTION_PATTERN = re.compile(r'(?<![\w.])(\d+)x(\d+)(?!\w|\.\d)')
 STRING_PATTERN = re.compile(r'"[^"]*"|(?<!\w)\'[^\']*\'')
 # C:\ or C:/ paths, and /home/... paths of linux and macos. not the slashes of 12.3it/s or a url
 PATH_PATTERN = re.compile(r'(?<![\w"\'])[A-Za-z]:[\\/][^\s"\'<>|,;]*|(?<![\w"\'/:.])/[\w.\-][^\s"\'<>|,;]*')
@@ -179,6 +181,9 @@ class ConsoleHighlighter(QSyntaxHighlighter):
 			self.setFormat(0, len(text), self.formats.get('warning'))
 		else:
 			self.paint(NUMBER_PATTERN, text, 'number')
+			for match in RESOLUTION_PATTERN.finditer(text):
+				for group in [ 1, 2 ]:
+					self.setFormat(match.start(group), match.end(group) - match.start(group), self.formats.get('number'))
 			self.paint(SUCCESS_PATTERN, text, 'success')
 		self.paint(STRING_PATTERN, text, 'string')
 		self.paint(PATH_PATTERN, text, 'string')
@@ -219,9 +224,12 @@ class ConsolePage(QWidget):
 		save_button.clicked.connect(self.save_log)
 		clear_button = PushButton(FluentIcon.DELETE, 'Clear', self)
 		clear_button.clicked.connect(self.clear)
-		header.addWidget(copy_button)
-		header.addWidget(save_button)
-		header.addWidget(clear_button)
+		for button in [ copy_button, save_button, clear_button ]:
+			# the buttons keep their full width, the gray task text gives way when the window is narrow
+			button.setMinimumWidth(button.sizeHint().width())
+			header.addWidget(button)
+		self.task_label.setMinimumWidth(0)
+		self.task_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
 		layout.addLayout(header)
 
 		self.output = LogView(self)
@@ -248,9 +256,13 @@ class ConsolePage(QWidget):
 
 	def add_switch(self, header : QHBoxLayout, text : str, key : str, tip : str) -> SwitchButton:
 		label = BodyLabel(text, self)
+		label.setMinimumWidth(label.sizeHint().width())
 		label.setToolTip(tip)
 		label.installEventFilter(ToolTipFilter(label))
 		switch = SwitchButton(self)
+		# no On / Off words beside the switch, the header has no room for them
+		switch.label.hide()
+		switch.setSpacing(0)
 		switch.setChecked(bool(self.session.config.get(key, False)))
 		switch.checkedChanged.connect(lambda checked: self.on_privacy_changed(key, checked))
 		header.addWidget(label)
