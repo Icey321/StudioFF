@@ -61,9 +61,8 @@ Pick the section for your system. Every way needs an internet connection and a f
    - **Already have FaceFusion v4?** The app looks for it in the usual places (next to the StudioFF folder, your user folder,
      Documents, Desktop, Downloads and the top of each local drive) and fills in the folder and its Python.
      Check them, or pick them yourself with **Browse** and **Detect**, then press **Save and load options**.
-   - **No FaceFusion v4 yet?** Press **Install FaceFusion v4** on the same page. It lists any missing program it needs (Git, uv,
-     FFmpeg, curl) and installs them through winget only after you agree. uv downloads Python 3.13 itself, so you don't have
-     to install Python. FaceFusion v4 needs **Python 3.13 or newer**, so a FaceFusion 3.x environment (Python 3.12) can't run it.
+   - **No FaceFusion v4 yet?** Install FaceFusion's `v4` branch yourself first. FaceFusion v4 needs **Python 3.13 or newer**,
+     so a FaceFusion 3.x environment (Python 3.12) can't run it.
 
 StudioFF updates itself from **Settings** when a new release is out.
 
@@ -84,9 +83,8 @@ version has not been run on Linux yet. macOS has never been tried on a real comp
    ```
 
 3. Start **StudioFF** from the app launcher, or run `./StudioFF.sh`.
-4. On the **FaceFusion** page, press **Install FaceFusion v4**, or pick a FaceFusion v4 you installed yourself (its folder
-   and the `bin/python` of its Python 3.13 environment). Without an NVIDIA card, Linux offers MIGraphX for AMD cards
-   (ROCm must be set up first) or CPU only.
+4. On the **FaceFusion** page, pick a FaceFusion v4 you installed yourself (its folder and the `bin/python` of its
+   Python 3.13 environment).
 
 Update with `git pull` in the StudioFF folder.
 

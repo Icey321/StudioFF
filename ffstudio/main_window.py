@@ -6,7 +6,7 @@ from PySide6.QtGui import QColor, QIcon
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 from qfluentwidgets import CaptionLabel, DotInfoBadge, FluentIcon, FluentWindow, InfoBar, InfoBarPosition, NavigationItemPosition, Theme, ToolTipFilter, TransparentPushButton, isDarkTheme, setTheme, setThemeColor
 
-from ffstudio import APP_NAME, APP_VERSION, splash
+from ffstudio import APP_NAME, APP_VERSION, FACEFUSION_MANAGEMENT, splash
 from ffstudio.config import APP_DIR
 from ffstudio.session import Session
 
@@ -108,8 +108,9 @@ class MainWindow(FluentWindow):
 		self.setup_page.studio_update_found.connect(self.update_dot.setVisible)
 		self.setup_page.studio_update_found.connect(self.show_update_button)
 		# and on the FaceFusion FF while GitHub has a newer FaceFusion release
-		self.facefusion_dot = self.add_update_dot(self.facefusion_page, 'A FaceFusion update is available')
-		self.setup_page.facefusion_update_found.connect(self.facefusion_dot.setVisible)
+		if FACEFUSION_MANAGEMENT:
+			self.facefusion_dot = self.add_update_dot(self.facefusion_page, 'A FaceFusion update is available')
+			self.setup_page.facefusion_update_found.connect(self.facefusion_dot.setVisible)
 		icon_path = os.path.join(APP_DIR, 'assets', 'icon.png')
 		if os.path.exists(icon_path):
 			self.setWindowIcon(QIcon(icon_path))
@@ -154,7 +155,7 @@ class MainWindow(FluentWindow):
 			self.setup_page.check_studio_update(quiet = True)
 		if not self.session.is_configured():
 			self.switchTo(self.facefusion_page)
-			self.show_notification('info', 'Welcome', 'Point the app at your FaceFusion v4 folder, or install v4 from here.')
+			self.show_notification('info', 'Welcome', 'Point the app at your FaceFusion v4 folder, or install v4 from here.' if FACEFUSION_MANAGEMENT else 'Point the app at your FaceFusion v4 folder.')
 			if not self.session.facefusion_root:
 				self.setup_page.find_existing_facefusion()
 			return
@@ -162,7 +163,7 @@ class MainWindow(FluentWindow):
 			self.system_monitor.start()
 		# the python check runs off the ui thread and fills in the session's python version
 		self.setup_page.refresh_status()
-		if self.session.config.get('check_facefusion_updates_at_startup') is not False:
+		if FACEFUSION_MANAGEMENT and self.session.config.get('check_facefusion_updates_at_startup') is not False:
 			self.setup_page.check_for_updates(quiet = True)
 		self.session.refresh_schema()
 		# the restored target's check waits for the window, every page should see it run

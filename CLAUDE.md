@@ -8,6 +8,11 @@
 - StudioFF supports only FaceFusion's v4 branch from commit e7a2848 (2026-10-30, `--face-selector-map`)
   on. Do not add or keep fallbacks for older FaceFusion commits (Nik, 2026-10-30).
 
+- FaceFusion Install and FaceFusion Updates (check, Use Tested Version, Update to Latest, Go Back)
+  are hidden for now with `FACEFUSION_MANAGEMENT = False` in `ffstudio/__init__.py`. The code stays.
+  Nik decides later whether to bring them back or keep a separate full version (Nik, 2026-11-07).
+  While hidden, release notes drop the "press **Use Tested Version**" sentence below.
+
 - Every GitHub release's notes start with the FaceFusion it was tested with, never "or newer"
   (newer FaceFusion commits can break StudioFF) (Nik, 2026-11-01):
   "**Tested with FaceFusion v4 commit <7-char> (<date>).** Go to StudioFF's **FaceFusion** settings

@@ -8,7 +8,7 @@ from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QAbstractButton, QApplication, QButtonGroup, QFileDialog, QFrame, QHBoxLayout, QLabel, QSizePolicy, QVBoxLayout, QWidget
 from qfluentwidgets import BodyLabel, CaptionLabel, CheckBox, ColorPickerButton, ComboBox, EditableComboBox, FluentIcon, HyperlinkButton, IconWidget, InfoBarIcon, LineEdit, MessageBox, PrimaryPushButton, ProgressBar, PushButton, SearchLineEdit, SimpleCardWidget, SingleDirectionScrollArea, StrongBodyLabel, SubtitleLabel, SwitchButton, ToolTipFilter, TransparentToolButton, isDarkTheme
 
-from ffstudio import APP_REPOSITORY, APP_VERSION, TESTED_FACEFUSION_COMMIT, TESTED_FACEFUSION_DATE
+from ffstudio import APP_REPOSITORY, APP_VERSION, FACEFUSION_MANAGEMENT, TESTED_FACEFUSION_COMMIT, TESTED_FACEFUSION_DATE
 from ffstudio.environment import PINNED_VERSIONS, PREREQUISITES, check_dependencies, compare_github_commits, create_process_environment, fetch_github_build, fetch_latest_release, find_conda, find_conda_base, find_facefusion_folders, find_missing_prerequisites, find_python_candidates, has_nvidia_gpu, is_facefusion_root, is_newer_version, probe_python_version, read_facefusion_build, read_ffmpeg_version, read_facefusion_version, switch_facefusion_commit, version_tuple, winget_install_args
 from ffstudio.main_window import DEFAULT_ACCENT, apply_theme
 from ffstudio.option_panel import OptionPanel
@@ -239,8 +239,9 @@ class SetupPage(QWidget):
 		# they stay built and run from here, the rest of the app reaches them through this page
 		self.facefusion_page = ScrollPage('FaceFusion', 'facefusion', parent)
 		# its own startup check, apart from the StudioFF one in Settings
-		self.facefusion_startup_switch = startup_switch(self.facefusion_page.header, 'Check for FaceFusion Updates at Startup', 'Look for a new FaceFusion release each time the app opens. An orange dot on the FaceFusion icon means one is out', self.session.config.get('check_facefusion_updates_at_startup') is not False, self.facefusion_page)
-		self.facefusion_startup_switch.checkedChanged.connect(self.on_facefusion_startup_check_toggled)
+		if FACEFUSION_MANAGEMENT:
+			self.facefusion_startup_switch = startup_switch(self.facefusion_page.header, 'Check for FaceFusion Updates at Startup', 'Look for a new FaceFusion release each time the app opens. An orange dot on the FaceFusion icon means one is out', self.session.config.get('check_facefusion_updates_at_startup') is not False, self.facefusion_page)
+			self.facefusion_startup_switch.checkedChanged.connect(self.on_facefusion_startup_check_toggled)
 		page_content = self.facefusion_page.content
 		self.facefusion_page.content_layout.addWidget(self.create_update_card(page_content))
 		# a visible division, the cards below are about installing FaceFusion rather than updating it
@@ -253,8 +254,11 @@ class SetupPage(QWidget):
 		installation_row, installation_box = title_row('FaceFusion Installation', page_content)
 		installation_row.setContentsMargins(0, 8, 0, 0)
 		self.facefusion_page.content_layout.addWidget(installation_box)
-		for card in [ self.create_location_card(page_content), self.create_install_card(page_content) ]:
+		install_card = self.create_install_card(page_content)
+		for card in [ self.create_location_card(page_content), install_card ]:
 			self.facefusion_page.content_layout.addWidget(card)
+		# built either way, the rest of the page fills in its widgets
+		install_card.setVisible(FACEFUSION_MANAGEMENT)
 		self.facefusion_page.content_layout.addStretch(1)
 		self.section_cards = [ self.create_studio_update_card(content), self.create_appearance_card(content) ]
 		for card in self.section_cards:
@@ -317,7 +321,7 @@ class SetupPage(QWidget):
 	# location
 
 	def create_location_card(self, parent : QWidget) -> QWidget:
-		card, layout = section_card('FaceFusion Already Installed ?', 'FaceFusion v4 has no built-in UI. This app drives its command line, so it needs the FaceFusion folder and a Python environment with Python 3.13 or newer and the FaceFusion requirements installed.', parent)
+		card, layout = section_card('FaceFusion Already Installed ?' if FACEFUSION_MANAGEMENT else 'FaceFusion Location','FaceFusion v4 has no built-in UI. This app drives its command line, so it needs the FaceFusion folder and a Python environment with Python 3.13 or newer and the FaceFusion requirements installed.', parent)
 		self.root_edit = LineEdit(card)
 		self.root_edit.setPlaceholderText('Folder that contains facefusion.py')
 		self.root_edit.setText(self.session.facefusion_root)
@@ -389,7 +393,7 @@ class SetupPage(QWidget):
 		self.python_combo.setText(best or current or (found[0][0] if found else ''))
 		self.refresh_python_status()
 		if not found:
-			self.session.notify.emit('warning', 'No environments found', 'No conda or venv Python was found. Use "Install FaceFusion" below.')
+			self.session.notify.emit('warning', 'No environments found', 'No conda or venv Python was found. Use "Install FaceFusion" below.' if FACEFUSION_MANAGEMENT else 'No conda or venv Python was found. Pick the Python of your FaceFusion environment with Browse.')
 
 	def find_existing_facefusion(self) -> None:
 		"""on a first start, fills in a FaceFusion folder already on this PC, the user still checks it and saves"""
@@ -654,7 +658,10 @@ class SetupPage(QWidget):
 	# updates
 
 	def create_update_card(self, parent : QWidget) -> QWidget:
-		card, layout = section_card('FaceFusion updates', 'StudioFF uses the %s branch of FaceFusion on GitHub (%s). This checks your FaceFusion folder against that branch. An orange dot on the FaceFusion icon means a newer release is out.' % (FACEFUSION_BRANCH, DEFAULT_REPOSITORY), parent)
+		if FACEFUSION_MANAGEMENT:
+			card, layout = section_card('FaceFusion updates', 'StudioFF uses the %s branch of FaceFusion on GitHub (%s). This checks your FaceFusion folder against that branch. An orange dot on the FaceFusion icon means a newer release is out.' % (FACEFUSION_BRANCH, DEFAULT_REPOSITORY), parent)
+		else:
+			card, layout = section_card('FaceFusion', 'StudioFF uses the %s branch of FaceFusion (%s). This shows the FaceFusion in your folder and the commit this StudioFF was tested with.' % (FACEFUSION_BRANCH, DEFAULT_REPOSITORY), parent)
 		self.windows_label = BodyLabel(read_os_version(), card)
 		self.windows_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
 		layout.addLayout(form_row('Operating System',[ self.windows_label ], card, UPDATE_LABEL_WIDTH))
@@ -667,7 +674,10 @@ class SetupPage(QWidget):
 		layout.addLayout(form_row('FaceFusion Installed', [ self.installed_label ], card, UPDATE_LABEL_WIDTH))
 		self.github_label = BodyLabel('Not checked yet', card)
 		self.github_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-		layout.addLayout(form_row('FaceFusion on GitHub', [ self.github_label ], card, UPDATE_LABEL_WIDTH))
+		if FACEFUSION_MANAGEMENT:
+			layout.addLayout(form_row('FaceFusion on GitHub', [ self.github_label ], card, UPDATE_LABEL_WIDTH))
+		else:
+			self.github_label.hide()
 		self.tested_label = BodyLabel(format_build(FACEFUSION_BRANCH, '', TESTED_FACEFUSION_COMMIT, TESTED_FACEFUSION_DATE), card)
 		self.tested_label.setToolTip('StudioFF v%s was tested with this FaceFusion commit. FaceFusion v4 is still changing and a newer commit can break options' % APP_VERSION)
 		self.tested_label.installEventFilter(ToolTipFilter(self.tested_label))
@@ -690,7 +700,6 @@ class SetupPage(QWidget):
 		buttons.addSpacing(8)
 		buttons.addWidget(self.update_status, 1)
 		buttons.addStretch(0)
-		layout.addLayout(buttons)
 		switch_buttons = QHBoxLayout()
 		switch_buttons.addSpacing(UPDATE_LABEL_WIDTH + 8)
 		self.tested_button = PushButton(FluentIcon.ACCEPT, 'Use Tested Version', card)
@@ -707,7 +716,13 @@ class SetupPage(QWidget):
 			switch_buttons.addWidget(button)
 			switch_buttons.addSpacing(4)
 		switch_buttons.addStretch(1)
-		layout.addLayout(switch_buttons)
+		if FACEFUSION_MANAGEMENT:
+			layout.addLayout(buttons)
+			layout.addLayout(switch_buttons)
+		else:
+			# built so the update code still runs, but never shown
+			for widget in [ self.update_button, self.github_link, self.tested_button, self.latest_button, self.back_button ]:
+				widget.hide()
 		self.installed_build : Dict[str, str] = {}
 		# filled in by the update check: where the installed commit stands against the tested one
 		self.tested_compare : Dict[str, Any] = {}
@@ -716,7 +731,7 @@ class SetupPage(QWidget):
 	def show_tested_status(self) -> None:
 		commit = self.installed_build.get('commit', '')
 		previous = self.session.config.get('facefusion_previous_commit') or ''
-		self.back_button.setVisible(bool(previous) and bool(commit) and previous != commit)
+		self.back_button.setVisible(FACEFUSION_MANAGEMENT and bool(previous) and bool(commit) and previous != commit)
 		# a switch turns all three off while it runs
 		self.back_button.setEnabled(bool(commit))
 		self.back_button.setToolTip('Moves FaceFusion back to commit %s, where it was before the last switch' % previous[:7])
@@ -739,8 +754,10 @@ class SetupPage(QWidget):
 			self.tested_status.set_status('warning', 'Yours differs from the tested version.')
 		elif status == 'unknown':
 			self.tested_status.set_status('warning', 'Yours is not on GitHub (a local commit), so it can not be compared with the tested version.')
-		else:
+		elif FACEFUSION_MANAGEMENT:
 			self.tested_status.set_status('warning', 'Not the tested version. Check for updates to see if yours is newer or older.')
+		else:
+			self.tested_status.set_status('warning', 'Not the tested version.')
 
 	def switch_facefusion(self, where : str) -> None:
 		build = self.installed_build

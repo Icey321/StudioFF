@@ -12,6 +12,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from PySide6.QtCore import QObject, Signal
 
+from ffstudio import FACEFUSION_MANAGEMENT
 from ffstudio.config import APP_DIR, DATA_DIR, PREVIEW_DIR, SCHEMA_FILE, AppConfig
 from ffstudio.environment import create_process_environment, is_facefusion_root, probe_python_version, version_tuple
 from ffstudio.media import GIF_EXTENSIONS, extension, gif_as_video, gif_video_path, media_kind, needs_conversion, read_facefusion_frame, usable_path
@@ -55,7 +56,7 @@ def describe_error(line : str) -> Optional[Tuple[str, str]]:
 		module = missing_module.group(1).split('.')[0]
 		name = PACKAGE_NAMES.get(module)
 		return 'The Python environment is missing the "%s" package%s, so the FaceFusion install did not finish.' % (module, ' (%s)' % name if name and name != module else ''), \
-			'Install FaceFusion again: Install FaceFusion v4 on the FaceFusion page.'
+			('Install FaceFusion again: Install FaceFusion v4 on the FaceFusion page.' if FACEFUSION_MANAGEMENT else 'Install the missing package in FaceFusion\'s Python environment, or install FaceFusion again.')
 	if line.startswith('PermissionError') or '[errno 13]' in lowered:
 		return 'Saving there was not allowed.', 'Choose another output folder, such as Videos or Documents, or close the file if it is open in another app.'
 	if '[errno 28]' in lowered or 'no space left' in lowered:
