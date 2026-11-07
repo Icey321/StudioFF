@@ -15,6 +15,7 @@ from ffstudio.main_window import DEFAULT_ACCENT, apply_theme
 from ffstudio.option_panel import OptionPanel
 from ffstudio.option_widgets import setting_locks
 from ffstudio.platforms import GPU_ONNXRUNTIME, IS_WINDOWS, PYTHON_NAME, conda_env_python, package_install_hint, read_os_version, refresh_path, script_command, venv_python
+from ffstudio.privacy import hide_private
 from ffstudio.session import MINIMUM_PYTHON, Session
 from ffstudio.updater import download_release, is_git_checkout, start_helper
 from ffstudio.widgets import ChoiceButton
@@ -795,7 +796,7 @@ class SetupPage(QWidget):
 		copy_row = QHBoxLayout()
 		copy_row.addSpacing(UPDATE_LABEL_WIDTH + 8)
 		copy_button = PushButton(FluentIcon.COPY, 'Copy System Info', card)
-		copy_button.setToolTip('Copies the StudioFF version, these rows and the FaceFusion ones as text, to paste into a request for help')
+		copy_button.setToolTip('Copies the StudioFF version, these rows and the FaceFusion ones as text, to paste into a request for help. Your user and computer names are left out')
 		copy_button.installEventFilter(ToolTipFilter(copy_button))
 		copy_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
 		copy_button.clicked.connect(self.copy_system_info)
@@ -823,8 +824,9 @@ class SetupPage(QWidget):
 			lines.append('%s: %s' % (name, label.text().replace('\n', '\n    ')))
 		for name, label in [ ('FFmpeg Installed', self.ffmpeg_label), ('FaceFusion Installed', self.installed_label), ('Tested with', self.tested_label) ]:
 			lines.append('%s: %s' % (name, label.text()))
-		QApplication.clipboard().setText('\n'.join(lines))
-		self.session.notify.emit('success', 'Copied', 'The system info is on the clipboard, ready to paste.')
+		# made to be shared, so always without the user and computer names
+		QApplication.clipboard().setText(hide_private('\n'.join(lines)))
+		self.session.notify.emit('success', 'Copied', 'The system info is on the clipboard, ready to paste. Your user and computer names are left out.')
 
 	def show_tested_status(self) -> None:
 		commit = self.installed_build.get('commit', '')

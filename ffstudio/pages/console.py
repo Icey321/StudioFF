@@ -1,11 +1,16 @@
+import os
 import re
+import time
+from collections import deque
 from typing import List, Optional, Tuple
 
 from PySide6.QtGui import QColor, QFont, QGuiApplication, QSyntaxHighlighter, QTextCharFormat, QTextCursor, QTextDocument
-from PySide6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
-from qfluentwidgets import CaptionLabel, FluentIcon, PlainTextEdit, PushButton, SubtitleLabel, isDarkTheme, qconfig
+from PySide6.QtCore import QStandardPaths
+from PySide6.QtWidgets import QFileDialog, QHBoxLayout, QVBoxLayout, QWidget
+from qfluentwidgets import BodyLabel, CaptionLabel, FluentIcon, PlainTextEdit, PushButton, SubtitleLabel, SwitchButton, ToolTipFilter, isDarkTheme, qconfig
 
 from ffstudio.media import format_seconds
+from ffstudio.privacy import COMPUTER_NAME, COMPUTER_NAME_STAND_IN, FOLDERS_STAND_IN, USER_NAME, USER_NAME_STAND_IN, hide_private, program_folders
 from ffstudio.session import EXCEPTION_PATTERN, Session, describe_error, is_error_line
 
 MAX_BLOCKS = 20000
@@ -107,6 +112,10 @@ class ConsolePage(QWidget):
 		self.setObjectName('console')
 		self.session = session
 		self.last_command = ''
+		# the lines as they came, unmasked, as many as the log keeps
+		self.lines : deque = deque(maxlen = MAX_BLOCKS)
+		self.program_folder_paths : Tuple[str, str] = ('', '')
+		self.program_folder_list = program_folders()
 
 		layout = QVBoxLayout(self)
 		layout.setContentsMargins(24, 16, 24, 16)
@@ -117,11 +126,18 @@ class ConsolePage(QWidget):
 		self.task_label.setTextColor('#707070', '#9a9a9a')
 		header.addWidget(self.task_label)
 		header.addStretch(1)
-		copy_button = PushButton(FluentIcon.COPY, 'Copy last command', self)
-		copy_button.clicked.connect(lambda: QGuiApplication.clipboard().setText(self.last_command))
+		self.privacy_switch = self.add_switch(header, 'Hide User Name', 'console_hide_user_name', 'Shows %s in place of your user name (%s) and %s in place of your computer name (%s), in the log, Copy Last Command and Save Log' % (USER_NAME_STAND_IN, USER_NAME, COMPUTER_NAME_STAND_IN, COMPUTER_NAME))
+		self.folders_switch = self.add_switch(header, 'Hide Folders', 'console_hide_folders', 'Shows %s in place of the folders of your own files, M:\\Clients\\Smith\\photo.png reads M:\\%s\\photo.png. The folders of StudioFF, FaceFusion and Python stay, they help find a problem' % (FOLDERS_STAND_IN, FOLDERS_STAND_IN))
+		copy_button = PushButton(FluentIcon.COPY, 'Copy Last Command', self)
+		copy_button.clicked.connect(lambda: QGuiApplication.clipboard().setText(self.shown(self.last_command)))
+		save_button = PushButton(FluentIcon.SAVE, 'Save Log', self)
+		save_button.setToolTip('Saves the log as a text file, as shown here: with names and folders hidden if those are on')
+		save_button.installEventFilter(ToolTipFilter(save_button))
+		save_button.clicked.connect(self.save_log)
 		clear_button = PushButton(FluentIcon.DELETE, 'Clear', self)
-		clear_button.clicked.connect(lambda: self.output.clear())
+		clear_button.clicked.connect(self.clear)
 		header.addWidget(copy_button)
+		header.addWidget(save_button)
 		header.addWidget(clear_button)
 		layout.addLayout(header)
 
@@ -144,8 +160,64 @@ class ConsolePage(QWidget):
 			runner.finished.connect(self.on_finished)
 		session.busy_changed.connect(lambda busy, task: self.task_label.setText(task if busy else 'Idle'))
 
+	def add_switch(self, header : QHBoxLayout, text : str, key : str, tip : str) -> SwitchButton:
+		label = BodyLabel(text, self)
+		label.setToolTip(tip)
+		label.installEventFilter(ToolTipFilter(label))
+		switch = SwitchButton(self)
+		switch.setChecked(bool(self.session.config.get(key, False)))
+		switch.checkedChanged.connect(lambda checked: self.on_privacy_changed(key, checked))
+		header.addWidget(label)
+		header.addWidget(switch)
+		header.addSpacing(8)
+		return switch
+
+	def shown(self, text : str) -> str:
+		names = self.privacy_switch.isChecked()
+		folders = self.folders_switch.isChecked()
+		if not names and not folders:
+			return text
+		return hide_private(text, names, folders, self.program_folders)
+
+	def clear(self) -> None:
+		self.lines.clear()
+		self.output.clear()
+
+	def save_log(self) -> None:
+		folder = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.DocumentsLocation)
+		name = 'StudioFF log %s.txt' % time.strftime('%Y-%m-%d %H-%M')
+		path, _ = QFileDialog.getSaveFileName(self, 'Save Log', os.path.join(folder, name), 'Text files (*.txt)')
+		if not path:
+			return
+		try:
+			with open(path, 'w', encoding = 'utf-8') as log_file:
+				log_file.write(self.output.toPlainText() + '\n')
+		except OSError as error:
+			self.session.notify.emit('error', 'Log not saved', str(error))
+			return
+		self.session.notify.emit('success', 'Log saved', os.path.basename(path))
+
+	@property
+	def program_folders(self) -> List[str]:
+		# read again each time, FaceFusion's folder or its Python can change on the FaceFusion page
+		paths = (self.session.facefusion_root, self.session.python_path)
+		if paths != self.program_folder_paths:
+			self.program_folder_paths = paths
+			self.program_folder_list = program_folders(*paths)
+		return self.program_folder_list
+
+	def on_privacy_changed(self, key : str, checked : bool) -> None:
+		self.session.config.set(key, checked)
+		self.session.config.save()
+		# the log as it came, so the switch works both ways on lines already shown
+		# appendPlainText skips blank lines at the very start, so the same goes here
+		self.output.setPlainText('\n'.join(self.shown(line) for line in self.lines).lstrip('\n'))
+		self.output.moveCursor(QTextCursor.MoveOperation.End)
+		self.output.moveCursor(QTextCursor.MoveOperation.StartOfBlock)
+
 	def append(self, line : str) -> None:
-		self.output.appendPlainText(line)
+		self.lines.append(line)
+		self.output.appendPlainText(self.shown(line))
 		self.output.moveCursor(QTextCursor.MoveOperation.End)
 		# back to the left edge, a long line before would keep the start of this one out of view
 		self.output.moveCursor(QTextCursor.MoveOperation.StartOfBlock)
