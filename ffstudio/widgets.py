@@ -1013,37 +1013,50 @@ class PreviewView(QWidget):
 		font.setPointSizeF(8)
 		painter.setFont(font)
 		metrics = painter.fontMetrics()
-		for face in self.faces:
+		labels = []
+		boxes : List[QRectF] = []
+		# from left to right, so of two labels that would cover each other the right one moves
+		for face in sorted(self.faces, key = lambda face: face[0][0]):
 			box, tag, selected = face[:3]
 			person_color = face[3] if len(face) > 3 else None
 			# a face mapping person's name, shown under the box
 			name = face[4] if len(face) > 4 else ''
 			rect = self.face_rect(box, image_rect)
+			boxes.append(rect)
 			color = (person_color or themeColor()) if selected else (person_color or QColor(220, 220, 220))
 			painter.setPen(QPen(color, 2.5 if selected else 1.5, Qt.PenStyle.SolidLine if selected else Qt.PenStyle.DashLine))
 			painter.setBrush(Qt.BrushStyle.NoBrush)
 			painter.drawRoundedRect(rect, 4, 4)
 			for text, below in [ (tag, False), (name, True) ]:
-				if not text:
-					continue
-				# the tag sits above the box and the name under it, each inside the box when the box touches that edge
-				tag_rect = QRectF(rect.x(), 0, metrics.horizontalAdvance(text) + 12, metrics.height() + 4)
-				if below:
-					tag_rect.moveTop(rect.bottom() + 2)
-					if tag_rect.bottom() > image_rect.bottom():
-						tag_rect.moveBottom(rect.bottom() - 3)
-				else:
-					tag_rect.moveBottom(rect.top() - 2)
-					if tag_rect.top() < image_rect.top():
-						tag_rect.moveTop(rect.top() + 3)
-				tag_rect.moveLeft(min(max(tag_rect.left(), image_rect.left()), image_rect.right() - tag_rect.width()))
-				# a box reaching past the picture would still push its label off, so keep the label on the picture
-				tag_rect.moveTop(min(max(tag_rect.top(), image_rect.top()), image_rect.bottom() - tag_rect.height()))
-				painter.setPen(Qt.PenStyle.NoPen)
-				painter.setBrush(color if selected else QColor(0, 0, 0, 170))
-				painter.drawRoundedRect(tag_rect, 3, 3)
-				painter.setPen(QColor(255, 255, 255))
-				painter.drawText(tag_rect, Qt.AlignmentFlag.AlignCenter, text)
+				if text:
+					labels.append((rect, below, color if selected else QColor(0, 0, 0, 170), text))
+		# the labels go on top of every box, each where it covers no face and no other label: the tag above its box, else
+		# under it, the name under the box, else above it, then a row further down at a time
+		placed : List[QRectF] = []
+		height = metrics.height() + 4
+		for rect, below, fill, text in labels:
+			tag_rect = QRectF(0, 0, metrics.horizontalAdvance(text) + 12, height)
+			tag_rect.moveLeft(min(max(rect.left(), image_rect.left()), image_rect.right() - tag_rect.width()))
+			above_top = rect.top() - 2 - height
+			below_tops = [ rect.bottom() + 2 + row * (height + 2) for row in range(len(labels) + 1) ]
+			tops = ([ below_tops[0], above_top ] if below else [ above_top ]) + below_tops[0 if not below else 1:]
+			# with no free place it goes inside the box at the edge that has room, as before
+			fallback = rect.bottom() - 3 - height if below else (above_top if above_top >= image_rect.top() else rect.top() + 3)
+			for top in tops:
+				tag_rect.moveTop(top)
+				fits = image_rect.top() <= top and tag_rect.bottom() <= image_rect.bottom()
+				if fits and not any(tag_rect.intersects(other) for other in placed + boxes):
+					break
+			else:
+				tag_rect.moveTop(fallback)
+			# a box reaching past the picture would still push its label off, so keep the label on the picture
+			tag_rect.moveTop(min(max(tag_rect.top(), image_rect.top()), image_rect.bottom() - tag_rect.height()))
+			placed.append(QRectF(tag_rect))
+			painter.setPen(Qt.PenStyle.NoPen)
+			painter.setBrush(fill)
+			painter.drawRoundedRect(tag_rect, 3, 3)
+			painter.setPen(QColor(255, 255, 255))
+			painter.drawText(tag_rect, Qt.AlignmentFlag.AlignCenter, text)
 
 	def paint_divider(self, painter : QPainter, image_rect : QRectF, split_x : float) -> None:
 		painter.setPen(QPen(QColor(255, 255, 255, 230), 2))
