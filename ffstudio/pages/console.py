@@ -10,7 +10,7 @@ from PySide6.QtWidgets import QFileDialog, QHBoxLayout, QVBoxLayout, QWidget
 from qfluentwidgets import BodyLabel, CaptionLabel, FluentIcon, PlainTextEdit, PushButton, SubtitleLabel, SwitchButton, ToolTipFilter, isDarkTheme, qconfig
 
 from ffstudio.media import format_seconds
-from ffstudio.privacy import COMPUTER_NAME, COMPUTER_NAME_STAND_IN, FOLDERS_STAND_IN, USER_NAME, USER_NAME_STAND_IN, hide_private, program_folders
+from ffstudio.privacy import COMPUTER_NAME, COMPUTER_NAME_STAND_IN, FOLDERS_STAND_IN, USER_NAME, USER_NAME_STAND_IN, FileNames, hide_private, program_folders
 from ffstudio.session import EXCEPTION_PATTERN, Session, describe_error, is_error_line
 
 MAX_BLOCKS = 20000
@@ -128,10 +128,12 @@ class ConsolePage(QWidget):
 		header.addStretch(1)
 		self.privacy_switch = self.add_switch(header, 'Hide User Name', 'console_hide_user_name', 'Shows %s in place of your user name (%s) and %s in place of your computer name (%s), in the log, Copy Last Command and Save Log' % (USER_NAME_STAND_IN, USER_NAME, COMPUTER_NAME_STAND_IN, COMPUTER_NAME))
 		self.folders_switch = self.add_switch(header, 'Hide Folders', 'console_hide_folders', 'Shows %s in place of the folders of your own files, M:\\Clients\\Smith\\photo.png reads M:\\%s\\photo.png. The folders of StudioFF, FaceFusion and Python stay, they help find a problem' % (FOLDERS_STAND_IN, FOLDERS_STAND_IN))
+		self.files_switch = self.add_switch(header, 'Hide File Names', 'console_hide_file_names', 'Shows file 1, file 2 and so on in place of the names of your own files, keeping the file type: Smith wedding.jpg reads file 1.jpg, the same each time it comes. The files of StudioFF, FaceFusion and Python keep their names')
+		self.file_names = FileNames()
 		copy_button = PushButton(FluentIcon.COPY, 'Copy Last Command', self)
 		copy_button.clicked.connect(lambda: QGuiApplication.clipboard().setText(self.shown(self.last_command)))
 		save_button = PushButton(FluentIcon.SAVE, 'Save Log', self)
-		save_button.setToolTip('Saves the log as a text file, as shown here: with names and folders hidden if those are on')
+		save_button.setToolTip('Saves the log as a text file, as shown here: with names, folders and file names hidden if those are on')
 		save_button.installEventFilter(ToolTipFilter(save_button))
 		save_button.clicked.connect(self.save_log)
 		clear_button = PushButton(FluentIcon.DELETE, 'Clear', self)
@@ -175,12 +177,14 @@ class ConsolePage(QWidget):
 	def shown(self, text : str) -> str:
 		names = self.privacy_switch.isChecked()
 		folders = self.folders_switch.isChecked()
-		if not names and not folders:
+		files = self.file_names if self.files_switch.isChecked() else None
+		if not names and not folders and files is None:
 			return text
-		return hide_private(text, names, folders, self.program_folders)
+		return hide_private(text, names, folders, self.program_folders, files)
 
 	def clear(self) -> None:
 		self.lines.clear()
+		self.file_names.clear()
 		self.output.clear()
 
 	def save_log(self) -> None:
