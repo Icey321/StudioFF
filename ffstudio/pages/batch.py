@@ -18,11 +18,11 @@ from ffstudio.nsfw import BLOCKED_TITLE, NsfwDialog, show_blocked_bar
 from ffstudio.option_widgets import setting_locks, unused_locks
 from ffstudio.output_name import AUTOMATIC_TEMPLATE, build_output, unknown_tags
 from ffstudio.pages.models import format_size
-from ffstudio.pages.setup import SYSTEM_GROUPS, form_row, section_card
+from ffstudio.pages.setup import SYSTEM_GROUPS, form_row
 from ffstudio.platforms import show_in_folder
 from ffstudio.pages.studio import LOCK_DRIVERS, LIVE_IGNORED_GROUPS, PREVIEW_MAX_SIDE, NameTagsView, SettingsColumn, SourceCard, SourceSelection, StudioPage, elastic, estimated_progress, preview_step_floor, run_tag_values, tool_button
 from ffstudio.session import OptionStore, Session, describe_error, folder_is_writable
-from ffstudio.widgets import DriveLabel, FacePicker, IconCountButton, PreviewView, Splitter, SwapIcon, add_edit_button, attach_landmarks_cycle, collect_drop_paths, guard_wheel, landmarks_mode, with_drive_bar
+from ffstudio.widgets import CollapsibleCard, DriveLabel, FacePicker, IconCountButton, PreviewView, Splitter, SwapIcon, add_edit_button, attach_landmarks_cycle, collect_drop_paths, guard_wheel, landmarks_mode, with_drive_bar
 
 TARGET_FILTERS = [ ('*.*', 'All files'), ('*.mp4', 'MP4 videos'), ('*.jpg', 'JPG images'), ('*.png', 'PNG images'), ('*.mov', 'MOV videos'), ('*.webm', 'WebM videos'), ('*.gif', 'GIF animations') ]
 DEFAULT_TEMPLATE = '{target}_{source}'
@@ -790,7 +790,20 @@ class BatchPage(SourceSelection, QWidget):
 		self.source_card.add_tool(copy_sources)
 		batch_layout.addWidget(self.source_card)
 
-		card, form = section_card('Targets and Output', '', batch_tab)
+		# folds away to give the list more room, folded its header still says which folders the batch uses
+		card = self.targets_card = CollapsibleCard('Targets and Output', '', FluentIcon.FOLDER, expanded = session.config.get('batch_targets_expanded') is not False, parent = batch_tab)
+		card.layout().setContentsMargins(20, 12, 14, 14)
+		header_layout = card.header.layout()
+		# the folders shorten rather than widen the page
+		elastic(card.subtitle_label)
+		header_layout.setStretch(header_layout.indexOf(card.subtitle_label), 1)
+		header_layout.setStretch(header_layout.indexOf(card.subtitle_label) + 1, 0)
+		card.subtitle_label.installEventFilter(ToolTipFilter(card.subtitle_label))
+		body = QWidget(card)
+		form = QVBoxLayout(body)
+		form.setContentsMargins(0, 4, 0, 0)
+		form.setSpacing(10)
+		card.add_widget(body)
 		self.target_dir = LineEdit(card)
 		self.target_dir.setText(stored.get('target_dir', ''))
 		self.target_dir.setPlaceholderText('Folder with the target images or videos')
@@ -844,6 +857,10 @@ class BatchPage(SourceSelection, QWidget):
 
 		for edit in [ self.target_dir, self.output_dir_edit, self.output_name_edit ]:
 			edit.textChanged.connect(self.refresh_timer.start)
+		for edit in [ self.target_dir, self.output_dir_edit ]:
+			edit.textChanged.connect(lambda _: self.refresh_targets_summary())
+		card.toggled.connect(self.on_targets_toggled)
+		self.refresh_targets_summary()
 
 		matches_card = SimpleCardWidget(batch_tab)
 		matches_layout = QVBoxLayout(matches_card)
@@ -1491,6 +1508,19 @@ class BatchPage(SourceSelection, QWidget):
 		self.forgotten = { key: start for key, start in self.forgotten.items() if os.path.normcase(key[1] or '') not in added }
 		if files:
 			self.refresh_matches(True)
+
+	def on_targets_toggled(self, expanded : bool) -> None:
+		self.session.config.set('batch_targets_expanded', expanded)
+		self.refresh_targets_summary()
+
+	def refresh_targets_summary(self) -> None:
+		"""folded, the card's header says which folder the targets come from and where the outputs go"""
+		card = self.targets_card
+		target = self.target_dir.text().strip() or 'no target folder'
+		output = self.output_dir_edit.text().strip() or 'no output folder'
+		text = '%s  →  %s' % (target, output)
+		card.set_subtitle('' if card.body.isVisibleTo(card) else text)
+		card.subtitle_label.setToolTip('Targets: %s\nOutput: %s' % (target, output))
 
 	def browse_target_files(self) -> None:
 		paths, _ = QFileDialog.getOpenFileNames(self, 'Choose target images or videos', self.last_dir(), TARGET_FILES_FILTER)
