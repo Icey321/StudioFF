@@ -95,6 +95,9 @@ def load_values(schema : Optional[Schema], stored : Dict[str, Any]) -> Dict[str,
 			if dest == 'face_selector_maps':
 				continue
 			values[dest] = stored.get(dest, option.get('default'))
+		# one processor is always on, a list saved empty before that rule starts again on facefusion's own, face swapper
+		if 'processors' in values and not values.get('processors'):
+			values['processors'] = list(schema.options.get('processors', {}).get('default') or [])
 		for dest in list(values):
 			resolved = schema.resolve(dest, values)
 			value = values.get(dest)
@@ -496,7 +499,8 @@ class Session(QObject):
 		if not self.schema:
 			return []
 		values = values if values is not None else self.values
-		args = [ '--processors' ] + list(values.get('processors') or self.schema.options.get('processors', {}).get('default') or [])
+		# no quiet stand-in, the run gets exactly the processors the buttons show
+		args = [ '--processors' ] + list(values.get('processors') or [])
 		return args + build_option_args(self.schema, values, groups)
 
 

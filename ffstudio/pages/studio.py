@@ -1022,6 +1022,14 @@ class SettingsColumn(QWidget):
 
 	def apply_processor_buttons(self) -> None:
 		processors = [ button.name for button in self.processor_area.buttons if button.isChecked() ]
+		# the last processor that is on stays on, a run without one would only copy the target
+		if not processors and isinstance(self.sender(), ProcessorButton):
+			button = self.sender()
+			button.blockSignals(True)
+			button.setChecked(True)
+			button.blockSignals(False)
+			getattr(self.store, 'session', self.store).notify.emit('info', 'One processor stays on', 'Switch on another processor first, then this one can be switched off.')
+			return
 		self.store.config.set(self.store.ORDER_KEY, [ button.name for button in self.processor_area.buttons ])
 		if processors != self.store.processors():
 			self.store.set_value('processors', processors)
