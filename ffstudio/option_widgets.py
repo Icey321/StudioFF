@@ -12,6 +12,8 @@ from ffstudio.widgets import ChoiceButton, DecimalBox, DisabledToolTipFilter, In
 AUTO_TEXT = 'Auto'
 # options where nothing means any face and facefusion's 'auto' means the one of the largest source face
 SOURCE_MATCH_OPTIONS = [ 'face_selector_gender', 'face_selector_race' ]
+# choices that are angles, shown with a degree sign
+DEGREE_OPTIONS = [ 'face_detector_angles' ]
 ANY_TEXT = 'Any'
 SOURCE_MATCH_TEXT = 'Same as Source'
 LABEL_WIDTH = 210
@@ -156,6 +158,8 @@ def choice_text(option : Dict[str, Any], value : Any) -> str:
 			return ANY_TEXT
 		if value == 'auto':
 			return SOURCE_MATCH_TEXT
+	if option.get('dest') in DEGREE_OPTIONS and value is not None:
+		return '%s°' % value
 	return AUTO_TEXT if value is None else pretty_choice(value)
 
 
@@ -287,7 +291,7 @@ class MultiChoiceControl(OptionControl):
 		self.flow.setVerticalSpacing(6)
 		self.boxes : List[CheckBox] = []
 		for choice in option.get('choices') or []:
-			box = CheckBox(pretty_choice(choice), self)
+			box = CheckBox(choice_text(option, choice), self)
 			box.setProperty('choice', choice)
 			box.stateChanged.connect(self.emit_changed)
 			self.flow.addWidget(box)
