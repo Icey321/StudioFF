@@ -81,6 +81,11 @@ DEFAULT_CONFIG : Dict[str, Any] =\
 	'check_facefusion_updates_at_startup': True,
 	# how the window was left: maximized, and the normal size and position as [ x, y, width, height ]
 	'window_state': {},
+	# where the Add buttons for source faces and targets open: the folder set in Settings, else the folder last picked from
+	'source_folder': '',
+	'target_folder': '',
+	'last_source_folder': '',
+	'last_target_folder': '',
 	'source_paths': [],
 	'target_path': '',
 	'options': {},

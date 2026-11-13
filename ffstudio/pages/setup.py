@@ -287,7 +287,7 @@ class SetupPage(QWidget):
 		# built either way, the rest of the page fills in its widgets
 		install_card.setVisible(FACEFUSION_MANAGEMENT)
 		self.facefusion_page.content_layout.addStretch(1)
-		self.section_cards = [ self.create_studio_update_card(content), self.create_appearance_card(content) ]
+		self.section_cards = [ self.create_studio_update_card(content), self.create_folders_card(content), self.create_appearance_card(content) ]
 		for card in self.section_cards:
 			layout.addWidget(card)
 		self.system_title = StrongBodyLabel('Performance & system', content)
@@ -1147,6 +1147,33 @@ class SetupPage(QWidget):
 		QApplication.quit()
 
 	# appearance
+
+	def create_folders_card(self, parent : QWidget) -> QWidget:
+		card, layout = section_card('Starting Folders', 'Where the Add buttons for source faces and targets open, in Studio and Batch. Left empty, they open the folder you last added files from.', parent)
+		self.folder_edits : Dict[str, LineEdit] = {}
+		for key, label, title in [ ('source_folder', 'Source faces', 'Choose the folder for source faces'), ('target_folder', 'Targets', 'Choose the folder for targets') ]:
+			edit = LineEdit(card)
+			edit.setPlaceholderText('Last folder used')
+			edit.setClearButtonEnabled(True)
+			edit.setText(self.session.config.get(key) or '')
+			edit.textChanged.connect(lambda text, key = key: self.on_start_folder_edited(key, text))
+			browse = PushButton(FluentIcon.FOLDER, 'Browse', card)
+			browse.clicked.connect(lambda _ = False, edit = edit, title = title: self.browse_start_folder(edit, title))
+			self.folder_edits[key] = edit
+			layout.addLayout(form_row(label, [ edit, browse ], card))
+		return card
+
+	def browse_start_folder(self, edit : LineEdit, title : str) -> None:
+		path = QFileDialog.getExistingDirectory(self, title, edit.text() or os.path.expanduser('~'))
+		if path:
+			edit.setText(os.path.normpath(path))
+
+	def on_start_folder_edited(self, key : str, text : str) -> None:
+		# only a folder that is there is kept, a half typed path leaves the last good one
+		folder = text.strip()
+		if not folder or os.path.isdir(folder):
+			self.session.config.set(key, os.path.normpath(folder) if folder else '')
+			self.session.config.save()
 
 	def create_appearance_card(self, parent : QWidget) -> QWidget:
 		card, layout = section_card('Appearance and behavior', '', parent)

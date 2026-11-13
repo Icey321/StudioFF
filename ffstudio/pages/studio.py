@@ -141,6 +141,21 @@ class SourceSelection:
 	REMOVED_SOURCES_LIMIT = 200
 	# the settings that change which faces FaceFusion finds in a photo, the selector's picks do not matter there
 	SOURCE_FACE_GROUPS = [ 'face_detector', 'face_aligner', 'execution' ]
+	# the folder set in Settings and the folder last picked from, for the source and target Add buttons
+	START_FOLDER_KEYS = { 'source': ('source_folder', 'last_source_folder'), 'target': ('target_folder', 'last_target_folder') }
+
+	def start_folder(self, kind : str) -> str:
+		"""where an Add button's browse window opens: the folder set in Settings, else the one last picked from, else near the files in use"""
+		for key in self.START_FOLDER_KEYS[kind]:
+			folder = self.session.config.get(key) or ''
+			if folder and os.path.isdir(folder):
+				return folder
+		return self.last_dir()
+
+	def remember_folder(self, kind : str, paths : List[str]) -> None:
+		if paths:
+			self.session.config.set(self.START_FOLDER_KEYS[kind][1], os.path.dirname(os.path.normpath(paths[0])))
+			self.session.config.save()
 
 	def load_sources(self) -> None:
 		paths_key, unused_key, names_key, groups_key, removed_key = self.SOURCE_KEYS
@@ -428,8 +443,9 @@ class SourceCard(SimpleCardWidget):
 		self.chips : List[GroupChip] = []
 
 	def browse(self) -> None:
-		paths, _ = QFileDialog.getOpenFileNames(self, 'Choose source faces or audio', self.page.last_dir(), ';;'.join(SOURCE_FILTERS), self.browse_filter)
+		paths, _ = QFileDialog.getOpenFileNames(self, 'Choose source faces or audio', self.page.start_folder('source'), ';;'.join(SOURCE_FILTERS), self.browse_filter)
 		if paths:
+			self.page.remember_folder('source', paths)
 			self.page.add_sources([ os.path.normpath(path) for path in paths ])
 
 	def add_tool(self, button : QWidget) -> None:
@@ -751,8 +767,9 @@ class TargetCard(SimpleCardWidget):
 		self.result_label.setText(text or self.result_text)
 
 	def browse(self) -> None:
-		path, _ = QFileDialog.getOpenFileName(self, 'Choose target image or video', self.page.last_dir(), 'Images, videos and GIFs (*.jpg *.jpeg *.jfif *.png *.webp *.avif *.heic *.heif *.bmp *.tif *.tiff *.mp4 *.mov *.mkv *.avi *.webm *.m4v *.wmv *.mpg *.mpeg *.flv *.f4v *.gif);;All files (*)')
+		path, _ = QFileDialog.getOpenFileName(self, 'Choose target image or video', self.page.start_folder('target'), 'Images, videos and GIFs (*.jpg *.jpeg *.jfif *.png *.webp *.avif *.heic *.heif *.bmp *.tif *.tiff *.mp4 *.mov *.mkv *.avi *.webm *.m4v *.wmv *.mpg *.mpeg *.flv *.f4v *.gif);;All files (*)')
 		if path:
+			self.page.remember_folder('target', [ path ])
 			self.page.set_target(os.path.normpath(path))
 
 	def on_preview_clicked(self) -> None:

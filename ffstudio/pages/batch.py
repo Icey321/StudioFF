@@ -1523,7 +1523,8 @@ class BatchPage(SourceSelection, QWidget):
 		card.subtitle_label.setToolTip('Targets: %s\nOutput: %s' % (target, output))
 
 	def browse_target_files(self) -> None:
-		paths, _ = QFileDialog.getOpenFileNames(self, 'Choose target images or videos', self.last_dir(), TARGET_FILES_FILTER)
+		paths, _ = QFileDialog.getOpenFileNames(self, 'Choose target images or videos', self.start_folder('target'), TARGET_FILES_FILTER)
+		self.remember_folder('target', paths)
 		self.add_target_files([ os.path.normpath(path) for path in paths ])
 
 	def restore_removed(self) -> None:
