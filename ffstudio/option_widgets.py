@@ -3,11 +3,11 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtGui import QFont, QFontMetrics
 from PySide6.QtWidgets import QBoxLayout, QButtonGroup, QFrame, QHBoxLayout, QSizePolicy, QVBoxLayout, QWidget
-from qfluentwidgets import BodyLabel, CaptionLabel, CheckBox, ComboBox, FlowLayout, FluentIcon, LineEdit, Slider, SpinBox, SwitchButton, ToolTipFilter
+from qfluentwidgets import BodyLabel, CaptionLabel, CheckBox, ComboBox, FlowLayout, FluentIcon, LineEdit, SpinBox, SwitchButton, ToolTipFilter
 
 from ffstudio.face_mapping import FACE_PROCESSORS
 from ffstudio.schema import Schema, format_scalar, same_value
-from ffstudio.widgets import ChoiceButton, DecimalBox, DisabledToolTipFilter, InfoButton, NumberBox, RangeSlider, ResetButton, StarButton, guard_wheel
+from ffstudio.widgets import ChoiceButton, DecimalBox, DisabledToolTipFilter, GraySlider, InfoButton, NumberBox, RangeSlider, ResetButton, StarButton, guard_wheel
 
 AUTO_TEXT = 'Auto'
 # options where nothing means any face and facefusion's 'auto' means the one of the largest source face
@@ -329,7 +329,7 @@ class RangeControl(OptionControl):
 			self.switch.checkedChanged.connect(self.on_switch)
 			layout.addWidget(self.switch)
 
-		self.slider = Slider(Qt.Orientation.Horizontal, self)
+		self.slider = GraySlider(Qt.Orientation.Horizontal, self)
 		self.slider.setRange(0, round((self.maximum - self.minimum) / self.step))
 		self.slider.setMinimumWidth(80)
 		self.slider.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)

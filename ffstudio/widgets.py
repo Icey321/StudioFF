@@ -9,7 +9,7 @@ import numpy
 from PySide6.QtCore import QEvent, QMimeData, QObject, QPoint, QPointF, QRect, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QDrag, QDragEnterEvent, QDropEvent, QFont, QFontMetrics, QIcon, QImage, QPainter, QPainterPath, QPen, QPixmap, QPolygonF
 from PySide6.QtWidgets import QAbstractSpinBox, QApplication, QFrame, QHBoxLayout, QLineEdit, QPushButton, QSizePolicy, QSplitter, QSplitterHandle, QStyle, QStyleOptionButton, QStylePainter, QVBoxLayout, QWidget
-from qfluentwidgets import CaptionLabel, ComboBox, CompactDoubleSpinBox, CompactSpinBox, FlowLayout, FluentIcon, FluentIconBase, Flyout, FlyoutAnimationType, IconWidget, SimpleCardWidget, StrongBodyLabel, Theme, TogglePushButton, ToolTipFilter, TransparentToolButton, isDarkTheme, themeColor
+from qfluentwidgets import CaptionLabel, ComboBox, CompactDoubleSpinBox, CompactSpinBox, FlowLayout, FluentIcon, FluentIconBase, Flyout, FlyoutAnimationType, IconWidget, SimpleCardWidget, Slider, StrongBodyLabel, Theme, TogglePushButton, ToolTipFilter, TransparentToolButton, isDarkTheme, themeColor
 from qfluentwidgets.components.widgets.line_edit import LineEditButton
 from qfluentwidgets.components.widgets.spin_box import CompactSpinBoxBase, SpinIcon
 
@@ -142,6 +142,18 @@ class DecimalBox(CompactDoubleSpinBox):
 
 	def focusInEvent(self, event) -> None:
 		super(CompactSpinBoxBase, self).focusInEvent(event)
+
+
+class GraySlider(Slider):
+	"""the fluent slider, gray instead of the accent color while it is disabled, like RangeSlider"""
+	def changeEvent(self, event) -> None:
+		super().changeEvent(event)
+		if event.type() == QEvent.Type.EnabledChange:
+			if self.isEnabled():
+				# an empty color falls back to the accent, so it follows accent changes again
+				self.setThemeColor(QColor(), QColor())
+			else:
+				self.setThemeColor(QColor(0, 0, 0, 60), QColor(255, 255, 255, 80))
 
 
 class RangeSlider(QWidget):
