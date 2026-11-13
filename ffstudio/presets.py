@@ -11,6 +11,8 @@ from ffstudio.session import load_values
 # config key of the presets, shared by every page: { name: { 'values': {...}, 'order': [...] } }
 PRESETS_KEY = 'presets'
 EDITED_SUFFIX = '  (edited)'
+# config keys of the preset each page has loaded, a rename follows on all of them
+ACTIVE_PRESET_KEYS = [ 'studio_preset', 'batch_preset' ]
 
 
 def own_values(store) -> Dict[str, Any]:
@@ -40,17 +42,20 @@ def preset_changes(store, preset : Dict[str, Any], order : List[str]) -> Tuple[D
 class PresetNameDialog(MessageBoxBase):
 	"""asks for the name of a new preset"""
 
-	def __init__(self, parent : QWidget) -> None:
+	def __init__(self, parent : QWidget, title : str = 'Save Preset', button : str = 'Save', name : str = '') -> None:
 		super().__init__(parent)
-		self.viewLayout.addWidget(SubtitleLabel('Save Preset', self.widget))
+		self.viewLayout.addWidget(SubtitleLabel(title, self.widget))
 		self.name_edit = LineEdit(self.widget)
 		self.name_edit.setPlaceholderText('Preset name')
 		self.name_edit.setClearButtonEnabled(True)
 		self.name_edit.textChanged.connect(lambda text: self.yesButton.setEnabled(bool(text.strip())))
 		self.name_edit.returnPressed.connect(lambda: self.yesButton.isEnabled() and self.yesButton.click())
 		self.viewLayout.addWidget(self.name_edit)
-		self.yesButton.setText('Save')
+		self.yesButton.setText(button)
 		self.yesButton.setEnabled(False)
+		if name:
+			self.name_edit.setText(name)
+			self.name_edit.selectAll()
 		self.cancelButton.setText('Cancel')
 		self.widget.setMinimumWidth(360)
 		self.name_edit.setFocus()
@@ -81,8 +86,9 @@ class PresetBar(QWidget):
 		row.addWidget(self.combo, 1)
 		self.save_button = self.tool_button(FluentIcon.SAVE_AS, 'Save the current processors and options as a new preset', self.save_new)
 		self.overwrite_button = self.tool_button(FluentIcon.SAVE, 'Overwrite the selected preset with the current processors and options', self.overwrite)
+		self.rename_button = self.tool_button(FluentIcon.EDIT, 'Rename the selected preset', self.rename)
 		self.delete_button = self.tool_button(FluentIcon.DELETE, 'Delete the selected preset', self.delete)
-		for button in [ self.save_button, self.overwrite_button, self.delete_button ]:
+		for button in [ self.save_button, self.overwrite_button, self.rename_button, self.delete_button ]:
 			row.addWidget(button)
 		# a slider sends a change on every step, the comparison with the preset waits until it settles
 		self.edited_timer = QTimer(self)
@@ -125,6 +131,7 @@ class PresetBar(QWidget):
 		self.combo.setEnabled(bool(presets))
 		self.combo.setPlaceholderText('Presets' if presets else 'No presets yet')
 		self.overwrite_button.setEnabled(bool(active))
+		self.rename_button.setEnabled(bool(active))
 		self.delete_button.setEnabled(bool(active))
 		self.refresh_edited()
 
@@ -198,6 +205,32 @@ class PresetBar(QWidget):
 			return
 		self.store_preset(name)
 		self.session.notify.emit('success', 'Preset saved', '"%s" now has the current processors and options.' % name)
+
+	def rename(self) -> None:
+		old = self.active()
+		if not old:
+			return
+		dialog = PresetNameDialog(self.window(), 'Rename Preset', 'Rename', old)
+		if not dialog.exec() or not dialog.name() or dialog.name() == old:
+			return
+		name = dialog.name()
+		presets = read_presets(self.config)
+		if name in presets:
+			box = MessageBox('Replace "%s"?' % name, 'A preset with this name already exists. Renaming "%s" replaces it, on both Studio and Batch.' % old, self.window())
+			box.yesButton.setText('Replace')
+			box.cancelButton.setText('Cancel')
+			if not box.exec():
+				return
+		presets[name] = presets.pop(old)
+		self.config.set(PRESETS_KEY, presets)
+		# a page that had the old name loaded keeps it under the new name
+		for key in ACTIVE_PRESET_KEYS:
+			if self.config.get(key) == old:
+				self.config.set(key, name)
+		self.config.set(self.active_key, name)
+		self.config.save()
+		self.session.presets_changed.emit()
+		self.session.notify.emit('success', 'Preset renamed', '"%s" is now called "%s".' % (old, name))
 
 	def delete(self) -> None:
 		name = self.active()
