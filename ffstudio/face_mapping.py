@@ -88,18 +88,16 @@ def box_overlap(box : List[float], other : List[float]) -> float:
 
 
 def merge_people(old : List[Dict[str, Any]], new : List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-	"""a new scan keeps the names and sources of the people it finds again at the same place"""
+	"""a new scan keeps the names and sources of the people it finds again at the same place.
+	people removed from the list come back, with their names, refresh is how the user gets them back"""
 	merged = []
 	taken = set()
 	for person in new:
 		match = next((index for index, before in enumerate(old) if index not in taken and before.get('frame') == person.get('frame') and box_overlap(before.get('box'), person.get('box')) > 0.5), None)
 		if match is not None:
 			taken.add(match)
-			person = dict(person, name = old[match].get('name', ''), source = old[match].get('source', LEAVE), removed = old[match].get('removed', False))
+			person = dict(person, name = old[match].get('name', ''), source = old[match].get('source', LEAVE))
 		merged.append(dict({ 'name': '', 'source': LEAVE }, **person))
-	# with everyone removed before, a new scan brings them all back
-	if all(person.get('removed') for person in merged):
-		merged = [ dict(person, removed = False) for person in merged ]
 	return merged
 
 
@@ -276,7 +274,7 @@ class FaceMappingCard(CollapsibleCard):
 		# a long summary is clipped rather than pushing the buttons away, so it takes the free room itself
 		self.header.layout().setStretchFactor(self.status_label, 1)
 		self.refresh_button = TransparentToolButton(FluentIcon.SYNC, self)
-		self.refresh_button.setToolTip('Look through the target for people again, the names and sources you gave are kept')
+		self.refresh_button.setToolTip('Look through the target for people again. The names and sources you gave are kept, and removed people come back')
 		self.refresh_button.installEventFilter(ToolTipFilter(self.refresh_button))
 		self.refresh_button.clicked.connect(self.find)
 		self.add_tool(self.refresh_button)
