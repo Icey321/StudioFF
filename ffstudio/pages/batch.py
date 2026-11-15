@@ -2202,8 +2202,11 @@ class BatchPage(SourceSelection, QWidget):
 		runs = self.runs()
 		# a restored run removed again counts from the start it is removed in then
 		self.removed_starts = { key: start for key, start in self.removed_starts.items() if key in self.removed }
-		self.removed_count = sum(1 for run in runs if self.run_key(run) in self.removed)
-		for run in [ run for run in runs if self.run_key(run) not in self.removed and self.run_key(run) not in self.forgotten ]:
+		# a removed output takes its target out of the list for every source face, also faces picked later
+		removed_targets = { key[1] for key in self.removed }
+		gone_targets = removed_targets | { key[1] for key in self.forgotten }
+		self.removed_count = sum(1 for run in runs if run.get('target') in removed_targets)
+		for run in [ run for run in runs if run.get('target') not in gone_targets ]:
 			path, replaces = build_output(template, self.name_tag_values(run), output_dir, self.output_extension(run), subfolders, taken, animated = is_animation(run.get('target') or ''))
 			key = os.path.normcase(path)
 			name = os.path.relpath(path, output_dir) if subfolders and output_dir else os.path.basename(path)
