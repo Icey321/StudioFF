@@ -43,12 +43,13 @@ STATUS_LOOK =\
 	'skipped': ('↷', 'Skipped  ·  ', '#9d5d00', '#fce100'),
 	'noface': ('↷', 'No face detected, skipped  ·  ', '#9d5d00', '#fce100'),
 	'noface_skip': ('↷', 'No face detected, will be skipped  ·  ', '#9d5d00', '#fce100'),
+	'user_skip': ('↷', 'Skipped by you  ·  ', '#9d5d00', '#fce100'),
 	'running': ('▶', '', None, None)
 }
 # a run that ended keeps its row until something the user changes plans the batch again
 FINISHED = ('done', 'blocked', 'failed', 'skipped', 'noface')
 # the outputs a hovered row offers to run again, and the ones it offers to run on their own
-RETRY_STATUSES = ('skipped', 'noface', 'failed')
+RETRY_STATUSES = ('skipped', 'noface', 'failed', 'user_skip')
 PLAY_STATUSES = ('', 'done')
 # how the Errors column sorts the rows, the worst first
 ERROR_RANK = { 'failed': 4, 'blocked': 3, 'skip': 2, 'skipped': 1, 'noface': 1, 'noface_skip': 1 }
@@ -57,7 +58,7 @@ TYPE_TABS = [ ('all', 'All'), ('images', 'Images'), ('videos', 'Videos'), ('gifs
 # the tabs after them, each shown while an output has its status
 STATUS_TABS = [ ('errors', 'Errors'), ('nsfw', 'NSFW'), ('skipped', 'Skipped') ]
 TABS = TYPE_TABS + STATUS_TABS
-TAB_STATUSES = { 'failed': 'errors', 'blocked': 'nsfw', 'skip': 'nsfw', 'skipped': 'skipped', 'noface': 'skipped', 'noface_skip': 'skipped' }
+TAB_STATUSES = { 'failed': 'errors', 'blocked': 'nsfw', 'skip': 'nsfw', 'skipped': 'skipped', 'noface': 'skipped', 'noface_skip': 'skipped', 'user_skip': 'skipped' }
 # what the start button says on a status tab, NSFW has nothing to run again so it is grayed out there
 STATUS_TAB_RUNS = { 'errors': 'Retry Errors', 'skipped': 'Run Skipped' }
 # the start button's tooltip, and the one on the NSFW tab
@@ -519,7 +520,7 @@ class OutputDelegate(ListItemDelegate):
 		elif status == 'running':
 			self.draw_ring(painter, rect.x(), rect.y() + rect.height() / 2, item.get('progress', 0.0))
 			words = self.page.progress_words(item)
-		elif status in [ 'skipped', 'noface', 'noface_skip' ]:
+		elif status in [ 'skipped', 'noface', 'noface_skip', 'user_skip' ]:
 			FluentIcon.SYNC.render(painter, self.mark_rect(option.rect).adjusted(6, 6, -6, -6).toRect(), fill = dark if isDarkTheme() else light)
 		elif mark:
 			painter.setPen(QColor(dark if isDarkTheme() else light) if light else themeColor())
@@ -618,6 +619,8 @@ class BatchPage(SourceSelection, QWidget):
 		self.precheck_targets : List[str] = []
 		# the targets the last face check found no face in, by their face_key, the rows show they will be skipped
 		self.faceless : Dict[str, Tuple] = {}
+		# the outputs the user marked with Skip, by their run_key, no batch makes them until they are unmarked
+		self.user_skips : set = set()
 		self.stopped = False
 		# the time the batch started, the clock counts up from it while it runs
 		self.run_started = 0.0
@@ -964,8 +967,11 @@ class BatchPage(SourceSelection, QWidget):
 		self.stop_button = PushButton(FluentIcon.CLOSE, 'Stop', run_card)
 		self.stop_button.setEnabled(False)
 		self.stop_button.clicked.connect(self.stop)
-		self.skip_button = PushButton(FluentIcon.PAGE_RIGHT, 'Skip', run_card)
-		self.skip_button.setToolTip('Stop the output that is being made and go on with the next one')
+		self.skip_button = PushButton(FluentIcon.PAGE_RIGHT, 'Unskip', run_card)
+		# as wide as its longer label, so the buttons after it stay put
+		self.skip_button.setMinimumWidth(self.skip_button.sizeHint().width())
+		self.skip_button.setText('Skip')
+		self.skip_button.setToolTip('With outputs selected in the list: mark them so the batch skips them, press again to unmark them. With none selected while the batch runs: stop the output that is being made and go on with the next one')
 		self.skip_button.installEventFilter(ToolTipFilter(self.skip_button))
 		self.skip_button.setEnabled(False)
 		self.skip_button.clicked.connect(self.skip)
@@ -1396,6 +1402,7 @@ class BatchPage(SourceSelection, QWidget):
 
 	def on_selection_changed(self) -> None:
 		self.refresh_start_button()
+		self.refresh_skip_button()
 		self.refresh_list_status()
 		self.sync_timeline()
 		self.follow_selection()
@@ -1460,6 +1467,7 @@ class BatchPage(SourceSelection, QWidget):
 		item.pop('confirm', None)
 		item['retried'] = self.status_tab(item)
 		item['status'] = ''
+		self.user_skips.discard(self.run_key(item))
 		# a target run again although it had no face would still show it will be skipped
 		self.faceless.pop(item.get('target'), None)
 		if self.running or self.retry_waiting:
@@ -2280,6 +2288,8 @@ class BatchPage(SourceSelection, QWidget):
 	def item_status(self, item : Dict[str, Any]) -> str:
 		if item.get('status'):
 			return item.get('status')
+		if self.run_key(item) in self.user_skips:
+			return 'user_skip'
 		result = self.check_results.get(item.get('target'))
 		if result and result.get('blocked'):
 			return 'skip'
@@ -2455,7 +2465,7 @@ class BatchPage(SourceSelection, QWidget):
 		selected = len(self.selected_rows())
 		if selected:
 			parts.append('%d selected' % selected)
-		for status, words in [ ('running', 'running'), ('done', 'done'), ('failed', 'failed'), ('blocked', 'NSFW skipped'), ('skip', 'NSFW, will be skipped'), ('skipped', 'skipped'), ('noface', 'no face detected'), ('noface_skip', 'no face, will be skipped') ]:
+		for status, words in [ ('running', 'running'), ('done', 'done'), ('failed', 'failed'), ('blocked', 'NSFW skipped'), ('skip', 'NSFW, will be skipped'), ('skipped', 'skipped'), ('noface', 'no face detected'), ('noface_skip', 'no face, will be skipped'), ('user_skip', 'skipped by you') ]:
 			count = statuses.count(status)
 			if count:
 				parts.append('%d %s' % (count, words))
@@ -2565,6 +2575,9 @@ class BatchPage(SourceSelection, QWidget):
 	def start(self) -> None:
 		"""Run Batch makes every output, Run Selected and a type tab only theirs and keep what the other rows show"""
 		selected = self.run_keys()
+		if self.type_tab == 'skipped' and not self.run_selection():
+			# Run Skipped makes the outputs marked with Skip too
+			self.user_skips -= selected
 		self.save()
 		self.refresh_matches(bool(selected))
 		items = [ item for item in self.items if not selected or self.run_key(item) in selected ]
@@ -2582,13 +2595,13 @@ class BatchPage(SourceSelection, QWidget):
 			if not folder_is_writable(folder):
 				self.session.notify.emit('error', 'Cannot save to this folder', 'StudioFF cannot save to %s. Choose another output folder, such as Videos or Documents.' % folder)
 				return
-		replacing = [ item for item in items if os.path.isfile(item.get('output')) and self.item_status(item) not in [ 'skip', 'noface_skip' ] ]
+		replacing = [ item for item in items if os.path.isfile(item.get('output')) and self.item_status(item) not in [ 'skip', 'noface_skip', 'user_skip' ] ]
 		if replacing and not self.confirm_replace(replacing):
 			return
 		self.selected_only = selected
 		self.start_clock()
 		# the nsfw check runs first, so the flagged rows show while the rest are made
-		unchecked = sorted({ item.get('target') for item in items } - set(self.check_results))
+		unchecked = sorted({ item.get('target') for item in items if self.run_key(item) not in self.user_skips } - set(self.check_results))
 		if unchecked:
 			self.running = True
 			self.prechecking = True
@@ -2649,7 +2662,7 @@ class BatchPage(SourceSelection, QWidget):
 	def check_faces(self) -> bool:
 		"""looks for faces in the targets about to run that were not looked at with these face settings yet, True while it
 		does, it calls run_batch again once done"""
-		targets = sorted({ item.get('target') for item in self.items if (not self.selected_only or self.run_key(item) in self.selected_only) and self.item_status(item) != 'skip' })
+		targets = sorted({ item.get('target') for item in self.items if (not self.selected_only or self.run_key(item) in self.selected_only) and self.item_status(item) not in [ 'skip', 'user_skip' ] })
 		return self.start_face_check(targets, True)
 
 	def start_face_check(self, targets : List[str], then_run : bool) -> bool:
@@ -2773,10 +2786,36 @@ class BatchPage(SourceSelection, QWidget):
 		else:
 			self.session.runner.stop()
 
+	def skip_rows(self) -> List[int]:
+		"""the selected rows Skip marks or unmarks, never the running or a finished one"""
+		return [ row for row in self.selected_rows() if self.item_status(self.items[row]) in [ '', 'user_skip' ] ]
+
 	def skip(self) -> None:
+		rows = self.skip_rows()
+		if rows:
+			keys = { self.run_key(self.items[row]) for row in rows }
+			if keys <= self.user_skips:
+				self.user_skips -= keys
+			else:
+				self.user_skips |= keys
+			for row in rows:
+				self.refresh_item(row)
+			self.refresh_list_status()
+			self.refresh_skip_button()
+			return
 		if self.running and self.current >= 0:
 			self.skipping = True
 			self.session.runner.stop()
+
+	def refresh_skip_button(self) -> None:
+		rows = self.skip_rows()
+		if rows:
+			marked = { self.run_key(self.items[row]) for row in rows } <= self.user_skips
+			self.skip_button.setText('Unskip' if marked else 'Skip')
+			self.skip_button.setEnabled(not self.confirming and not self.prechecking)
+			return
+		self.skip_button.setText('Skip')
+		self.skip_button.setEnabled(self.session.runner.is_running() and self.running and self.current >= 0 and not self.confirming and not self.prechecking)
 
 	def toggle_pause(self) -> None:
 		if self.paused:
@@ -2833,7 +2872,7 @@ class BatchPage(SourceSelection, QWidget):
 		self.session.runner.stop()
 
 	def queued(self) -> List[int]:
-		return [ index for index, item in enumerate(self.items) if not item.get('status') and (not self.run_only or self.run_key(item) in self.run_only) ]
+		return [ index for index, item in enumerate(self.items) if not item.get('status') and self.run_key(item) not in self.user_skips and (not self.run_only or self.run_key(item) in self.run_only) ]
 
 	def run_next(self) -> None:
 		queued = self.queued()
@@ -2882,7 +2921,7 @@ class BatchPage(SourceSelection, QWidget):
 		self.check_button.setEnabled(not busy and not self.running)
 		# a batch paused with its memory freed runs nothing, Stop still ends it
 		self.stop_button.setEnabled(self.running and (busy or self.paused or self.face_checking))
-		self.skip_button.setEnabled(busy and self.running and self.current >= 0 and not self.confirming and not self.prechecking)
+		self.refresh_skip_button()
 
 	def on_progress(self, title : str, ratio : float, status : str) -> None:
 		# the stages around the frames, Extracting, Merging, only name the stage: only the frames count toward the output
