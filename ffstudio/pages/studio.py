@@ -1519,7 +1519,7 @@ class StudioPage(SourceSelection, QWidget):
 
 	def on_schema_changed(self) -> None:
 		schema = self.session.schema
-		self.version_label.setText(('FaceFusion %s' % schema.version) if schema else 'FaceFusion is not set up yet — open Settings')
+		self.version_label.setText(('powered by FaceFusion %s' % schema.version) if schema else 'FaceFusion is not set up yet — open Settings')
 		self.refresh_locks()
 
 	def on_value_changed(self, dest : str, _ : object) -> None:
