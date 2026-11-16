@@ -9,7 +9,7 @@ import numpy
 from PySide6.QtCore import QEvent, QMimeData, QObject, QPoint, QPointF, QRect, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QDrag, QDragEnterEvent, QDropEvent, QFont, QFontMetrics, QIcon, QImage, QPainter, QPainterPath, QPen, QPixmap, QPolygonF
 from PySide6.QtWidgets import QAbstractSpinBox, QApplication, QFrame, QHBoxLayout, QLineEdit, QPushButton, QSizePolicy, QSplitter, QSplitterHandle, QStyle, QStyleOptionButton, QStylePainter, QVBoxLayout, QWidget
-from qfluentwidgets import CaptionLabel, ComboBox, CompactDoubleSpinBox, CompactSpinBox, FlowLayout, FluentIcon, FluentIconBase, Flyout, FlyoutAnimationType, IconWidget, SimpleCardWidget, Slider, StrongBodyLabel, Theme, TogglePushButton, ToolTipFilter, TransparentToolButton, isDarkTheme, themeColor
+from qfluentwidgets import BodyLabel, CaptionLabel, ComboBox, CompactDoubleSpinBox, CompactSpinBox, FlowLayout, FluentIcon, FluentIconBase, Flyout, FlyoutAnimationType, IconWidget, InfoBarIcon, SimpleCardWidget, Slider, StrongBodyLabel, Theme, TogglePushButton, ToolTipFilter, TransparentToolButton, isDarkTheme, themeColor
 from qfluentwidgets.components.widgets.line_edit import LineEditButton
 from qfluentwidgets.components.widgets.spin_box import CompactSpinBoxBase, SpinIcon
 
@@ -154,6 +154,25 @@ class GraySlider(Slider):
 				self.setThemeColor(QColor(), QColor())
 			else:
 				self.setThemeColor(QColor(0, 0, 0, 60), QColor(255, 255, 255, 80))
+
+
+class StatusLabel(BodyLabel):
+	"""the status above a run's progress bar, with a green check before it when the run finished
+
+	the check shows only with setText(text, done = True), any other text hides it again. put done_icon in the layout before the label
+	"""
+	def __init__(self, *args) -> None:
+		# fluent labels take (text, parent) or (parent) and call __init__ again inside, so the icon is made once
+		super().__init__(*args)
+		if not hasattr(self, 'done_icon'):
+			self.done_icon = IconWidget(InfoBarIcon.SUCCESS, self.parentWidget())
+			self.done_icon.setFixedSize(16, 16)
+			self.done_icon.hide()
+
+	def setText(self, text : str, done : bool = False) -> None:
+		super().setText(text)
+		if hasattr(self, 'done_icon'):
+			self.done_icon.setVisible(done)
 
 
 class RangeSlider(QWidget):

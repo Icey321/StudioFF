@@ -24,7 +24,7 @@ from ffstudio.output_name import AUTOMATIC_TEMPLATE, NAME_EXAMPLES, NAME_TAGS, b
 from ffstudio.platforms import show_in_folder
 from ffstudio.presets import PresetBar
 from ffstudio.session import CONTENT_RESULT_PREFIX, Session, folder_is_writable
-from ffstudio.widgets import DisabledToolTipFilter, DriveLabel, GroupChip, PreviewView, ProcessorArea, ProcessorButton, Splitter, Thumbnail, add_edit_button, attach_landmarks_cycle, collect_drop_paths, guard_wheel, landmarks_mode, with_drive_bar
+from ffstudio.widgets import DisabledToolTipFilter, DriveLabel, GroupChip, PreviewView, ProcessorArea, ProcessorButton, Splitter, StatusLabel, Thumbnail, add_edit_button, attach_landmarks_cycle, collect_drop_paths, guard_wheel, landmarks_mode, with_drive_bar
 
 STUDIO_GROUPS = [ 'face_selector', 'face_masker', 'face_detector', 'face_aligner', 'face_tracker', 'output_creation', 'frame_extraction', 'frame_distribution', 'voice_extractor', 'workflow' ]
 # options whose value grays out other rows, besides the models (refresh_locks)
@@ -1357,7 +1357,8 @@ class StudioPage(SourceSelection, QWidget):
 		status_layout = QVBoxLayout()
 		status_layout.setSpacing(6)
 		labels = QHBoxLayout()
-		self.status_label = elastic(BodyLabel('Ready', card))
+		self.status_label = elastic(StatusLabel('Ready', card))
+		labels.addWidget(self.status_label.done_icon)
 		self.detail_label = elastic(CaptionLabel('', card))
 		self.detail_label.setTextColor('#707070', '#9a9a9a')
 		self.detail_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
@@ -2085,7 +2086,7 @@ class StudioPage(SourceSelection, QWidget):
 			self.result_info = self.pending_info
 			if not self.preview_mode:
 				self.progress_bar.setValue(1000)
-				self.status_label.setText('Done — ' + os.path.basename(output_path))
+				self.status_label.setText('Done — ' + os.path.basename(output_path), done = True)
 				# the clock beside the bar says how long it took
 				self.detail_label.setText('')
 			elif self.status_label.text() == BLOCKED_STATUS:

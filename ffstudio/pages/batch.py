@@ -22,7 +22,7 @@ from ffstudio.pages.setup import SYSTEM_GROUPS, form_row
 from ffstudio.platforms import show_in_folder
 from ffstudio.pages.studio import LOCK_DRIVERS, LIVE_IGNORED_GROUPS, PREVIEW_MAX_SIDE, NameTagsView, SettingsColumn, SourceCard, SourceSelection, StudioPage, elastic, estimated_progress, preview_step_floor, run_tag_values, tool_button
 from ffstudio.session import OptionStore, Session, describe_error, folder_is_writable
-from ffstudio.widgets import CollapsibleCard, DriveLabel, FacePicker, IconCountButton, PreviewView, Splitter, SwapIcon, add_edit_button, attach_landmarks_cycle, collect_drop_paths, guard_wheel, landmarks_mode, with_drive_bar
+from ffstudio.widgets import CollapsibleCard, DriveLabel, FacePicker, IconCountButton, PreviewView, Splitter, StatusLabel, SwapIcon, add_edit_button, attach_landmarks_cycle, collect_drop_paths, guard_wheel, landmarks_mode, with_drive_bar
 
 TARGET_FILTERS = [ ('*.*', 'All files'), ('*.mp4', 'MP4 videos'), ('*.jpg', 'JPG images'), ('*.png', 'PNG images'), ('*.mov', 'MOV videos'), ('*.webm', 'WebM videos'), ('*.gif', 'GIF animations') ]
 DEFAULT_TEMPLATE = '{target}_{source}'
@@ -989,10 +989,13 @@ class BatchPage(SourceSelection, QWidget):
 		run_layout.addWidget(self.check_button)
 		run_layout.addSpacing(10)
 		status = QVBoxLayout()
-		self.status_label = BodyLabel('Ready', run_card)
+		self.status_label = StatusLabel('Ready', run_card)
 		self.progress = ProgressBar(run_card)
 		self.progress.setRange(0, 1000)
-		status.addWidget(self.status_label)
+		status_line = QHBoxLayout()
+		status_line.addWidget(self.status_label.done_icon)
+		status_line.addWidget(self.status_label, 1)
+		status.addLayout(status_line)
 		status.addWidget(self.progress)
 		run_layout.addLayout(status, 1)
 		run_layout.addSpacing(10)
@@ -3025,7 +3028,8 @@ class BatchPage(SourceSelection, QWidget):
 		self.progress.setValue(1000)
 		if counts.get('failed'):
 			self.progress.error()
-		self.status_label.setText('Batch finished in %s  ·  ' % took + summary + ('. Double-click a ⛔ output to see what was flagged.' if counts.get('blocked') else ''))
+		# a batch with failed outputs gets the red bar, not the check
+		self.status_label.setText('Batch finished in %s  ·  ' % took + summary + ('. Double-click a ⛔ output to see what was flagged.' if counts.get('blocked') else ''), done = not counts.get('failed'))
 		if counts.get('blocked'):
 			show_blocked_bar(self.window(), "FaceFusion's NSFW filter flagged %d of the outputs in this batch, so they were skipped. The other outputs were made as normal." % counts.get('blocked'))
 		else:
