@@ -51,6 +51,8 @@ FINISHED = ('done', 'blocked', 'failed', 'skipped', 'noface')
 # the outputs a hovered row offers to run again, and the ones it offers to run on their own
 RETRY_STATUSES = ('skipped', 'noface', 'failed', 'user_skip')
 PLAY_STATUSES = ('', 'done')
+# how many made outputs are remembered for the ✓ after a restart, the oldest are let go first
+FINISHED_REMEMBERED = 2000
 # how the Errors column sorts the rows, the worst first
 ERROR_RANK = { 'failed': 4, 'blocked': 3, 'skip': 2, 'skipped': 1, 'noface': 1, 'noface_skip': 1 }
 # the tabs over the list, shown once it has more than one type of target
@@ -652,6 +654,11 @@ class BatchPage(SourceSelection, QWidget):
 		self.preview_result = QPixmap()
 		self.preview_target = QPixmap()
 		self.shown_view = 'target'
+		# a row with ✓ shows its finished file instead of a preview, until refresh or, with Auto on, a setting change
+		# asks for a new preview of it: finished_shown says the view holds that file, fresh_for is the row asked to preview
+		self.finished_shown = False
+		self.fresh_for : Optional[Tuple] = None
+		self.finished_frames : 'OrderedDict[Tuple, QPixmap]' = OrderedDict()
 		self.removed_count = 0
 		self.load_sources()
 		# the batch has its own processors and options, the system settings from Setup are shared
@@ -1018,7 +1025,7 @@ class BatchPage(SourceSelection, QWidget):
 		session.content_checked.connect(self.on_content_checked)
 		self.store.value_changed.connect(self.on_value_changed)
 		self.store.schema_changed.connect(self.refresh_timer.start)
-		self.store.schema_changed.connect(self.schedule_preview)
+		self.store.schema_changed.connect(self.preview_settings_changed)
 		# copied options or a preset change many values at once
 		self.store.schema_changed.connect(self.refresh_locks)
 		self.source_card.refresh(self.source_paths)
@@ -1104,7 +1111,7 @@ class BatchPage(SourceSelection, QWidget):
 		header.addWidget(self.live_button)
 		# while a preview runs it is its Stop button, the bar runs along the bottom of the picture
 		self.refresh_button = tool_button(FluentIcon.SYNC, 'Make the preview now', card)
-		self.refresh_button.clicked.connect(lambda: self.stop_preview() if self.preview_running else self.schedule_preview(True))
+		self.refresh_button.clicked.connect(self.on_refresh_clicked)
 		header.addWidget(self.refresh_button)
 		self.swap_button = tool_button(SwapIcon(), 'Swap between the target and the result of the last preview. Clicking again flips back', card)
 		self.swap_button.clicked.connect(self.swap_view)
@@ -1209,14 +1216,14 @@ class BatchPage(SourceSelection, QWidget):
 
 	def on_sources_changed(self, change : str) -> None:
 		self.refresh_matches()
-		self.schedule_preview()
+		self.preview_settings_changed()
 
 	def on_value_changed(self, dest : str, _ : object) -> None:
 		self.refresh_timer.start()
 		schema = self.store.schema
 		group = schema.options.get(dest, {}).get('group') if schema else None
 		if not schema or group not in LIVE_IGNORED_GROUPS:
-			self.schedule_preview()
+			self.preview_settings_changed()
 		if not schema or group in FACE_GROUPS + MASK_GROUPS or dest == 'processors':
 			# the face closest to a pick can change with the detector or the distance, the next scan finds it again
 			self.reference_matches.clear()
@@ -1404,13 +1411,22 @@ class BatchPage(SourceSelection, QWidget):
 		return next((row for row in range(self.match_list.count()) if not self.match_list.item(row).isHidden()), 0)
 
 	def on_selection_changed(self) -> None:
+		item = self.preview_item()
+		# a new preview asked for one row, another row selected shows its finished file again
+		if not item or self.run_key(item) != self.fresh_for:
+			self.fresh_for = None
 		self.refresh_start_button()
 		self.refresh_skip_button()
 		self.refresh_list_status()
 		self.sync_timeline()
 		self.follow_selection()
 		self.refresh_step_buttons()
-		item = self.preview_item()
+		if item and self.live_button.isChecked() and self.finished_output(item):
+			# no facefusion needed, it shows at once
+			self.preview_timer.stop()
+			if not self.finished_shown or self.run_key(item) != self.shown_key:
+				self.show_finished(item)
+			return
 		if item and (not self.preview_run or self.run_key(item) != self.run_key(self.preview_run)):
 			self.schedule_preview()
 
@@ -1567,7 +1583,7 @@ class BatchPage(SourceSelection, QWidget):
 		self.shown_view = view
 		self.swap_button.setEnabled(not self.preview_result.isNull())
 		if view == 'result':
-			self.preview_view.set_compare(self.preview_target, self.preview_result)
+			self.preview_view.set_compare(self.preview_target, self.preview_result, ('Target', 'Output' if self.finished_shown else 'Result'))
 		else:
 			self.preview_view.set_pixmap(self.preview_target)
 
@@ -1575,12 +1591,101 @@ class BatchPage(SourceSelection, QWidget):
 		"""another target or frame shows, the result of the last preview no longer belongs to it"""
 		self.preview_result = QPixmap()
 		self.shown_view = 'target'
+		self.finished_shown = False
 		self.swap_button.setEnabled(False)
 
+	def on_refresh_clicked(self) -> None:
+		"""stops the running preview, else makes a new one with the current settings, also of a row with ✓"""
+		if self.preview_running:
+			self.stop_preview()
+			return
+		item = self.preview_item()
+		self.fresh_for = self.run_key(item) if item else None
+		self.schedule_preview(True)
+
+	def preview_settings_changed(self, *_) -> None:
+		"""with Auto on a changed setting previews the selected row again, a row with ✓ too, its file shows the old settings"""
+		if self.live_button.isChecked():
+			item = self.preview_item()
+			self.fresh_for = self.run_key(item) if item else None
+		self.schedule_preview()
+
+	def finished_output(self, item : Dict[str, Any]) -> Optional[str]:
+		"""the file a row with ✓ made, None when it is gone, a new preview of the row was asked for or its frames cannot be lined up"""
+		output = item.get('output') or ''
+		if item.get('status') != 'done' or self.run_key(item) == self.fresh_for or not os.path.isfile(output):
+			return None
+		# a video turned into an animated webp reads as a picture, its frames do not line up with the video's
+		if media_kind(output) != media_kind(item.get('target')):
+			return None
+		return output
+
+	def finished_frame(self, item : Dict[str, Any], output : str, size : Tuple[int, int]) -> QPixmap:
+		"""the output's frame at the time of the target's picked frame, at the size of the shown target frame. the batch
+		makes the whole video, untrimmed, so the same time is the same frame even at another frame rate"""
+		target = item.get('target')
+		index = self.preview_frame_index(target)
+		try:
+			stamp = os.path.getmtime(output)
+		except OSError:
+			return QPixmap()
+		key = (output, stamp, index, size)
+		if key in self.finished_frames:
+			self.finished_frames.move_to_end(key)
+			return self.finished_frames[key]
+		if media_kind(output) == 'video' and index > 0:
+			target_fps = self.timeline_reader.fps if self.timeline_reader and target == self.timeline_target else 0.0
+			reader = VideoReader(output)
+			frame = None
+			if reader.frame_count:
+				out_index = round(index / target_fps * reader.fps) if target_fps > 0 and reader.fps > 0 else index
+				frame = reader.read(min(out_index, reader.frame_count - 1))
+			reader.release()
+		else:
+			frame = read_frame(output)
+		if frame is None:
+			return QPixmap()
+		# the output can be bigger than the target (Output Resolution), it lines up with the target frame in the compare view
+		frame = cv2.resize(frame, size, interpolation = cv2.INTER_AREA)
+		pixmap = to_pixmap(frame)
+		self.finished_frames[key] = pixmap
+		while len(self.finished_frames) > 12:
+			self.finished_frames.popitem(last = False)
+		return pixmap
+
+	def show_finished(self, item : Dict[str, Any]) -> bool:
+		"""shows the file a row with ✓ made beside its target, like a preview. False when it could not be read"""
+		output = self.finished_output(item)
+		frame = self.scaled_frame(item) if output else None
+		if frame is None:
+			return False
+		height, width = frame.shape[:2]
+		result = self.finished_frame(item, output, (width, height))
+		if result.isNull():
+			return False
+		self.preview_timer.stop()
+		self.preview_waiting = False
+		self.preview_view.set_faces([])
+		self.preview_frame = frame
+		self.preview_frame_key = (item.get('target'), self.preview_frame_index(item.get('target')))
+		self.shown_key = self.run_key(item)
+		self.preview_target = to_pixmap(frame)
+		self.preview_result = result
+		self.finished_shown = True
+		self.show_view('result')
+		target = item.get('target')
+		name = short_name(target) + (' #%d' % self.preview_frame_index(target) if media_kind(target) == 'video' else '')
+		self.preview_label.setText('%s  ·  finished output, ⟳ makes a new preview with the current settings' % name)
+		self.schedule_face_scan()
+		return True
+
 	def show_target(self) -> None:
-		"""with Auto off the selected output shows its target, the preview button makes the preview of it"""
+		"""with Auto off the selected output shows its target, the preview button makes the preview of it. a row with ✓ shows
+		its finished file"""
 		item = self.preview_item()
 		if not item:
+			return
+		if self.finished_output(item) and self.show_finished(item):
 			return
 		self.shown_key = self.run_key(item)
 		frame = self.scaled_frame(item)
@@ -1688,6 +1793,9 @@ class BatchPage(SourceSelection, QWidget):
 		item = self.preview_item()
 		if not item or item.get('target') != self.timeline_target:
 			return
+		if self.finished_output(item) and self.show_finished(item):
+			self.save()
+			return
 		frame = self.scaled_frame(item)
 		if frame is None:
 			return
@@ -1746,6 +1854,9 @@ class BatchPage(SourceSelection, QWidget):
 			self.preview_view.set_pixmap(QPixmap())
 			self.preview_label.setText('')
 			return
+		# a row with ✓ shows the file it made, that needs no facefusion
+		if self.finished_output(item) and self.show_finished(item):
+			return
 		# a batch, another page or the last preview is still running, this one follows once facefusion is free
 		if self.running or not self.isVisible() or self.session.runner.is_running():
 			self.preview_waiting = True
@@ -1796,6 +1907,8 @@ class BatchPage(SourceSelection, QWidget):
 		self.display_preview_frame(item, frame)
 		self.preview_run = item
 		self.preview_run_frame = frame
+		# a new preview of a row with ✓ replaces its finished file once it is made
+		self.finished_shown = False
 		self.preview_running = True
 		self.schedule_face_scan()
 		if not self.session.run_facefusion('Batch preview of ' + os.path.basename(item.get('target')), args, preview = True):
@@ -1854,6 +1967,10 @@ class BatchPage(SourceSelection, QWidget):
 		if self.preview_run is None:
 			# the list was emptied while it ran, the preview stays empty
 			self.preview_label.setText('')
+		elif self.finished_shown:
+			# a row with ✓ was selected while this ran, its finished file stays
+			if exit_code == 0:
+				self.session.remember_preview_seconds(self.preview_estimate, elapsed)
 		elif exit_code == 0 and os.path.exists(output_path):
 			self.session.remember_preview_seconds(self.preview_estimate, elapsed)
 			self.preview_target = to_pixmap(self.preview_run_frame)
@@ -1981,7 +2098,7 @@ class BatchPage(SourceSelection, QWidget):
 		self.save()
 		self.face_picker.set_chosen(position if self.reference_picks.get(target) == pick else self.default_position())
 		self.schedule_face_scan()
-		self.schedule_preview()
+		self.preview_settings_changed()
 
 	def default_position(self) -> int:
 		"""the face a target without a pick gets changed, the Position option counting largest first"""
@@ -2217,8 +2334,56 @@ class BatchPage(SourceSelection, QWidget):
 			taken.add(key)
 		return items
 
-	def refresh_matches(self, keep_results : bool = False) -> None:
-		"""plans the outputs again, keep_results leaves the runs that ended in the list with what they made"""
+	@staticmethod
+	def finished_key(item : Dict[str, Any]) -> str:
+		"""an output's face and target, as the key it is remembered by once made"""
+		return os.path.normcase('|'.join([ item.get('target') or '' ] + list(item.get('sources') or [])))
+
+	def remember_finished(self, item : Dict[str, Any]) -> None:
+		"""an output made by a batch, so the list shows it with ✓ again after a restart"""
+		try:
+			target_modified = os.path.getmtime(item.get('target'))
+		except OSError:
+			return
+		remembered = dict(self.session.config.get('batch_finished') or {})
+		key = self.finished_key(item)
+		remembered.pop(key, None)
+		remembered[key] = { 'output': item.get('output'), 'target_modified': target_modified }
+		# the newest are kept, the list does not grow without end
+		while len(remembered) > FINISHED_REMEMBERED:
+			remembered.pop(next(iter(remembered)))
+		self.session.config.set('batch_finished', remembered)
+
+	def made_before(self, item : Dict[str, Any]) -> Dict[str, Any]:
+		"""an output a batch made before, also before a restart, shows with ✓ and the file it made, while that file is still
+		in the output folder and its target unchanged. Run Batch skips it, Run Selected and its ▶ button make it again"""
+		if item.get('status'):
+			return item
+		entry = (self.session.config.get('batch_finished') or {}).get(self.finished_key(item))
+		output_dir = self.output_dir()
+		if not output_dir:
+			return item
+		if not isinstance(entry, dict):
+			# not remembered, from before outputs were: a file at the planned name is taken as made, the name has no {n}
+			# (automatic names and {n} never land on a file that is there), and the file is newer than its target
+			try:
+				made = item.get('replaces') and not item.get('repeated') and os.path.getmtime(item.get('output')) >= os.path.getmtime(item.get('target'))
+			except OSError:
+				made = False
+			return dict(item, status = 'done', guessed = True) if made else item
+		output = entry.get('output') or ''
+		inside = os.path.normcase(os.path.normpath(output)).startswith(os.path.normcase(os.path.normpath(output_dir)) + os.sep)
+		try:
+			unchanged = os.path.getmtime(item.get('target')) == entry.get('target_modified')
+		except OSError:
+			unchanged = False
+		if not inside or not unchanged or not os.path.isfile(output):
+			return item
+		return dict(item, output = output, name = os.path.relpath(output, output_dir), replaces = False, repeated = False, status = 'done')
+
+	def refresh_matches(self, keep_results : bool = False, restore : bool = True) -> None:
+		"""plans the outputs again, keep_results leaves the runs that ended in the list with what they made. restore shows
+		the outputs made before with ✓, Run Batch plans them anew to make them again"""
 		if self.running:
 			return
 		# a change the user made and that is still waiting starts the list over
@@ -2228,6 +2393,8 @@ class BatchPage(SourceSelection, QWidget):
 		self.plan_items = self.plan()
 		finished = { self.run_key(item): item for item in self.items if item.get('status') in FINISHED } if keep_results else {}
 		self.items = [ finished.get(self.run_key(item), item) for item in self.plan_items ]
+		if restore:
+			self.items = [ self.made_before(item) for item in self.items ]
 		for order, item in enumerate(self.items):
 			item['order'] = order
 		self.forget_changed_targets()
@@ -2279,7 +2446,9 @@ class BatchPage(SourceSelection, QWidget):
 		repeated = sum(1 for item in plan if item.get('repeated'))
 		if repeated:
 			notes.append('%d %s the same name as another, add {source} or {n}' % (repeated, 'output has' if repeated == 1 else 'outputs have'))
-		replaces = sum(1 for item in plan if item.get('replaces') and not item.get('repeated'))
+		# a file taken as already made is skipped by Run Batch, it is not replaced
+		made = { self.run_key(item) for item in self.items if item.get('status') == 'done' }
+		replaces = sum(1 for item in plan if item.get('replaces') and not item.get('repeated') and self.run_key(item) not in made)
 		if replaces:
 			notes.append('%s, add {n} to keep both' % ('replaces an existing file' if replaces == 1 else '%d replace existing files' % replaces))
 		unknown = unknown_tags(template)
@@ -2590,6 +2759,14 @@ class BatchPage(SourceSelection, QWidget):
 		if not items:
 			self.session.notify.emit('warning', 'Nothing to do', 'No target files match the folder and filter, and no files were added to the list.')
 			return
+		# Run Batch and a tab's run skip the outputs made before (✓), selected ones are made again on purpose
+		made = [ item for item in items if item.get('status') == 'done' ]
+		if made and not self.run_selection():
+			items = [ item for item in items if item.get('status') != 'done' ]
+			if not items:
+				self.session.notify.emit('info', 'Already made', '%s already made (✓). To make one again, press ▶ on its row, or select rows and press Run Selected.' % ('All (%d) outputs are' % len(made) if len(made) > 1 else 'This output is'))
+				return
+			selected = { self.run_key(item) for item in items }
 		if not self.output_dir():
 			self.session.notify.emit('warning', 'No output folder', 'Choose where the results go.')
 			return
@@ -2968,6 +3145,10 @@ class BatchPage(SourceSelection, QWidget):
 			self.session.preview_worker.stop()
 		elif exit_code == 0:
 			item['status'] = 'done'
+			self.remember_finished(item)
+			# the selected row just finished, its file shows in place of the target or an older preview
+			if self.preview_item() is item and not self.preview_running:
+				self.show_finished(item)
 		elif exit_code == -1:
 			item['status'] = 'skipped' if self.skipping and not self.stopped else ''
 		elif self.session.nsfw_block_is_certain():
