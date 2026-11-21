@@ -16,7 +16,7 @@ from ffstudio import FACEFUSION_MANAGEMENT
 from ffstudio.config import APP_DIR, DATA_DIR, PREVIEW_DIR, SCHEMA_FILE, AppConfig
 from ffstudio.environment import create_process_environment, is_facefusion_root, probe_python_version, version_tuple
 from ffstudio.media import GIF_EXTENSIONS, extension, gif_as_video, gif_video_path, media_kind, needs_conversion, read_facefusion_frame, usable_path
-from ffstudio.runner import PreviewWorker, ProcessRunner
+from ffstudio.runner import RED_LINES, PreviewWorker, ProcessRunner
 from ffstudio.schema import Schema, build_option_args, schema_is_stale
 
 MINIMUM_PYTHON = (3, 13)
@@ -39,7 +39,8 @@ PREVIEW_SECONDS = { 'preview_seconds': 6.0, 'preview_seconds_warm': 2.0, 'batch_
 
 
 def is_error_line(line : str) -> bool:
-	return bool(EXCEPTION_PATTERN.match(line) or FACEFUSION_ERROR_PATTERN.match(line) or USAGE_ERROR_PATTERN.match(line))
+	"""also any line facefusion printed in red, its error level, whatever it says"""
+	return line in RED_LINES or bool(EXCEPTION_PATTERN.match(line) or FACEFUSION_ERROR_PATTERN.match(line) or USAGE_ERROR_PATTERN.match(line))
 
 
 MISSING_MODULE_PATTERN = re.compile(r"No module named '([\w.]+)'")
@@ -146,6 +147,9 @@ class Session(QObject):
 	content_checked = Signal(str, list, int)
 	# a batch keeps facefusion from its first check to its last output, other pages wait for it to end
 	batch_running_changed = Signal(bool)
+	# runner, exit code, seconds: a run ended, heard before any page's own finished slot, so Console writes how it ended
+	# before a page starts the next command from its slot
+	run_ended = Signal(object, int, float)
 
 	def __init__(self) -> None:
 		super().__init__()
@@ -165,6 +169,9 @@ class Session(QObject):
 		self.task_is_preview = False
 		self.python_version : Optional[str] = None
 		self.schema_runner = ProcessRunner(self)
+		# connected first, slots run in the order they were connected
+		for runner in [ self.runner, self.schema_runner ]:
+			runner.finished.connect(lambda exit_code, elapsed, runner = runner: self.run_ended.emit(runner, exit_code, elapsed))
 		self.schema_runner.finished.connect(self.on_schema_finished)
 		self.schema_log : List[str] = []
 		self.schema_runner.log.connect(self.schema_log.append)

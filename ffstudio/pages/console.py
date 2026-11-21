@@ -5,9 +5,9 @@ from collections import deque
 from typing import List, Optional, Tuple
 
 from PySide6.QtGui import QColor, QFont, QGuiApplication, QPainter, QPaintEvent, QResizeEvent, QSyntaxHighlighter, QTextCharFormat, QTextCursor, QTextDocument
-from PySide6.QtCore import QRect, QStandardPaths, Qt
+from PySide6.QtCore import QObject, QRect, QStandardPaths, Qt
 from PySide6.QtWidgets import QFileDialog, QHBoxLayout, QSizePolicy, QVBoxLayout, QWidget
-from qfluentwidgets import BodyLabel, CaptionLabel, FluentIcon, PlainTextEdit, PushButton, SubtitleLabel, SwitchButton, ToolTipFilter, isDarkTheme, qconfig
+from qfluentwidgets import BodyLabel, CaptionLabel, FluentIcon, PlainTextEdit, PushButton, SubtitleLabel, SwitchButton, ToolTipFilter, isDarkTheme, qconfig, setCustomStyleSheet
 
 from ffstudio.media import format_seconds
 from ffstudio.privacy import COMPUTER_NAME, COMPUTER_NAME_STAND_IN, FOLDERS_STAND_IN, USER_NAME, USER_NAME_STAND_IN, FileNames, hide_private, program_folders
@@ -47,6 +47,8 @@ TOOL_ERROR_PATTERN = re.compile(r'^(?:ERROR|error|fatal)\b:?')
 # a finished facefusion stage: · Extracting  3.2 s  1240/1240 frames
 STAGE_PREFIX = '  · '
 # the line number column, (light, dark)
+# the log's background in light and dark, the color qfluentwidgets gives a text box with focus
+LOG_BACKGROUND = ('#ffffff', '#1e1e1e')
 GUTTER_COLORS = { 'background': ('#f0f0f0', '#2b2b2b'), 'border': ('#dcdcdc', '#3a3a3a'), 'number': ('#9a9a9a', '#7a7a7a') }
 
 
@@ -92,6 +94,9 @@ class LogView(PlainTextEdit):
 		self.blockCountChanged.connect(lambda _: self.place_numbers())
 		self.updateRequest.connect(self.on_update_request)
 		qconfig.themeChanged.connect(self.numbers.update)
+		# the log keeps the background a focused box has, not a lighter one that changes with every click in and out of it
+		states = 'PlainTextEdit, PlainTextEdit:hover, PlainTextEdit:focus { background-color: %s; }'
+		setCustomStyleSheet(self, states % LOG_BACKGROUND[0], states % LOG_BACKGROUND[1])
 		self.place_numbers()
 
 	def line_number(self, block_number : int) -> int:
@@ -250,7 +255,7 @@ class ConsolePage(QWidget):
 			runner.started.connect(self.on_started)
 			runner.log.connect(self.on_log)
 			runner.progress.connect(self.on_progress)
-			runner.finished.connect(self.on_finished)
+		session.run_ended.connect(self.on_finished)
 		self.task_text = 'Idle'
 		session.busy_changed.connect(lambda busy, task: self.show_task(task if busy else 'Idle'))
 
@@ -339,6 +344,7 @@ class ConsolePage(QWidget):
 		if run is not None:
 			run['errors'] = []
 			run['stage'] = None
+			run['command'] = command
 			# set_task comes before the runner starts
 			if self.sender() is self.session.runner:
 				run['task'] = self.session.task
@@ -372,8 +378,8 @@ class ConsolePage(QWidget):
 		status = stage['status'].replace('  ·  ', '  ')
 		self.append('%s%s  %s%s' % (STAGE_PREFIX, stage_name(stage['title']), format_seconds(time.monotonic() - stage['start']), '  ' + status if status else ''))
 
-	def on_finished(self, exit_code : int, elapsed : float) -> None:
-		run = self.runs.get(self.sender()) or { 'task': '', 'errors': [], 'stage': None }
+	def on_finished(self, runner : QObject, exit_code : int, elapsed : float) -> None:
+		run = self.runs.get(runner) or { 'task': '', 'errors': [], 'stage': None }
 		# the stage it failed in, unless it got to the end of it
 		stage = run.get('stage')
 		failed_stage = stage_name(stage['title']) if stage and stage['ratio'] < 1.0 else ''
@@ -383,12 +389,12 @@ class ConsolePage(QWidget):
 			return
 		during = ' while %s' % failed_stage if failed_stage else ''
 		self.append('— %s failed%s after %s (exit code %d)' % (run['task'] or 'The command', during, format_seconds(elapsed), exit_code))
-		why, fix = self.explain_failure(run['errors'], self.sender() is self.session.runner)
+		why, fix = self.explain_failure(run['errors'], runner is self.session.runner, run.get('command', ''))
 		self.append(WHY_PREFIX + why)
 		if fix:
 			self.append(FIX_PREFIX + fix)
 
-	def explain_failure(self, error_lines : List[str], facefusion_run : bool) -> Tuple[str, str]:
+	def explain_failure(self, error_lines : List[str], facefusion_run : bool, command : str = '') -> Tuple[str, str]:
 		# a python exception says the most, then facefusion's own error lines, then a tool's
 		exceptions = [ line for line in error_lines if EXCEPTION_PATTERN.match(line) ]
 		line = (exceptions or error_lines or [ '' ])[-1]
@@ -399,4 +405,6 @@ class ConsolePage(QWidget):
 			return self.session.nsfw_block_message(False), 'Pick another target. Pre-Check tells you before a run.'
 		if line:
 			return line, ''
+		if facefusion_run and ' facefusion.py ' in command + ' ':
+			return 'FaceFusion stopped without giving a reason, which usually means its NSFW filter refused the target.', 'Pre-Check tells you before a run. If the target is fine, the lines above are the whole log.'
 		return 'It stopped without giving a reason.', 'The lines above are the whole log. If the target is an image, the NSFW filter may have refused it: try Pre-Check.'

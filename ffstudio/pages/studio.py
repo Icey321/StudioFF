@@ -2356,7 +2356,9 @@ class StudioPage(SourceSelection, QWidget):
 				else:
 					# an image gives no reason when it is refused, the check confirms it and finds what was flagged
 					self.detail_label.setText('Confirming with the NSFW check…')
-					self.check_content(True, PREVIEW_FRAME if self.preview_mode else '')
+					# after every listener saw this run end, else Console takes the check for the failed run and loses its reason
+					checked = PREVIEW_FRAME if self.preview_mode else ''
+					QTimer.singleShot(0, lambda: self.check_content(True, checked))
 			else:
 				status, message = self.session.describe_run_error()
 				self.status_label.setText(status if self.session.run_error() else 'Failed (exit code %d)' % exit_code)

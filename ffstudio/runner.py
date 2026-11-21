@@ -4,7 +4,7 @@ import os
 import re
 import subprocess
 import time
-from typing import Any, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from PySide6.QtCore import QObject, QProcess, QProcessEnvironment, QTimer, Signal
 
@@ -17,6 +17,18 @@ PROGRESS_PATTERN = re.compile(r'\x1b\[38;5;250m[^\x1b•]*•\x1b\[0m \x1b\[38;5
 # facefusion's log line, colors taken off: <group> ┬ or │ <module>  <message>, the group is left out under the first line of a group
 # not a row of facefusion's tables, those start with │ itself
 LOG_LINE_PATTERN = re.compile(r'^\S*\s+[┬│]\s(?P<module>\S+)\s+(?P<message>.*)$')
+# facefusion prints the message of an error-level log line in this red, the colors are gone by the time a line is read
+ERROR_COLOR = '\x1b[38;5;204m'
+# the plain text of the lines facefusion printed in red, newest last, is_error_line counts them as errors
+RED_LINES : Dict[str, None] = {}
+RED_LINES_LIMIT = 500
+
+
+def remember_red_line(line : str) -> None:
+	RED_LINES.pop(line, None)
+	RED_LINES[line] = None
+	while len(RED_LINES) > RED_LINES_LIMIT:
+		del RED_LINES[next(iter(RED_LINES))]
 
 
 def plain_log_line(line : str) -> str:
@@ -190,6 +202,8 @@ class ProcessRunner(QObject):
 		for part in text.replace('\r', '\n').split('\n'):
 			line = plain_log_line(ANSI_PATTERN.sub('', part).rstrip())
 			if line.strip():
+				if ERROR_COLOR in part:
+					remember_red_line(line)
 				self.log.emit(line)
 
 	def on_finished(self, exit_code : int, exit_status : QProcess.ExitStatus) -> None:
