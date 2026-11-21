@@ -25,7 +25,7 @@ from ffstudio.pages.setup import SYSTEM_GROUPS, form_row
 from ffstudio.platforms import show_in_folder
 from ffstudio.pages.studio import LOCK_DRIVERS, LIVE_IGNORED_GROUPS, PREVIEW_MAX_SIDE, NameTagsView, SettingsColumn, SourceCard, SourceSelection, StudioPage, SWITCH_TIP, elastic, face_crops, selector_hint, estimated_progress, preview_step_floor, run_tag_values, tool_button
 from ffstudio.session import OptionStore, Session, describe_error, folder_is_writable
-from ffstudio.widgets import CollapsibleCard, DriveLabel, FacePicker, IconCountButton, PreviewView, Splitter, StatusLabel, SwapIcon, add_edit_button, attach_landmarks_cycle, collect_drop_paths, guard_wheel, landmarks_mode, with_drive_bar
+from ffstudio.widgets import CollapsibleCard, DriveLabel, FacePicker, IconCountButton, PreviewView, Splitter, StageBar, StatusLabel, SwapIcon, MAIN_BAR_HEIGHT, is_streamed, stage_name, add_edit_button, attach_landmarks_cycle, collect_drop_paths, guard_wheel, landmarks_mode, with_drive_bar
 
 TARGET_FILTERS = [ ('*.*', 'All files'), ('*.mp4', 'MP4 videos'), ('*.jpg', 'JPG images'), ('*.png', 'PNG images'), ('*.mov', 'MOV videos'), ('*.webm', 'WebM videos'), ('*.gif', 'GIF animations') ]
 DEFAULT_TEMPLATE = '{target}_{source}'
@@ -1004,11 +1004,15 @@ class BatchPage(SourceSelection, QWidget):
 		self.status_label = StatusLabel('Ready', run_card)
 		self.progress = ProgressBar(run_card)
 		self.progress.setRange(0, 1000)
+		self.progress.setFixedHeight(MAIN_BAR_HEIGHT)
 		status_line = QHBoxLayout()
 		status_line.addWidget(self.status_label.done_icon)
 		status_line.addWidget(self.status_label, 1)
 		status.addLayout(status_line)
 		status.addWidget(self.progress)
+		# the stages of the output being made, under the bar of the whole batch
+		self.stage_bar = StageBar(run_card)
+		status.addWidget(self.stage_bar)
 		run_layout.addLayout(status, 1)
 		run_layout.addSpacing(10)
 		self.time_label = BodyLabel('', run_card)
@@ -1024,6 +1028,7 @@ class BatchPage(SourceSelection, QWidget):
 		layout.addWidget(run_card)
 
 		session.busy_changed.connect(self.on_busy_changed)
+		self.refresh_stage_bar()
 		session.runner.progress.connect(self.on_progress)
 		session.runner.log.connect(self.on_log)
 		session.runner.finished.connect(self.on_finished)
@@ -1227,7 +1232,13 @@ class BatchPage(SourceSelection, QWidget):
 		self.refresh_matches()
 		self.preview_settings_changed()
 
+	def refresh_stage_bar(self) -> None:
+		"""with Workflow Strategy Memory a video has only Processing, with Disk Extracting and Merging around it"""
+		self.stage_bar.set_streamed(is_streamed(self.run_values()))
+
 	def on_value_changed(self, dest : str, _ : object) -> None:
+		if dest == 'workflow_strategy' and not self.running:
+			self.refresh_stage_bar()
 		self.refresh_timer.start()
 		schema = self.store.schema
 		group = schema.options.get(dest, {}).get('group') if schema else None
@@ -3049,6 +3060,7 @@ class BatchPage(SourceSelection, QWidget):
 		self.run_task = ''
 		self.progress.setValue(0)
 		self.progress.resume()
+		self.stage_bar.clear()
 		self.run_next()
 
 	def stop(self) -> None:
@@ -3106,6 +3118,7 @@ class BatchPage(SourceSelection, QWidget):
 		self.paused_at = time.monotonic()
 		self.run_clock.stop()
 		self.progress.pause()
+		self.stage_bar.pause()
 		# frozen, facefusion and its ffmpeg use no cpu or gpu, windows moves their memory to disk when other programs need it
 		if self.current >= 0 and not self.session.runner.freeze(True):
 			self.status_label.setText('Pausing after this output  ·  ' + self.run_task)
@@ -3135,6 +3148,7 @@ class BatchPage(SourceSelection, QWidget):
 		self.run_clock.start()
 		self.show_run_time()
 		self.progress.resume()
+		self.stage_bar.resume()
 		if self.current >= 0:
 			self.session.runner.freeze(False)
 			self.status_label.setText(self.run_task)
@@ -3169,6 +3183,9 @@ class BatchPage(SourceSelection, QWidget):
 		item['made_with'] = self.made_with(item)
 		self.refresh_item(self.current)
 		self.started_count += 1
+		self.stage_bar.clear()
+		self.stage_bar.set_picture(media_kind(item.get('target')) == 'image' and not is_animation(item.get('target'), item.get('output')))
+		self.refresh_stage_bar()
 		args = [ 'run' ]
 		if item.get('sources'):
 			args += [ '-s' ] + item.get('sources')
@@ -3203,9 +3220,11 @@ class BatchPage(SourceSelection, QWidget):
 		self.refresh_skip_button()
 
 	def on_progress(self, title : str, ratio : float, status : str) -> None:
+		if self.running and self.current >= 0:
+			self.stage_bar.show_stage(title, ratio)
 		# the stages around the frames, Extracting, Merging, only name the stage: only the frames count toward the output
 		if self.running and self.current >= 0 and title and title.lower() != PROCESSING_TITLE:
-			self.status_label.setText('%s  ·  %s %d%%' % (self.run_task, title[:1].upper() + title[1:], int(ratio * 100)))
+			self.status_label.setText('%s  ·  %s %d%%' % (self.run_task, stage_name(title), int(ratio * 100)))
 			return
 		if self.running and self.current >= 0 and title.lower() == PROCESSING_TITLE:
 			item = self.items[self.current]
@@ -3239,19 +3258,24 @@ class BatchPage(SourceSelection, QWidget):
 			item['status'] = ''
 			self.started_count -= 1
 			self.session.preview_worker.stop()
+			self.stage_bar.clear()
 		elif exit_code == 0:
 			item['status'] = 'done'
+			self.stage_bar.finish()
 			self.remember_finished(item)
 			# the selected row just finished, its file shows in place of the target or an older preview
 			if self.preview_item() is item and not self.preview_running:
 				self.show_finished(item)
 		elif exit_code == -1:
 			item['status'] = 'skipped' if self.skipping and not self.stopped else ''
+			self.stage_bar.pause()
 		elif self.session.nsfw_block_is_certain():
 			item['status'] = 'blocked'
+			self.stage_bar.pause()
 			self.check_results[item.get('target')] = { 'path': item.get('target'), 'kind': 'video', 'blocked': True, 'rate': self.session.content_rate, 'checked': 0, 'flagged': [], 'previews': [] }
 		else:
 			item['status'] = 'failed'
+			self.stage_bar.error()
 			error = self.session.run_error() or ''
 			item['reason'] = ((describe_error(error) or [ error ])[0]).rstrip('.')[:120]
 			# an image gives no reason when it is refused, the nsfw check confirms it once the batch is done

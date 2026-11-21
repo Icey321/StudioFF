@@ -175,6 +175,193 @@ class StatusLabel(BodyLabel):
 			self.done_icon.setVisible(done)
 
 
+# the stages facefusion reports progress for, by the title it prints, and the slot each one fills (spawning stands in for extracting when a picture becomes a video)
+# analysing is facefusion's nsfw scan of a video, before everything else
+STAGE_SLOTS = { 'analysing': 0, 'extracting': 1, 'spawning': 1, 'processing': 2, 'merging': 3 }
+STAGE_NAMES = [ 'Analyzing', 'Extracting', 'Processing', 'Merging' ]
+ANALYZING, EXTRACTING, PROCESSING, MERGING = range(4)
+# the run's main bar stands out a little, the stage bars under it are thin (qfluentwidgets draws 4 px)
+MAIN_BAR_HEIGHT = 6
+STAGE_BAR_HEIGHT = 3
+# how much of a whole video run each stage is, for a bar that shows the run as one; streamed: Workflow Strategy Memory, no Extracting or Merging
+STAGE_SHARES = [ 0.05, 0.1, 0.75, 0.1 ]
+STREAMED_SHARES = [ 0.1, 0.0, 0.9, 0.0 ]
+
+
+# facefusion writes British English, StudioFF shows American English
+US_SPELLING = { 'analysing': 'analyzing', 'analyse': 'analyze' }
+
+
+def stage_name(title : str) -> str:
+	"""facefusion names its stages in lower case: extracting reads Extracting, analysing reads Analyzing"""
+	title = (title or '').strip()
+	title = US_SPELLING.get(title.lower(), title)
+	return title[:1].upper() + title[1:]
+
+
+def is_streamed(values) -> bool:
+	"""whether a run with these options changes the frames as it reads them (Workflow Strategy Memory, facefusion's default), with no Extracting or Merging"""
+	return (values.get('workflow_strategy') or 'memory') != 'disk'
+
+
+def stage_slot(title : str) -> int:
+	return STAGE_SLOTS.get((title or '').strip().lower(), -1)
+
+
+def overall_ratio(title : str, ratio : float, streamed : bool = False) -> Optional[float]:
+	"""how far a video run is as a whole while facefusion is at ratio of the stage title, None for a title that is not a stage
+
+	streamed: Workflow Strategy Memory, Processing is the whole run"""
+	slot = stage_slot(title)
+	if slot < 0:
+		return None
+	shares = STREAMED_SHARES if streamed else STAGE_SHARES
+	return sum(shares[:slot]) + shares[slot] * max(0.0, min(1.0, ratio))
+
+
+class StageBar(QWidget):
+	"""one short bar per stage of a run, Analyzing, Extracting, Processing, Merging, each with its name; finished stages stay full
+
+	only the stages that happen show: with Workflow Strategy Memory facefusion streams the frames, there is no Extracting or Merging (set_streamed).
+	a picture has no stages around its frame and facefusion reports no progress for it, so set_picture shows only Processing, running while the run goes
+	"""
+	def __init__(self, parent : Optional[QWidget] = None) -> None:
+		super().__init__(parent)
+		from qfluentwidgets import IndeterminateProgressBar, ProgressBar
+		layout = QHBoxLayout(self)
+		layout.setContentsMargins(0, 0, 0, 0)
+		layout.setSpacing(10)
+		self.parts : List[QWidget] = []
+		self.labels : List[CaptionLabel] = []
+		self.bars = []
+		for name in STAGE_NAMES:
+			part = QWidget(self)
+			line = QHBoxLayout(part)
+			line.setContentsMargins(0, 0, 0, 0)
+			line.setSpacing(6)
+			label = CaptionLabel(name, part)
+			bar = ProgressBar(part)
+			bar.setRange(0, 1000)
+			bar.setFixedHeight(STAGE_BAR_HEIGHT)
+			line.addWidget(label)
+			line.addWidget(bar, 1)
+			layout.addWidget(part, 1)
+			self.parts.append(part)
+			self.labels.append(label)
+			self.bars.append(bar)
+		# the Processing part of a picture: runs without a value
+		self.busy_bar = IndeterminateProgressBar(self.parts[PROCESSING], start = False)
+		self.busy_bar.setFixedHeight(STAGE_BAR_HEIGHT)
+		self.busy_bar.hide()
+		self.parts[PROCESSING].layout().addWidget(self.busy_bar, 1)
+		self.current = -1
+		self.picture = False
+		self.streamed = False
+		self.installEventFilter(ToolTipFilter(self))
+		self.clear()
+
+	def clear(self) -> None:
+		"""no run: all stages empty and gray"""
+		self.current = -1
+		self.set_picture(False)
+		for bar in self.bars:
+			bar.setValue(0)
+			bar.resume()
+		self.labels[EXTRACTING].setText(STAGE_NAMES[EXTRACTING])
+		self.refresh_labels()
+
+	def only_processing(self) -> bool:
+		"""a picture has no stage but Processing"""
+		return self.picture
+
+	def refresh_parts(self) -> None:
+		self.parts[ANALYZING].setVisible(not self.picture)
+		self.parts[EXTRACTING].setVisible(not self.picture and not self.streamed)
+		self.parts[MERGING].setVisible(not self.picture and not self.streamed)
+		if self.picture:
+			tip = 'The picture being made: FaceFusion changes it'
+		elif self.streamed:
+			tip = "The stages of the output being made: FaceFusion's NSFW filter scans the video, then FaceFusion changes its frames as it reads them (Workflow Strategy Memory)"
+		else:
+			tip = "The stages of the output being made: FaceFusion's NSFW filter scans the video, FaceFusion takes the frames out of it, changes them, then puts them back together (Workflow Strategy Disk)"
+		self.setToolTip(tip)
+
+	def set_streamed(self, streamed : bool) -> None:
+		"""Workflow Strategy Memory: the frames are changed as they are read, no Extracting or Merging"""
+		self.streamed = streamed
+		self.refresh_parts()
+
+	def set_picture(self, picture : bool) -> None:
+		"""a picture shows only Processing, running while it is made"""
+		self.picture = picture
+		self.bars[PROCESSING].setVisible(not picture)
+		self.busy_bar.setVisible(picture)
+		if picture:
+			self.current = PROCESSING
+			self.busy_bar.resume()
+			self.busy_bar.start()
+		else:
+			self.busy_bar.stop()
+		self.refresh_parts()
+		self.refresh_labels()
+
+	def show_stage(self, title : str, ratio : float) -> bool:
+		"""facefusion is at ratio of the stage title; False for a title that is not a stage"""
+		slot = stage_slot(title)
+		if slot < 0:
+			return False
+		if self.picture and slot != PROCESSING:
+			# a picture that shows stages after all is a video run
+			self.set_picture(False)
+		elif self.picture:
+			# a picture's Processing with a value: the real bar in place of the running one
+			self.busy_bar.stop()
+			self.busy_bar.hide()
+			self.bars[PROCESSING].show()
+		if self.streamed and slot in [ EXTRACTING, MERGING ]:
+			# the run extracts its frames after all
+			self.set_streamed(False)
+		if slot == EXTRACTING:
+			self.labels[EXTRACTING].setText(stage_name(title.lower()))
+		self.current = slot
+		for index, bar in enumerate(self.bars):
+			bar.setValue(1000 if index < slot else int(max(0.0, min(1.0, ratio)) * 1000) if index == slot else 0)
+		self.refresh_labels()
+		return True
+
+	def finish(self) -> None:
+		"""the output is made: every stage full"""
+		if self.picture:
+			# the running bar of a picture becomes a full one
+			self.busy_bar.stop()
+			self.busy_bar.hide()
+			self.bars[PROCESSING].show()
+		for bar in self.bars:
+			bar.setValue(1000)
+		self.current = len(self.bars)
+		self.refresh_labels()
+
+	def pause(self) -> None:
+		for bar in self.bars + [ self.busy_bar ]:
+			bar.pause()
+
+	def resume(self) -> None:
+		for bar in self.bars + [ self.busy_bar ]:
+			bar.resume()
+
+	def error(self) -> None:
+		for bar in self.bars + [ self.busy_bar ]:
+			bar.error()
+
+	def refresh_labels(self) -> None:
+		# stages not reached yet are gray
+		for index, label in enumerate(self.labels):
+			if index <= self.current:
+				label.setTextColor(QColor(0, 0, 0), QColor(255, 255, 255))
+			else:
+				label.setTextColor(QColor(150, 150, 150), QColor(120, 120, 120))
+
+
 class RangeSlider(QWidget):
 	"""a slider with two grips for a lower and an upper value, drawn like the fluent slider
 

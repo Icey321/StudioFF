@@ -26,7 +26,7 @@ from ffstudio.output_name import AUTOMATIC_TEMPLATE, NAME_EXAMPLES, NAME_TAGS, b
 from ffstudio.platforms import show_in_folder
 from ffstudio.presets import PresetBar
 from ffstudio.session import CONTENT_RESULT_PREFIX, Session, folder_is_writable
-from ffstudio.widgets import DisabledToolTipFilter, DriveLabel, FacePicker, GroupChip, PreviewView, ProcessorArea, ProcessorButton, Splitter, StatusLabel, Thumbnail, add_edit_button, attach_landmarks_cycle, collect_drop_paths, guard_wheel, landmarks_mode, with_drive_bar
+from ffstudio.widgets import DisabledToolTipFilter, DriveLabel, FacePicker, GroupChip, PreviewView, ProcessorArea, ProcessorButton, Splitter, StageBar, StatusLabel, Thumbnail, MAIN_BAR_HEIGHT, is_streamed, overall_ratio, stage_name, add_edit_button, attach_landmarks_cycle, collect_drop_paths, guard_wheel, landmarks_mode, with_drive_bar
 
 STUDIO_GROUPS = [ 'face_selector', 'face_masker', 'face_detector', 'face_aligner', 'face_tracker', 'output_creation', 'frame_extraction', 'frame_distribution', 'voice_extractor', 'workflow' ]
 # options whose value grays out other rows, besides the models (refresh_locks)
@@ -1496,8 +1496,17 @@ class StudioPage(SourceSelection, QWidget):
 		status_layout.addLayout(labels)
 		self.progress_bar = ProgressBar(card)
 		self.progress_bar.setRange(0, 1000)
+		self.progress_bar.setFixedHeight(MAIN_BAR_HEIGHT)
 		self.progress_bar.setValue(0)
 		status_layout.addWidget(self.progress_bar)
+		# the stages of the run, under the bar of the whole run
+		self.stage_bar = StageBar(card)
+		# hidden when it would only repeat the bar above, its room stays so the card keeps its height
+		policy = self.stage_bar.sizePolicy()
+		policy.setRetainSizeWhenHidden(True)
+		self.stage_bar.setSizePolicy(policy)
+		status_layout.addWidget(self.stage_bar)
+		self.refresh_stage_bar()
 		layout.addLayout(status_layout, 1)
 		layout.addSpacing(10)
 		self.time_label = BodyLabel('', card)
@@ -1655,6 +1664,8 @@ class StudioPage(SourceSelection, QWidget):
 			self.known_timer.start()
 
 	def on_value_changed(self, dest : str, _ : object) -> None:
+		if dest == 'workflow_strategy' and not self.run_active():
+			self.refresh_stage_bar()
 		if self.session.schema and self.session.schema.options.get(dest, {}).get('group') not in LIVE_IGNORED_GROUPS and dest not in [ 'reference_frame_index', 'trim_frame_start', 'trim_frame_end' ]:
 			self.schedule_live_preview()
 		if dest == 'processors' or dest.endswith('_model'):
@@ -1844,6 +1855,7 @@ class StudioPage(SourceSelection, QWidget):
 			self.status_label.setText('Stopped')
 			self.detail_label.setText('')
 			self.progress_bar.pause()
+			self.stage_bar.pause()
 			self.refresh_run_buttons()
 			if self.auto_check_pending:
 				QTimer.singleShot(0, self.auto_check_content)
@@ -1960,12 +1972,14 @@ class StudioPage(SourceSelection, QWidget):
 		self.paused_at = time.monotonic()
 		self.run_clock.stop()
 		self.progress_bar.pause()
+		self.stage_bar.pause()
 		# frozen, facefusion and its ffmpeg use no cpu or gpu, windows moves their memory to disk when other programs need it
 		if self.pending_output and self.session.runner.is_running() and not self.session.runner.freeze(True):
 			if not self.chain:
 				self.end_pause()
 				self.run_clock.start()
 				self.progress_bar.resume()
+				self.stage_bar.resume()
 				self.session.notify.emit('warning', 'Could not pause', 'FaceFusion could not be paused. Stop ends the run.')
 				self.refresh_run_buttons()
 				return
@@ -1998,6 +2012,7 @@ class StudioPage(SourceSelection, QWidget):
 		self.run_clock.start()
 		self.show_run_time()
 		self.progress_bar.resume()
+		self.stage_bar.resume()
 		if self.freed:
 			self.freed = False
 			if self.chain:
@@ -2243,6 +2258,11 @@ class StudioPage(SourceSelection, QWidget):
 			self.run_ratio = 0.0
 			self.progress_bar.setValue(0)
 			self.progress_bar.resume()
+			self.stage_bar.clear()
+			if self.own_run():
+				target = (self.pending_info or {}).get('target') or ''
+				self.stage_bar.set_picture(media_kind(target) == 'image' and not is_animation(target, self.pending_output))
+			self.refresh_stage_bar()
 		if busy and self.preview_mode and self.pending_output:
 			# the later steps of a face mapping preview go on with the clock of its first step
 			if not (self.chain and self.chain.get('index') > 0):
@@ -2303,11 +2323,24 @@ class StudioPage(SourceSelection, QWidget):
 		if not self.session.task or self.session.task_is_preview:
 			return
 		# the stage facefusion is on, Extracting, Processing, Merging
-		self.status_label.setText('%s · %s' % (self.session.task, title[:1].upper() + title[1:]) if title else self.session.task)
+		self.status_label.setText('%s · %s' % (self.session.task, stage_name(title)) if title else self.session.task)
 		self.detail_label.setText('%d%%  %s' % (round(ratio * 100), status))
-		self.run_ratio = ratio
+		# Studio's own run: the stage bar shows each stage, the bar above it the run as a whole
+		whole = overall_ratio(title, ratio, self.stage_bar.streamed) if self.own_run() and self.stage_bar.show_stage(title, ratio) else None
+		self.refresh_stage_bar(False)
+		self.run_ratio = ratio if whole is None else whole
 		if not self.preview_clock.isActive():
-			self.progress_bar.setValue(int(ratio * 1000))
+			self.progress_bar.setValue(int(self.run_ratio * 1000))
+
+	def refresh_stage_bar(self, read_strategy : bool = True) -> None:
+		"""the stage bar shows only when it says more than the bar above: a video run, not a picture (Processing alone)"""
+		if read_strategy:
+			self.stage_bar.set_streamed(is_streamed(self.session.values))
+		self.stage_bar.setVisible(not self.stage_bar.only_processing())
+
+	def own_run(self) -> bool:
+		"""whether what runs now is Studio's own Start run or a step of it, not a preview or another page's run"""
+		return bool(self.pending_output) and not self.preview_mode
 
 	def on_log(self, line : str) -> None:
 		# the nsfw check's result lines are data for the session, not something to read
@@ -2327,6 +2360,7 @@ class StudioPage(SourceSelection, QWidget):
 			self.freed = True
 			self.run_ratio = 0.0
 			self.progress_bar.setValue(0)
+			self.stage_bar.clear()
 			self.show_paused()
 			self.refresh_run_buttons()
 			return
@@ -2351,6 +2385,7 @@ class StudioPage(SourceSelection, QWidget):
 			if kind == 'compose' and exit_code not in [ 0, -1 ]:
 				if not self.preview_mode:
 					self.progress_bar.error()
+					self.stage_bar.error()
 				status, message = self.session.describe_run_error()
 				self.status_label.setText(status if self.session.run_error() else 'Could not combine the passes (exit code %d)' % exit_code)
 				self.session.notify.emit('error', 'Could not combine the passes', message)
@@ -2375,6 +2410,7 @@ class StudioPage(SourceSelection, QWidget):
 			self.result_info = self.pending_info
 			if not self.preview_mode:
 				self.progress_bar.setValue(1000)
+				self.stage_bar.finish()
 				self.status_label.setText('Done — ' + os.path.basename(output_path), done = True)
 				# the clock beside the bar says how long it took
 				self.detail_label.setText('')
@@ -2402,11 +2438,13 @@ class StudioPage(SourceSelection, QWidget):
 				self.status_label.setText('Stopped')
 				self.detail_label.setText('')
 				self.progress_bar.pause()
+				self.stage_bar.pause()
 			else:
 				self.target_card.result_label.setText('Preview stopped')
 		else:
 			if not self.preview_mode:
 				self.progress_bar.error()
+				self.stage_bar.error()
 			image_target = self.preview_mode or media_kind(self.pending_info.get('target') or '') == 'image'
 			blocked = self.session.nsfw_block_message(image_target)
 			if blocked:

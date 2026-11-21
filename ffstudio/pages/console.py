@@ -12,6 +12,7 @@ from qfluentwidgets import BodyLabel, CaptionLabel, FluentIcon, PlainTextEdit, P
 from ffstudio.media import format_seconds
 from ffstudio.privacy import COMPUTER_NAME, COMPUTER_NAME_STAND_IN, FOLDERS_STAND_IN, USER_NAME, USER_NAME_STAND_IN, FileNames, hide_private, program_folders
 from ffstudio.session import EXCEPTION_PATTERN, Session, describe_error, is_error_line
+from ffstudio.widgets import stage_name
 
 MAX_BLOCKS = 20000
 # the plain explanation under a failed command's last line
@@ -50,11 +51,6 @@ STAGE_PREFIX = '  · '
 # the log's background in light and dark, the color qfluentwidgets gives a text box with focus
 LOG_BACKGROUND = ('#ffffff', '#1e1e1e')
 GUTTER_COLORS = { 'background': ('#f0f0f0', '#2b2b2b'), 'border': ('#dcdcdc', '#3a3a3a'), 'number': ('#9a9a9a', '#7a7a7a') }
-
-
-def stage_name(title : str) -> str:
-	"""facefusion names its stages in lower case, extracting reads Extracting"""
-	return title[:1].upper() + title[1:]
 
 
 class LineNumbers(QWidget):
