@@ -776,6 +776,14 @@ class PreviewView(QWidget):
 		self.setMouseTracking(True)
 		self.update()
 
+	def reset_split(self) -> bool:
+		"""moves the divider back to the far left so the whole result shows, returns whether it moved"""
+		if not self.is_comparing() or self.split <= 0.0:
+			return False
+		self.split = 0.0
+		self.update()
+		return True
+
 	def is_comparing(self) -> bool:
 		return PreviewView.show_divider and not self.pixmap.isNull() and not self.compare_pixmap.isNull()
 

@@ -824,10 +824,17 @@ class TargetCard(SimpleCardWidget):
 			self.browse()
 
 	def pick_view(self, view : str) -> None:
-		"""clicking the view that is already shown flips to the other one, so target and result can be compared without moving the mouse"""
+		"""clicking the view that is already shown flips to the other one, so target and result can be compared without moving the mouse
+
+		Result always shows the whole result: with the compare divider dragged right, it first moves the divider back"""
 		if self.page.view == view:
+			if view == 'result' and self.preview.reset_split():
+				self.view_switch.setCurrentItem('result')
+				return
 			view = 'result' if view == 'target' else 'target'
 		self.page.show_view(view)
+		if view == 'result':
+			self.preview.reset_split()
 
 	def load(self, path : str) -> None:
 		if self.reader:

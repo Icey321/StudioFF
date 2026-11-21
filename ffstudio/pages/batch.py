@@ -1578,8 +1578,14 @@ class BatchPage(SourceSelection, QWidget):
 
 	def swap_view(self) -> None:
 		"""flips between the target and the result, so they can be compared without moving the mouse"""
-		if not self.preview_result.isNull():
-			self.show_view('result' if self.shown_view == 'target' else 'target')
+		if self.preview_result.isNull():
+			return
+		# with the compare divider dragged right, the result first shows whole again
+		if self.shown_view == 'result' and self.preview_view.reset_split():
+			return
+		self.show_view('result' if self.shown_view == 'target' else 'target')
+		if self.shown_view == 'result':
+			self.preview_view.reset_split()
 
 	def show_view(self, view : str) -> None:
 		self.shown_view = view
