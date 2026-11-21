@@ -150,6 +150,8 @@ class Session(QObject):
 	# runner, exit code, seconds: a run ended, heard before any page's own finished slot, so Console writes how it ended
 	# before a page starts the next command from its slot
 	run_ended = Signal(object, int, float)
+	# processors were hidden or shown again in Settings
+	processors_shown_changed = Signal()
 
 	def __init__(self) -> None:
 		super().__init__()
@@ -302,6 +304,17 @@ class Session(QObject):
 
 	def processors(self) -> List[str]:
 		return list(self.values.get('processors') or [])
+
+	def shown_processors(self) -> List[str]:
+		"""the installed processors not hidden in Settings, at least one always shows"""
+		installed = list(self.schema.processors) if self.schema else []
+		hidden = self.config.get('hidden_processors') or []
+		return [ name for name in installed if name not in hidden ] or installed[:1]
+
+	def set_hidden_processors(self, hidden : List[str]) -> None:
+		self.config.set('hidden_processors', list(hidden))
+		self.config.save()
+		self.processors_shown_changed.emit()
 
 	# favorite options, shown again in their own box on the studio page
 

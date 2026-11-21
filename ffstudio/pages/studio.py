@@ -17,7 +17,7 @@ from qfluentwidgets import Action, BodyLabel, CaptionLabel, FlowLayout, FluentIc
 
 from ffstudio.config import APP_DIR, DATA_DIR, PREVIEW_DIR, PREVIEW_IMAGE_QUALITY
 from ffstudio.face_mapping import FACE_PROCESSORS, FRAME_PROCESSORS, GROUP_PREFIX, LEAVE, PEOPLE_FILE, SELECTED, FaceMappingCard, box_overlap, face_map, group_images, group_value, is_kept, is_mapped, merge_people, people_dir, person_color, person_name, plan_passes
-from ffstudio.faces import FACE_CHECK_SAMPLES, FACE_GROUPS, MASK_GROUPS, FaceProbe, alike_faces, describe_faces, describe_landmarks, describe_mask, face_landmarks, face_tag, faces_text_color, no_face, read_mask
+from ffstudio.faces import FACE_CHECK_SAMPLES, FACE_GROUPS, MASK_GROUPS, PROBE_STOP_DELAY, FaceProbe, alike_faces, describe_faces, describe_landmarks, describe_mask, face_landmarks, face_tag, faces_text_color, no_face, read_mask
 from ffstudio.media import VideoReader, animation_extension, browse_dir, is_animated_webp, is_animation, format_length, format_seconds, format_timecode, media_kind, needs_conversion, read_frame, read_image, split_faces, thumbnail, to_pixmap, usable_path, write_image
 from ffstudio.nsfw import BLOCKED_STATUS, NsfwDialog, describe_result, link_label, nsfw_link, show_blocked_bar
 from ffstudio.option_panel import FavoritesPanel, OptionPanel
@@ -1081,7 +1081,21 @@ class SettingsColumn(QWidget):
 		column.addWidget(self.scroll, 1)
 		store.value_changed.connect(self.on_value_changed)
 		store.schema_changed.connect(self.rebuild)
+		# hiding a processor in Settings rebuilds this column when it next shows, so the switches there stay quick
+		self.needs_rebuild = False
+		self.session().processors_shown_changed.connect(self.on_processors_shown_changed)
 		self.rebuild()
+
+	def on_processors_shown_changed(self) -> None:
+		if self.isVisible():
+			self.rebuild()
+		else:
+			self.needs_rebuild = True
+
+	def showEvent(self, event) -> None:
+		super().showEvent(event)
+		if self.needs_rebuild:
+			self.rebuild()
 
 	def create_processor_card(self, parent : QWidget) -> QWidget:
 		card = SimpleCardWidget(parent)
@@ -1118,6 +1132,7 @@ class SettingsColumn(QWidget):
 			panel.set_locks(locks)
 
 	def rebuild(self) -> None:
+		self.needs_rebuild = False
 		self.rebuild_processors()
 		# without a dragged order the processors' groups lead, in the order of their buttons
 		self.option_panel.groups = self.processor_order() + STUDIO_GROUPS
@@ -1132,8 +1147,14 @@ class SettingsColumn(QWidget):
 			return []
 		# without a stored order the current run order leads, so nothing changes for existing setups
 		stored = self.store.config.get(self.store.ORDER_KEY) or self.store.processors()
-		order = [ name for name in stored if name in schema.processors ]
-		return order + [ name for name in schema.processors if name not in order ]
+		# the ones hidden in Settings get no button, their place in the stored order is kept for when they show again
+		shown = self.session().shown_processors()
+		order = [ name for name in stored if name in shown ]
+		return order + [ name for name in shown if name not in order ]
+
+	def session(self):
+		# the Studio column's store is the session itself, Batch's is an OptionStore that holds it
+		return getattr(self.store, 'session', self.store)
 
 	def rebuild_processors(self) -> None:
 		self.processor_area.clear()
@@ -1146,8 +1167,12 @@ class SettingsColumn(QWidget):
 			self.processor_buttons[processor] = button
 		self.processor_area.set_buttons([ self.processor_buttons[name] for name in order ])
 		if order:
-			# keep the run order in line with the buttons
+			# keep the run order in line with the buttons, a processor hidden in Settings is switched off
 			processors = [ name for name in order if name in self.store.processors() ]
+			if not processors and self.store.processors():
+				# hiding the last processor that was on switches on another, a run needs one
+				processors = [ 'face_swapper' if 'face_swapper' in order else order[0] ]
+				self.processor_buttons[processors[0]].setChecked(True)
 			if processors != self.store.processors():
 				self.store.set_value('processors', processors)
 		self.refresh_processor_hint()
@@ -1272,6 +1297,12 @@ class StudioPage(SourceSelection, QWidget):
 		self.faces_timer.setSingleShot(True)
 		self.faces_timer.setInterval(250)
 		self.faces_timer.timeout.connect(self.scan_faces)
+		# the probe stops a while after the page is left, not at once: going back and forth between pages would kill it
+		# while it starts ffmpeg, and Windows then shows an error box for that ffmpeg
+		self.probe_stop_timer = QTimer(self)
+		self.probe_stop_timer.setSingleShot(True)
+		self.probe_stop_timer.setInterval(PROBE_STOP_DELAY)
+		self.probe_stop_timer.timeout.connect(self.stop_hidden_probe)
 		self.face_probe.people_found.connect(self.on_people_found)
 		self.session.runner.began.connect(self.on_run_began)
 		self.face_probe.people_progress.connect(lambda done, total: self.mapping_card.set_finding(done, total))
@@ -2495,11 +2526,15 @@ class StudioPage(SourceSelection, QWidget):
 
 	def showEvent(self, event) -> None:
 		super().showEvent(event)
+		self.probe_stop_timer.stop()
 		self.schedule_face_scan()
 
 	def hideEvent(self, event) -> None:
 		super().hideEvent(event)
-		if not self.chain and not self.face_probe.is_finding_people():
+		self.probe_stop_timer.start()
+
+	def stop_hidden_probe(self) -> None:
+		if not self.isVisible() and not self.chain and not self.face_probe.is_finding_people():
 			# the probe holds its models in memory, let them go while nobody looks
 			self.faces_timer.stop()
 			self.face_probe.stop()

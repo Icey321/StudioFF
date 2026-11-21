@@ -15,7 +15,7 @@ from PySide6.QtWidgets import QAbstractItemView, QApplication, QFileDialog, QHBo
 from qfluentwidgets import Action, BodyLabel, CaptionLabel, ComboBox, FluentIcon, Flyout, FlyoutAnimationType, LineEdit, ListItemDelegate, ListWidget, MessageBox, PrimaryPushButton, ProgressBar, PushButton, RoundMenu, SegmentedWidget, SimpleCardWidget, Slider, StrongBodyLabel, SubtitleLabel, TogglePushButton, ToggleToolButton, ToolTipFilter, TransparentPushButton, getFont, isDarkTheme, themeColor
 
 from ffstudio.config import APP_DIR, PREVIEW_DIR, PREVIEW_IMAGE_QUALITY
-from ffstudio.faces import FACE_CHECK_SAMPLES, FACE_GROUPS, MASK_GROUPS, FaceProbe, alike_faces, describe_faces, describe_landmarks, describe_mask, face_landmarks, face_tag, faces_text_color, no_face, read_mask
+from ffstudio.faces import FACE_CHECK_SAMPLES, FACE_GROUPS, MASK_GROUPS, PROBE_STOP_DELAY, FaceProbe, alike_faces, describe_faces, describe_landmarks, describe_mask, face_landmarks, face_tag, faces_text_color, no_face, read_mask
 from ffstudio.media import VideoReader, animation_extension, browse_dir, extension, is_animation, format_length, format_seconds, format_timecode, media_kind, needs_conversion, read_frame, thumbnail, to_pixmap, usable_path, video_length, write_image
 from ffstudio.nsfw import BLOCKED_TITLE, NsfwDialog, link_label, nsfw_link, show_blocked_bar
 from ffstudio.option_widgets import setting_locks, unused_locks
@@ -760,6 +760,11 @@ class BatchPage(SourceSelection, QWidget):
 		self.faces_timer.setSingleShot(True)
 		self.faces_timer.setInterval(250)
 		self.faces_timer.timeout.connect(self.scan_faces)
+		# stops the probe a while after the page is left, see StudioPage
+		self.probe_stop_timer = QTimer(self)
+		self.probe_stop_timer.setSingleShot(True)
+		self.probe_stop_timer.setInterval(PROBE_STOP_DELAY)
+		self.probe_stop_timer.timeout.connect(self.stop_hidden_probe)
 
 		layout = QVBoxLayout(self)
 		layout.setContentsMargins(24, 16, 24, 16)
@@ -1766,6 +1771,7 @@ class BatchPage(SourceSelection, QWidget):
 
 	def showEvent(self, event) -> None:
 		super().showEvent(event)
+		self.probe_stop_timer.stop()
 		# a preview asked for while the page was hidden is made once it shows
 		if self.preview_waiting or (self.preview_run is None and self.live_button.isChecked()):
 			self.schedule_preview()
@@ -1773,9 +1779,13 @@ class BatchPage(SourceSelection, QWidget):
 
 	def hideEvent(self, event) -> None:
 		super().hideEvent(event)
+		self.probe_stop_timer.start()
+
+	def stop_hidden_probe(self) -> None:
 		# the probe holds its models in memory, let them go while nobody looks
-		self.faces_timer.stop()
-		self.face_probe.stop()
+		if not self.isVisible():
+			self.faces_timer.stop()
+			self.face_probe.stop()
 
 	def sync_timeline(self) -> None:
 		"""shows the timeline for a video target, on the frame last picked for it"""

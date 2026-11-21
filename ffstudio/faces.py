@@ -22,6 +22,8 @@ FACE_GROUPS = [ 'face_detector', 'face_aligner', 'face_selector', 'face_tracker'
 MASK_GROUPS = [ 'face_masker', 'face_swapper' ]
 # the frames of a video Pre-Check and Run Batch look for faces in, a target with none in any of them has no face
 FACE_CHECK_SAMPLES = 16
+# milliseconds Studio and Batch keep the probe after the page is left, so switching pages back and forth does not kill it
+PROBE_STOP_DELAY = 20000
 
 
 class FaceProbe(QObject):

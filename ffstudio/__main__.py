@@ -79,6 +79,9 @@ def main() -> None:
 	if sys.platform == 'win32':
 		import ctypes
 		ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(taskbar.APP_ID)
+		# no Windows error boxes for helper programs (FaceFusion's ffmpeg) that are stopped while they start, every program
+		# StudioFF starts takes this on. SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX
+		ctypes.windll.kernel32.SetErrorMode(0x0001 | 0x0002)
 
 	QApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
 	app = QApplication(sys.argv)

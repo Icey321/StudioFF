@@ -3,9 +3,9 @@ import shutil
 import threading
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QColor
-from PySide6.QtWidgets import QAbstractButton, QApplication, QButtonGroup, QFileDialog, QFrame, QHBoxLayout, QLabel, QSizePolicy, QVBoxLayout, QWidget
+from PySide6.QtCore import Qt, QUrl, Signal
+from PySide6.QtGui import QColor, QDesktopServices
+from PySide6.QtWidgets import QAbstractButton, QApplication, QButtonGroup, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QSizePolicy, QVBoxLayout, QWidget
 from qfluentwidgets import BodyLabel, CaptionLabel, CheckBox, ColorPickerButton, ComboBox, EditableComboBox, FluentIcon, HyperlinkButton, IconWidget, InfoBarIcon, LineEdit, MessageBox, PrimaryPushButton, ProgressBar, PushButton, SearchLineEdit, SimpleCardWidget, SingleDirectionScrollArea, StrongBodyLabel, SubtitleLabel, SwitchButton, ToolTipFilter, TransparentToolButton, isDarkTheme
 
 from ffstudio import APP_REPOSITORY, APP_VERSION, FACEFUSION_MANAGEMENT, TESTED_FACEFUSION_COMMIT, TESTED_FACEFUSION_DATE
@@ -287,7 +287,7 @@ class SetupPage(QWidget):
 		# built either way, the rest of the page fills in its widgets
 		install_card.setVisible(FACEFUSION_MANAGEMENT)
 		self.facefusion_page.content_layout.addStretch(1)
-		self.section_cards = [ self.create_studio_update_card(content), self.create_folders_card(content), self.create_appearance_card(content) ]
+		self.section_cards = [ self.create_studio_update_card(content), self.create_folders_card(content), self.create_processors_card(content), self.create_appearance_card(content) ]
 		for card in self.section_cards:
 			layout.addWidget(card)
 		self.system_title = StrongBodyLabel('Performance & system', content)
@@ -307,6 +307,7 @@ class SetupPage(QWidget):
 		session.value_changed.connect(lambda dest, _: self.refresh_locks() if dest == 'execution_providers' else None)
 		self.refresh_locks()
 		session.schema_changed.connect(self.refresh_status)
+		session.schema_changed.connect(self.refresh_processor_switches)
 		session.runner.finished.connect(self.on_runner_finished)
 		self.update_checked.connect(self.on_update_checked)
 		self.studio_update_checked.connect(self.on_studio_update_checked)
@@ -1174,6 +1175,89 @@ class SetupPage(QWidget):
 		if not folder or os.path.isdir(folder):
 			self.session.config.set(key, os.path.normpath(folder) if folder else '')
 			self.session.config.save()
+
+	# processors
+
+	def create_processors_card(self, parent : QWidget) -> QWidget:
+		card, layout = section_card('Processors', 'Choose which processors show as buttons in Studio, Batch and Benchmark. A hidden processor stays installed in FaceFusion, and you can show it again here.', parent)
+		self.processor_grid = QGridLayout()
+		self.processor_grid.setHorizontalSpacing(28)
+		self.processor_grid.setVerticalSpacing(8)
+		layout.addLayout(self.processor_grid)
+		self.processor_switches : Dict[str, SwitchButton] = {}
+		bottom = QHBoxLayout()
+		bottom.setSpacing(12)
+		self.processor_note = CaptionLabel('', card)
+		self.processor_note.setWordWrap(True)
+		self.processor_note.setTextColor('#606060', '#a0a0a0')
+		bottom.addWidget(self.processor_note, 1)
+		self.processor_folder_button = PushButton(FluentIcon.FOLDER, 'Open Folder', card)
+		self.processor_folder_button.installEventFilter(ToolTipFilter(self.processor_folder_button))
+		self.processor_folder_button.clicked.connect(self.open_processor_folder)
+		bottom.addWidget(self.processor_folder_button, 0, Qt.AlignmentFlag.AlignBottom)
+		layout.addLayout(bottom)
+		self.refresh_processor_switches()
+		return card
+
+	def processor_folder(self) -> str:
+		"""FaceFusion keeps each processor as a folder in here, the processor list is made from them"""
+		root = self.session.facefusion_root
+		return os.path.join(root, 'facefusion', 'processors', 'modules') if root else ''
+
+	def refresh_processor_switches(self) -> None:
+		for switch in self.processor_switches.values():
+			switch.parentWidget().setParent(None)
+			switch.parentWidget().deleteLater()
+		self.processor_switches = {}
+		schema = self.session.schema
+		installed = list(schema.processors) if schema else []
+		hidden = self.session.config.get('hidden_processors') or []
+		columns = 3
+		for index, name in enumerate(installed):
+			cell = QWidget(self.processor_note.parentWidget())
+			row = QHBoxLayout(cell)
+			row.setContentsMargins(0, 0, 0, 0)
+			row.setSpacing(10)
+			switch = SwitchButton(cell)
+			switch.setOnText('')
+			switch.setOffText('')
+			switch.setChecked(name not in hidden)
+			switch.checkedChanged.connect(lambda checked, name = name: self.on_processor_switched(name, checked))
+			row.addWidget(switch)
+			row.addWidget(BodyLabel(name.replace('_', ' ').title(), cell))
+			row.addStretch(1)
+			self.processor_grid.addWidget(cell, index // columns, index % columns)
+			self.processor_switches[name] = switch
+		self.refresh_processor_note()
+		folder = self.processor_folder()
+		self.processor_folder_button.setEnabled(os.path.isdir(folder))
+		self.processor_folder_button.setToolTip('Open the folder FaceFusion keeps its processors in:\n%s' % folder if folder else 'Choose the FaceFusion folder on the FaceFusion page first')
+
+	def on_processor_switched(self, name : str, checked : bool) -> None:
+		shown = [ other for other, switch in self.processor_switches.items() if switch.isChecked() ]
+		if not shown:
+			# the last one stays, Studio and Batch need a processor to run
+			switch = self.processor_switches[name]
+			switch.blockSignals(True)
+			switch.setChecked(True)
+			switch.blockSignals(False)
+			self.session.notify.emit('info', 'One processor stays shown', 'Show another processor first, then this one can be hidden.')
+			return
+		hidden = [ other for other in self.processor_switches if other not in shown ]
+		# processors FaceFusion no longer has are kept hidden, in case they come back
+		hidden += [ other for other in (self.session.config.get('hidden_processors') or []) if other not in self.processor_switches ]
+		self.session.set_hidden_processors(hidden)
+		self.refresh_processor_note()
+
+	def refresh_processor_note(self) -> None:
+		total = len(self.processor_switches)
+		shown = sum(1 for switch in self.processor_switches.values() if switch.isChecked())
+		self.processor_note.setText('(%d) of (%d) shown. At least (1) always stays shown. Hiding a processor that is switched on in Studio or Batch switches it off there.' % (shown, total) if total else 'The processors show here once StudioFF has read FaceFusion\'s options.')
+
+	def open_processor_folder(self) -> None:
+		folder = self.processor_folder()
+		if os.path.isdir(folder):
+			QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
 
 	def create_appearance_card(self, parent : QWidget) -> QWidget:
 		card, layout = section_card('Appearance and behavior', '', parent)

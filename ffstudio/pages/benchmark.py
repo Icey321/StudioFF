@@ -206,6 +206,7 @@ class BenchmarkPage(QWidget):
 		layout.addWidget(results_card, 1)
 
 		session.schema_changed.connect(self.refresh_choices)
+		session.processors_shown_changed.connect(self.refresh_choices)
 		session.value_changed.connect(self.refresh_thread_hint)
 		session.busy_changed.connect(lambda busy, _: self.start_button.setEnabled(not busy))
 		session.runner.progress.connect(self.on_progress)
@@ -243,7 +244,7 @@ class BenchmarkPage(QWidget):
 		schema = self.session.schema
 		self.processor_flow.takeAllWidgets()
 		self.processor_boxes = {}
-		for processor in (schema.processors if schema else []):
+		for processor in self.session.shown_processors():
 			box = CheckBox(processor.replace('_', ' '), self.processor_widget)
 			box.setChecked(processor in self.selected_processors)
 			box.stateChanged.connect(self.save_settings)

@@ -76,6 +76,8 @@ DEFAULT_CONFIG : Dict[str, Any] =\
 	'show_drives_in_title_bar': False,
 	# the before / after divider over a preview in Studio and Batch, off shows only the result
 	'preview_compare_divider': True,
+	# processors switched off in Settings: no button or option group in Studio, Batch and Benchmark
+	'hidden_processors': [],
 	# what the window's X button does: close, minimize or tray
 	'close_action': 'close',
 	# look for a newer studioff release when the app opens, and say so with an Update Now button
