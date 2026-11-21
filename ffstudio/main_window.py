@@ -1,9 +1,9 @@
 import os
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
-from PySide6.QtCore import QRect, Qt, QTimer
+from PySide6.QtCore import QEvent, QObject, QRect, Qt, QTimer
 from PySide6.QtGui import QColor, QIcon
-from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
+from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon, QWidget
 from qfluentwidgets import CaptionLabel, DotInfoBadge, FluentIcon, FluentWindow, InfoBar, InfoBarPosition, NavigationItemPosition, Theme, ToolTipFilter, TransparentPushButton, isDarkTheme, setTheme, setThemeColor
 
 from ffstudio import APP_NAME, APP_VERSION, FACEFUSION_MANAGEMENT, splash
@@ -21,6 +21,54 @@ def apply_theme(name : str, accents : Optional[Dict[str, str]] = None) -> None:
 	setTheme(THEMES.get(name, Theme.AUTO))
 	accents = accents or {}
 	setThemeColor(accents.get('dark' if isDarkTheme() else 'light') or DEFAULT_ACCENT)
+
+
+class DragOpener(QObject):
+	"""a file drag resting on a page's side bar item for a moment switches to that page. the item takes the drag only
+	to see it come and go, the drop itself is refused there (no-drop cursor), it belongs on the page"""
+	DELAY = 350
+
+	def __init__(self, window : 'MainWindow', pages : List[QWidget]) -> None:
+		super().__init__(window)
+		self.main = window
+		self.pages : Dict[QWidget, QWidget] = {}
+		self.waiting : Optional[QWidget] = None
+		self.timer = QTimer(self)
+		self.timer.setSingleShot(True)
+		self.timer.setInterval(self.DELAY)
+		self.timer.timeout.connect(self.open_page)
+		for page in pages:
+			item = window.navigationInterface.widget(page.objectName())
+			if item:
+				item.setAcceptDrops(True)
+				item.installEventFilter(self)
+				self.pages[item] = page
+
+	def eventFilter(self, watched, event) -> bool:
+		kind = event.type()
+		if kind == QEvent.Type.DragEnter and watched in self.pages:
+			if not event.mimeData().hasUrls():
+				return False
+			event.acceptProposedAction()
+			self.waiting = self.pages[watched]
+			self.timer.start()
+			return True
+		if kind == QEvent.Type.DragMove and watched in self.pages:
+			event.ignore()
+			return True
+		if kind in (QEvent.Type.DragLeave, QEvent.Type.Drop) and watched in self.pages:
+			# a drop on the item itself still opens the page, the files are not taken
+			if kind == QEvent.Type.Drop and self.waiting is self.pages[watched]:
+				self.open_page()
+			self.timer.stop()
+			self.waiting = None
+			event.ignore()
+			return True
+		return False
+
+	def open_page(self) -> None:
+		if self.waiting is not None and self.main.stackedWidget.currentWidget() is not self.waiting:
+			self.main.switchTo(self.waiting)
 
 
 class MainWindow(FluentWindow):
@@ -74,6 +122,8 @@ class MainWindow(FluentWindow):
 
 		# just wide enough for the longest page name
 		self.navigationInterface.setExpandWidth(150)
+		# files dragged from Explorer over Studio or Batch in the side bar open that page, to drop them there
+		self.drag_opener = DragOpener(self, [ self.studio_page, self.batch_page ])
 		self.setWindowTitle(APP_NAME)
 		# the version sits right after the name in the title bar, a little dimmer
 		# only the X in the title bar minimizes or goes to the tray, the taskbar's Close window and Alt+F4 really quit
