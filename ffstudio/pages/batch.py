@@ -23,7 +23,7 @@ from ffstudio.output_name import AUTOMATIC_TEMPLATE, build_output, unknown_tags
 from ffstudio.pages.models import format_size
 from ffstudio.pages.setup import SYSTEM_GROUPS, form_row
 from ffstudio.platforms import show_in_folder
-from ffstudio.pages.studio import LOCK_DRIVERS, LIVE_IGNORED_GROUPS, PREVIEW_MAX_SIDE, NameTagsView, SettingsColumn, SourceCard, SourceSelection, StudioPage, elastic, estimated_progress, preview_step_floor, run_tag_values, tool_button
+from ffstudio.pages.studio import LOCK_DRIVERS, LIVE_IGNORED_GROUPS, PREVIEW_MAX_SIDE, NameTagsView, SettingsColumn, SourceCard, SourceSelection, StudioPage, elastic, face_crops, estimated_progress, preview_step_floor, run_tag_values, tool_button
 from ffstudio.session import OptionStore, Session, describe_error, folder_is_writable
 from ffstudio.widgets import CollapsibleCard, DriveLabel, FacePicker, IconCountButton, PreviewView, Splitter, StatusLabel, SwapIcon, add_edit_button, attach_landmarks_cycle, collect_drop_paths, guard_wheel, landmarks_mode, with_drive_bar
 
@@ -2154,16 +2154,7 @@ class BatchPage(SourceSelection, QWidget):
 			return
 		scanned = self.scanned_frame if self.scanned_frame and self.scanned_frame[0] == result.get('tag') else None
 		frame = scanned[1] if scanned else self.scaled_frame(item)
-		crops = []
-		if frame is not None and result.get('width'):
-			scale = frame.shape[1] / result.get('width')
-			height, width = frame.shape[:2]
-			for face in faces:
-				x1, y1, x2, y2 = [ value * scale for value in face.get('box') ]
-				margin = 0.25 * max(x2 - x1, y2 - y1)
-				crop = frame[int(max(0, y1 - margin)):int(min(height, y2 + margin)), int(max(0, x1 - margin)):int(min(width, x2 + margin))]
-				if crop.size:
-					crops.append((face.get('position'), to_pixmap(crop.copy())))
+		crops = face_crops(frame, result, [ (face.get('position'), face) for face in faces ])
 		name = os.path.basename(target)
 		if pick and pick[0] == index:
 			ringed = pick[1]

@@ -11,7 +11,7 @@ from typing import Dict, List, Optional, Tuple
 import cv2
 import numpy
 from PySide6.QtCore import QEvent, QPoint, QRectF, QSize, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QColor, QDesktopServices, QFont, QPainter, QPixmap
+from PySide6.QtGui import QColor, QDesktopServices, QFont, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QFileDialog, QGridLayout, QHBoxLayout, QSizePolicy, QVBoxLayout, QWidget
 from qfluentwidgets import Action, BodyLabel, CaptionLabel, FlowLayout, FluentIcon, Flyout, FlyoutAnimationType, FlyoutViewBase, IconWidget, IndeterminateProgressBar, InfoBarIcon, LineEdit, MessageBox, PrimaryPushButton, ProgressBar, PushButton, RoundMenu, ScrollArea, SearchLineEdit, SegmentedWidget, SimpleCardWidget, SingleDirectionScrollArea, Slider, StrongBodyLabel, SubtitleLabel, TogglePushButton, ToolTipFilter, TransparentPushButton, TransparentToolButton, getFont, themeColor
 
@@ -26,7 +26,7 @@ from ffstudio.output_name import AUTOMATIC_TEMPLATE, NAME_EXAMPLES, NAME_TAGS, b
 from ffstudio.platforms import show_in_folder
 from ffstudio.presets import PresetBar
 from ffstudio.session import CONTENT_RESULT_PREFIX, Session, folder_is_writable
-from ffstudio.widgets import DisabledToolTipFilter, DriveLabel, GroupChip, PreviewView, ProcessorArea, ProcessorButton, Splitter, StatusLabel, Thumbnail, add_edit_button, attach_landmarks_cycle, collect_drop_paths, guard_wheel, landmarks_mode, with_drive_bar
+from ffstudio.widgets import DisabledToolTipFilter, DriveLabel, FacePicker, GroupChip, PreviewView, ProcessorArea, ProcessorButton, Splitter, StatusLabel, Thumbnail, add_edit_button, attach_landmarks_cycle, collect_drop_paths, guard_wheel, landmarks_mode, with_drive_bar
 
 STUDIO_GROUPS = [ 'face_selector', 'face_masker', 'face_detector', 'face_aligner', 'face_tracker', 'output_creation', 'frame_extraction', 'frame_distribution', 'voice_extractor', 'workflow' ]
 # options whose value grays out other rows, besides the models (refresh_locks)
@@ -73,6 +73,22 @@ def elastic(label : CaptionLabel) -> CaptionLabel:
 	label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
 	label.setMinimumWidth(0)
 	return label
+
+
+def face_crops(frame, result : dict, faces : List[Tuple[int, dict]]) -> List[Tuple[int, QPixmap]]:
+	"""(key, picture) of each (key, face) of a face scan, the face with some room around it, cut from the scanned frame"""
+	crops = []
+	if frame is None or not result.get('width'):
+		return crops
+	scale = frame.shape[1] / result.get('width')
+	height, width = frame.shape[:2]
+	for key, face in faces:
+		x1, y1, x2, y2 = [ value * scale for value in face.get('box') ]
+		margin = 0.25 * max(x2 - x1, y2 - y1)
+		crop = frame[int(max(0, y1 - margin)):int(min(height, y2 + margin)), int(max(0, x1 - margin)):int(min(width, x2 + margin))]
+		if crop.size:
+			crops.append((key, to_pixmap(crop.copy())))
+	return crops
 
 
 def tool_button(icon : FluentIcon, tip : str, parent : QWidget) -> TransparentToolButton:
@@ -548,10 +564,29 @@ class SourceCard(SimpleCardWidget):
 
 	def dragEnterEvent(self, event) -> None:
 		if event.mimeData().hasUrls():
+			self.set_drag_active(True)
 			event.acceptProposedAction()
 
+	def dragLeaveEvent(self, event) -> None:
+		self.set_drag_active(False)
+
 	def dropEvent(self, event) -> None:
+		self.set_drag_active(False)
 		self.page.add_sources(collect_drop_paths(event))
+
+	def set_drag_active(self, active : bool) -> None:
+		"""files held over the card outline it in the accent color, like the Target view"""
+		self.drag_active = active
+		self.update()
+
+	def paintEvent(self, event) -> None:
+		super().paintEvent(event)
+		if getattr(self, 'drag_active', False):
+			painter = QPainter(self)
+			painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+			painter.setPen(QPen(themeColor(), 2))
+			painter.setBrush(Qt.BrushStyle.NoBrush)
+			painter.drawRoundedRect(QRectF(self.rect()).adjusted(1, 1, -1, -1), 8, 8)
 
 
 class EdgeGrip(QWidget):
@@ -666,7 +701,13 @@ class TargetCard(SimpleCardWidget):
 		self.preview.files_dropped.connect(lambda paths: self.page.set_target(paths[0]))
 		self.preview.clicked.connect(self.on_preview_clicked)
 		self.preview.face_menu_requested.connect(self.page.show_face_menu)
+		self.preview.face_clicked.connect(self.page.on_preview_face_clicked)
 		layout.addWidget(self.preview, 1)
+		# the faces of the shown frame as circles, the ringed one gets changed. only in Reference mode with Face Mapping off
+		self.face_picker = FacePicker('Reference Face', self)
+		self.face_picker.picked.connect(self.page.on_face_picked)
+		self.face_picker.hide()
+		layout.addWidget(self.face_picker)
 		# what face detection found, and which setting to change when it found nothing usable, checked with the overlays off too
 		self.faces_label = CaptionLabel('', self)
 		self.faces_label.setWordWrap(True)
@@ -2413,6 +2454,7 @@ class StudioPage(SourceSelection, QWidget):
 		if not self.target_path:
 			card.preview.set_faces([])
 			card.preview.set_warning(False)
+			card.face_picker.hide()
 			card.faces_label.setText('Choose a target to see the faces FaceFusion finds in it.')
 			return
 		if not self.session.is_configured() or not self.session.schema:
@@ -2487,6 +2529,70 @@ class StudioPage(SourceSelection, QWidget):
 		card.faces_label.setText('\n'.join(line for line in lines if line))
 		card.faces_label.setTextColor(*faces_text_color(result, problem))
 		card.preview.set_warning(no_face(result))
+		self.refresh_face_picker(result)
+
+	def refresh_face_picker(self, result : dict) -> None:
+		"""round crops of the faces in the shown frame in Reference mode: the ringed face is the one a run changes,
+		a click makes another one the reference. Many and One read no picked face and Face Mapping picks its own,
+		the row hides there"""
+		card = self.target_card
+		picker = card.face_picker
+		# Face Mapping picks each face itself, a second row of faces there only confuses (Nik)
+		if result.get('error') or self.mapping_card.active_people() or (self.session.values.get('face_selector_mode') or 'reference') != 'reference':
+			picker.hide()
+			return
+		frame = card.current_frame()
+		name = os.path.basename(self.target_path)
+		faces = sorted((face for face in result.get('faces') or [] if face.get('position', -1) >= 0), key = lambda face: face.get('position'))
+		crops = face_crops(frame, result, [ (face.get('position'), face) for face in faces ])
+		chosen = [ face.get('position') for face in faces if face.get('selected') ]
+		pending = getattr(self, 'pending_pick', None)
+		if pending and pending[:2] == (self.target_path, card.current_frame_index()) and int(self.session.values.get('reference_face_position') or 0) == pending[2]:
+			if pending[2] not in chosen and pending[2] in [ face.get('position') for face in faces ]:
+				# scanned before the click, keep the clicked face until a scan with it comes back
+				return
+		self.pending_pick = None
+		reference_index = int(self.session.values.get('reference_frame_index') or 0)
+		elsewhere = bool(card.reader) and reference_index != card.current_frame_index()
+		count, fix = alike_faces(result, self.session.schema)
+		if count:
+			# every face within the Distance of the reference is changed, two lines, one would clip the fix
+			hint = '(%d) faces look alike\n%s' % (count, fix)
+		elif not crops:
+			hint = 'No faces in this frame to pick from'
+		elif elsewhere and chosen:
+			hint = 'Picked on frame #%d, the ringed face looks most like it · click a face to pick it here instead' % reference_index
+		elif elsewhere:
+			hint = 'Picked on frame #%d, no face here looks like it, none is changed · click a face to pick it here instead' % reference_index
+		elif len(crops) == 1 and chosen:
+			hint = 'The only face in %s is changed' % name
+		elif chosen:
+			hint = 'The ringed face is changed in %s (Position %d) · click another person to change them instead' % (name, chosen[0])
+		else:
+			hint = 'No face is changed · click one to pick it'
+		picker.set_faces(crops, chosen)
+		picker.set_hint(hint)
+		picker.show()
+
+	def on_face_picked(self, key : int) -> None:
+		"""a face circle: the face at that position becomes the reference, on the frame shown"""
+		card = self.target_card
+		if card.reader and int(self.session.values.get('reference_frame_index') or 0) != card.current_frame_index():
+			self.session.set_value('reference_frame_index', card.current_frame_index())
+		self.session.set_value('reference_face_position', key)
+		# the ring moves at once: the face scan that confirms it waits while Result shows or a preview is made,
+		# and a scan started before the click must not put the ring back (refresh_face_picker)
+		self.pending_pick = (self.target_path, card.current_frame_index(), key)
+		card.face_picker.set_chosen(key)
+		card.face_picker.set_hint('The ringed face is changed in %s (Position %d) · click another person to change them instead' % (os.path.basename(self.target_path), key))
+
+	def on_preview_face_clicked(self, index : int) -> None:
+		"""a face box in the picture works like its circle under it"""
+		if not self.target_card.face_picker.isVisible() or not 0 <= index < len(self.shown_faces):
+			return
+		face = self.shown_faces[index]
+		if face.get('position', -1) >= 0:
+			self.on_face_picked(face.get('position'))
 
 	def show_face_menu(self, index : int, position : QPoint) -> None:
 		if not 0 <= index < len(self.shown_faces):
