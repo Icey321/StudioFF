@@ -1090,6 +1090,8 @@ class SettingsColumn(QWidget):
 		if self.isVisible():
 			self.rebuild()
 		else:
+			# the values change at once, only the slow redraw of buttons and groups waits for the next show
+			self.prune_processors()
 			self.needs_rebuild = True
 
 	def showEvent(self, event) -> None:
@@ -1156,7 +1158,21 @@ class SettingsColumn(QWidget):
 		# the Studio column's store is the session itself, Batch's is an OptionStore that holds it
 		return getattr(self.store, 'session', self.store)
 
+	def prune_processors(self) -> None:
+		"""keeps the run order in line with the shown processors: a processor hidden in Settings is switched off.
+		quick, so it runs at once even while the column is hidden (a running batch reads these values)"""
+		order = self.processor_order()
+		if not order:
+			return
+		processors = [ name for name in order if name in self.store.processors() ]
+		if not processors and self.store.processors():
+			# hiding the last processor that was on switches on another, a run needs one
+			processors = [ 'face_swapper' if 'face_swapper' in order else order[0] ]
+		if processors != self.store.processors():
+			self.store.set_value('processors', processors)
+
 	def rebuild_processors(self) -> None:
+		self.prune_processors()
 		self.processor_area.clear()
 		self.processor_buttons = {}
 		order = self.processor_order()
@@ -1166,15 +1182,6 @@ class SettingsColumn(QWidget):
 			button.toggled.connect(self.apply_processor_buttons)
 			self.processor_buttons[processor] = button
 		self.processor_area.set_buttons([ self.processor_buttons[name] for name in order ])
-		if order:
-			# keep the run order in line with the buttons, a processor hidden in Settings is switched off
-			processors = [ name for name in order if name in self.store.processors() ]
-			if not processors and self.store.processors():
-				# hiding the last processor that was on switches on another, a run needs one
-				processors = [ 'face_swapper' if 'face_swapper' in order else order[0] ]
-				self.processor_buttons[processors[0]].setChecked(True)
-			if processors != self.store.processors():
-				self.store.set_value('processors', processors)
 		self.refresh_processor_hint()
 
 	def reorder_processors(self, order : List[str]) -> None:
