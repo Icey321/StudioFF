@@ -1,6 +1,8 @@
+import hashlib
 import json
 import math
 import os
+import re
 import shutil
 import time
 from datetime import datetime
@@ -9,11 +11,11 @@ from typing import Dict, List, Optional, Tuple
 import cv2
 import numpy
 from PySide6.QtCore import QEvent, QPoint, QRectF, QSize, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QColor, QDesktopServices, QPainter, QPixmap
+from PySide6.QtGui import QColor, QDesktopServices, QFont, QPainter, QPixmap
 from PySide6.QtWidgets import QFileDialog, QGridLayout, QHBoxLayout, QSizePolicy, QVBoxLayout, QWidget
-from qfluentwidgets import Action, BodyLabel, CaptionLabel, FlowLayout, FluentIcon, Flyout, FlyoutAnimationType, FlyoutViewBase, IndeterminateProgressBar, LineEdit, PrimaryPushButton, ProgressBar, PushButton, RoundMenu, ScrollArea, SearchLineEdit, SegmentedWidget, SimpleCardWidget, SingleDirectionScrollArea, Slider, StrongBodyLabel, SubtitleLabel, TogglePushButton, ToolTipFilter, TransparentPushButton, TransparentToolButton, themeColor
+from qfluentwidgets import Action, BodyLabel, CaptionLabel, FlowLayout, FluentIcon, Flyout, FlyoutAnimationType, FlyoutViewBase, IconWidget, IndeterminateProgressBar, InfoBarIcon, LineEdit, MessageBox, PrimaryPushButton, ProgressBar, PushButton, RoundMenu, ScrollArea, SearchLineEdit, SegmentedWidget, SimpleCardWidget, SingleDirectionScrollArea, Slider, StrongBodyLabel, SubtitleLabel, TogglePushButton, ToolTipFilter, TransparentPushButton, TransparentToolButton, getFont, themeColor
 
-from ffstudio.config import APP_DIR, PREVIEW_DIR, PREVIEW_IMAGE_QUALITY
+from ffstudio.config import APP_DIR, DATA_DIR, PREVIEW_DIR, PREVIEW_IMAGE_QUALITY
 from ffstudio.face_mapping import FACE_PROCESSORS, FRAME_PROCESSORS, GROUP_PREFIX, LEAVE, PEOPLE_FILE, SELECTED, FaceMappingCard, box_overlap, face_map, group_images, group_value, is_kept, is_mapped, merge_people, people_dir, person_color, person_name, plan_passes
 from ffstudio.faces import FACE_CHECK_SAMPLES, FACE_GROUPS, MASK_GROUPS, FaceProbe, alike_faces, describe_faces, describe_landmarks, describe_mask, face_landmarks, face_tag, faces_text_color, no_face, read_mask
 from ffstudio.media import VideoReader, animation_extension, browse_dir, is_animated_webp, is_animation, format_length, format_seconds, format_timecode, media_kind, needs_conversion, read_frame, read_image, split_faces, thumbnail, to_pixmap, usable_path, write_image
@@ -39,6 +41,30 @@ PREVIEW_FRAME = os.path.join(PREVIEW_DIR, 'frame.jpg')
 PREVIEW_MAP_DISTANCE = 0.05
 # the outputs of the passes of a face mapping run before the last one
 PASSES_DIR = os.path.join(PREVIEW_DIR, 'passes')
+# copies of the previews made, by the settings they were made with, so going back to those settings shows one again.
+# kept when the app closes, unlike the preview folder
+KNOWN_DIR = os.path.join(DATA_DIR, 'previews')
+KNOWN_PREVIEWS = 60
+# the outputs Start made, by the settings they were made with, the newest kept
+STUDIO_FINISHED = 500
+# the options that change no file, as Setup's SYSTEM_GROUPS (setup.py imports this page)
+STUDIO_SYSTEM_GROUPS = [ 'execution', 'memory', 'download', 'misc', 'paths' ]
+
+
+def settings_tag(data : dict) -> str:
+	"""a short tag of a run's inputs and settings, the same for the same run"""
+	def plain(value):
+		if isinstance(value, numpy.ndarray):
+			return hashlib.sha1(value.tobytes()).hexdigest()
+		return str(value)
+	return hashlib.sha1(json.dumps(data, sort_keys = True, default = plain).encode('utf-8')).hexdigest()[:20]
+
+
+def file_stamp(path : str) -> list:
+	try:
+		return [ os.path.normcase(path), os.path.getmtime(path) ]
+	except OSError:
+		return [ os.path.normcase(path), None ]
 SOURCE_FILTERS = [ 'Images and audio (*.jpg *.jpeg *.jfif *.png *.webp *.avif *.heic *.heif *.bmp *.tif *.tiff *.mp3 *.wav *.flac *.m4a *.aac *.ogg *.opus)', 'All files (*)' ]
 
 
@@ -696,6 +722,21 @@ class TargetCard(SimpleCardWidget):
 		self.result_label = elastic(CaptionLabel(self.result_text, self))
 		self.result_label.setTextColor('#707070', '#9a9a9a')
 		self.result_label.installEventFilter(ToolTipFilter(self.result_label))
+		# green like Batch's check: the result on show was made with the settings shown now
+		self.made_check = CaptionLabel('✓', self)
+		self.made_check.setTextColor('#0f7b0f', '#6ccb5f')
+		self.made_check.setFont(getFont(16, QFont.Weight.Bold))
+		self.made_check.setToolTip('Made with the current settings, sources, target and frame. It goes away when anything changes')
+		self.made_check.installEventFilter(ToolTipFilter(self.made_check))
+		self.made_check.hide()
+		result_row.addWidget(self.made_check, 0, Qt.AlignmentFlag.AlignVCenter)
+		# an output Start made with the settings shown now, the round check of the status line's Already made
+		self.made_icon = IconWidget(InfoBarIcon.SUCCESS, self)
+		self.made_icon.setFixedSize(16, 16)
+		self.made_icon.setToolTip('Already made with the current settings, sources and target. It goes away when anything changes')
+		self.made_icon.installEventFilter(ToolTipFilter(self.made_icon))
+		self.made_icon.hide()
+		result_row.addWidget(self.made_icon, 0, Qt.AlignmentFlag.AlignVCenter)
 		for widget in [ self.busy_bar, self.progress_bar, self.result_label ]:
 			result_row.addWidget(widget, 1, Qt.AlignmentFlag.AlignVCenter)
 		self.progress_label = CaptionLabel('', self)
@@ -754,9 +795,15 @@ class TargetCard(SimpleCardWidget):
 		# not on the full bar a finished preview shows for a moment
 		self.preview_stop_button.setVisible(ratio is not None and ratio < 1)
 		self.result_label.setVisible(ratio is None)
+		if ratio is not None:
+			# a preview being made, the check comes back with a result of the settings shown
+			self.made_check.hide()
+			self.made_icon.hide()
 
-	def set_result(self, path : str, detail : str = '') -> None:
-		self.result_text = ('Result: %s' % os.path.basename(path) + ('  ·  ' + detail if detail else '')) if path else 'No result yet'
+	def set_result(self, path : str, detail : str = '', name : str = '') -> None:
+		# a kept preview's name ends in the tag of its settings, it reads without it
+		name = name or re.sub(r' [0-9a-f]{20}(\.jpg)$', r'\1', os.path.basename(path or ''))
+		self.result_text = ('Result: %s' % name + ('  ·  ' + detail if detail else '')) if path else 'No result yet'
 		self.result_label.setText(self.result_text)
 		self.result_label.setToolTip(path)
 		self.open_result_button.setEnabled(bool(path))
@@ -1109,6 +1156,13 @@ class StudioPage(SourceSelection, QWidget):
 		self.live_timer.setInterval(600)
 		self.live_timer.timeout.connect(self.run_live_preview)
 		self.live_pending = False
+		# with live preview off a change still looks for a preview or output made with the same settings to show
+		self.known_timer = QTimer(self)
+		self.known_timer.setSingleShot(True)
+		self.known_timer.setInterval(300)
+		self.known_timer.timeout.connect(self.show_known_result)
+		# the tag of the earlier preview or output on show, so it is put on show only once
+		self.known_shown : Optional[str] = None
 		# facefusion prints no progress for a single image, so a preview's bar follows how long previews took before
 		self.preview_clock = QTimer(self)
 		self.preview_clock.setInterval(100)
@@ -1239,6 +1293,8 @@ class StudioPage(SourceSelection, QWidget):
 		self.on_schema_changed()
 		self.refresh_name_preview()
 		self.schedule_face_scan()
+		# a preview or output made before with the settings the app starts with shows at once
+		self.known_timer.start()
 
 	# layout pieces
 
@@ -1522,6 +1578,8 @@ class StudioPage(SourceSelection, QWidget):
 		schema = self.session.schema
 		self.version_label.setText(('powered by FaceFusion %s' % schema.version) if schema else 'FaceFusion is not set up yet — open Settings')
 		self.refresh_locks()
+		if schema:
+			self.known_timer.start()
 
 	def on_value_changed(self, dest : str, _ : object) -> None:
 		if self.session.schema and self.session.schema.options.get(dest, {}).get('group') not in LIVE_IGNORED_GROUPS and dest not in [ 'reference_frame_index', 'trim_frame_start', 'trim_frame_end' ]:
@@ -1666,12 +1724,19 @@ class StudioPage(SourceSelection, QWidget):
 	def schedule_live_preview(self) -> None:
 		# whatever can change a preview can change which faces are found
 		self.schedule_face_scan()
+		self.refresh_made_check()
 		if self.session.config.get('live_preview'):
 			self.live_timer.start()
+		else:
+			self.known_timer.start()
 
 	def run_live_preview(self) -> None:
 		if self.freed:
 			# a run paused with its memory freed waits for Resume, a preview would take its place
+			return
+		if self.show_known_result():
+			# made before with these settings, it shows without a run
+			self.live_pending = False
 			return
 		if self.session.batch_running:
 			# a batch keeps facefusion between its runs, the preview follows when it ends
@@ -1730,7 +1795,14 @@ class StudioPage(SourceSelection, QWidget):
 		if not folder_is_writable(os.path.dirname(output_path)):
 			self.session.notify.emit('error', 'Cannot save to this folder', 'StudioFF cannot save to %s. Choose another output folder, such as Videos or Documents.' % os.path.dirname(output_path))
 			return
-		info = { 'target': self.target_path, 'trim_start': int(self.session.values.get('trim_frame_start') or 0) }
+		info = { 'target': self.target_path, 'trim_start': int(self.session.values.get('trim_frame_start') or 0), 'tag': self.run_tag(False) }
+		made = self.known_output(info.get('tag'))
+		if made:
+			box = MessageBox('Already Made', '%s was made with these settings already. Make it again?' % os.path.basename(made.get('output')), self.window())
+			box.yesButton.setText('Make Again')
+			box.cancelButton.setText('Cancel')
+			if not box.exec():
+				return
 		passes = self.mapping_passes()
 		if passes:
 			# a gif's passes run on the video facefusion gets of it, the last step turns the result back into a gif
@@ -1909,14 +1981,10 @@ class StudioPage(SourceSelection, QWidget):
 			# a gif's frame is read from its video, made off the ui thread first
 			self.session.prepare_facefusion_video(self.target_path, self.preview_frame)
 			return
-		frame = self.session.run_frame(self.target_path, self.target_card.current_frame_index(), self.target_card.current_frame())
+		frame = self.preview_source_frame()
 		if frame is None:
 			self.session.notify.emit('error', 'Preview', 'Could not read the current frame.')
 			return
-		height, width = frame.shape[:2]
-		scale = PREVIEW_MAX_SIDE / min(height, width)
-		if scale < 1:
-			frame = cv2.resize(frame, (max(1, round(width * scale)), max(1, round(height * scale))), interpolation = cv2.INTER_AREA)
 		os.makedirs(PREVIEW_DIR, exist_ok = True)
 		frame_path = PREVIEW_FRAME
 		output_path = os.path.join(PREVIEW_DIR, 'result.jpg')
@@ -1926,7 +1994,7 @@ class StudioPage(SourceSelection, QWidget):
 			except OSError:
 				pass
 		write_image(frame_path, frame)
-		info = { 'preview': True, 'target': self.target_path, 'frame': frame, 'frame_index': self.target_card.current_frame_index() }
+		info = { 'preview': True, 'target': self.target_path, 'frame': frame, 'frame_index': self.target_card.current_frame_index(), 'tag': self.run_tag(True) }
 		passes = self.mapping_passes()
 		if passes:
 			self.start_chain(passes, frame_path, output_path, info, preview = True)
@@ -1949,6 +2017,148 @@ class StudioPage(SourceSelection, QWidget):
 		self.preview_mode = True
 		if not self.session.run_facefusion('Previewing frame #%d' % self.target_card.current_frame_index(), args, preview = True):
 			self.pending_output = ''
+
+	def preview_source_frame(self) -> Optional[numpy.ndarray]:
+		"""the shown target frame a preview runs on, at most PREVIEW_MAX_SIDE on its short side"""
+		frame = self.session.run_frame(self.target_path, self.target_card.current_frame_index(), self.target_card.current_frame())
+		if frame is None:
+			return None
+		height, width = frame.shape[:2]
+		scale = PREVIEW_MAX_SIDE / min(height, width)
+		if scale < 1:
+			frame = cv2.resize(frame, (max(1, round(width * scale)), max(1, round(height * scale))), interpolation = cv2.INTER_AREA)
+		return frame
+
+	# results made before with the same settings
+
+	def run_tag(self, preview : bool) -> Optional[str]:
+		"""the tag of what a preview of the shown frame, or Start, would make now: target, sources, face mapping and the
+		settings that change the result. None while facefusion's options are not read yet"""
+		schema = self.session.schema
+		if not schema or not self.target_path:
+			return None
+		ignored = LIVE_IGNORED_GROUPS if preview else STUDIO_SYSTEM_GROUPS
+		values = { dest: value for dest, value in self.session.values.items() if schema.options.get(dest, {}).get('group') not in ignored }
+		if preview:
+			# a preview runs on its one frame, untrimmed
+			for dest in [ 'reference_frame_index', 'trim_frame_start', 'trim_frame_end' ]:
+				values.pop(dest, None)
+		data = { 'preview': preview, 'target': file_stamp(self.target_path), 'sources': [ file_stamp(path) for path in self.active_sources() ], 'values': values, 'passes': self.mapping_passes() }
+		if preview:
+			data['frame'] = self.target_card.current_frame_index()
+		return settings_tag(data)
+
+	@staticmethod
+	def known_preview(tag : Optional[str]) -> str:
+		"""the kept preview made with these settings, its name ends in their tag"""
+		if not tag or not os.path.isdir(KNOWN_DIR):
+			return ''
+		for name in os.listdir(KNOWN_DIR):
+			if name.endswith(' ' + tag + '.jpg'):
+				return os.path.join(KNOWN_DIR, name)
+		return ''
+
+	def remember_preview(self, tag : Optional[str], path : str, info : dict) -> str:
+		"""keeps a copy of a preview by its settings, the newest KNOWN_PREVIEWS of them, and gives its path"""
+		if not tag:
+			return ''
+		target = os.path.splitext(os.path.basename(info.get('target') or ''))[0]
+		copy = os.path.join(KNOWN_DIR, '%s frame %d %s.jpg' % (target, info.get('frame_index', 0), tag))
+		try:
+			os.makedirs(KNOWN_DIR, exist_ok = True)
+			old = self.known_preview(tag)
+			if old:
+				os.remove(old)
+			shutil.copyfile(path, copy)
+			kept = sorted((os.path.join(KNOWN_DIR, name) for name in os.listdir(KNOWN_DIR)), key = os.path.getmtime, reverse = True)
+			for old in kept[KNOWN_PREVIEWS:]:
+				os.remove(old)
+		except OSError:
+			return ''
+		return copy
+
+	def known_output(self, tag : Optional[str]) -> Optional[dict]:
+		"""the output Start made with these settings, while its file is still there"""
+		entry = (self.session.config.get('studio_finished') or {}).get(tag) if tag else None
+		if isinstance(entry, dict) and os.path.isfile(entry.get('output') or ''):
+			return entry
+		return None
+
+	def remember_output(self, tag : Optional[str], path : str, info : dict) -> None:
+		if not tag:
+			return
+		remembered = dict(self.session.config.get('studio_finished') or {})
+		remembered.pop(tag, None)
+		remembered[tag] = { 'output': path, 'trim_start': info.get('trim_start', 0) }
+		while len(remembered) > STUDIO_FINISHED:
+			remembered.pop(next(iter(remembered)))
+		self.session.config.set('studio_finished', remembered)
+
+	def show_known_result(self) -> bool:
+		"""shows the output Start made, or else the preview of the shown frame made, with the settings shown now, without
+		a run. True when there is one. It is put on show once, not again on every change that keeps it"""
+		if not self.target_path or self.run_active() or self.chain or self.find_problem() is not None:
+			return False
+		tag = self.run_tag(False)
+		entry = self.known_output(tag)
+		if entry:
+			if self.known_shown != tag:
+				self.known_shown = tag
+				output = entry.get('output')
+				self.release_result_reader()
+				self.last_output = output
+				self.result_info = { 'target': self.target_path, 'trim_start': entry.get('trim_start', 0), 'tag': tag }
+				self.target_card.set_result(output, 'made before with these settings')
+				self.refresh_made_check()
+				self.status_label.setText('Already made — ' + os.path.basename(output), done = True)
+				self.detail_label.setText('')
+				self.show_view('result')
+			return True
+		if self.status_label.text().startswith('Already made'):
+			self.status_label.setText('Ready')
+		if not self.session.facefusion_video_ready(self.target_path):
+			return False
+		tag = self.run_tag(True)
+		path = self.known_preview(tag)
+		if not path:
+			self.known_shown = None
+			return False
+		if self.known_shown != tag:
+			frame = self.preview_source_frame()
+			if frame is None:
+				return False
+			self.known_shown = tag
+			try:
+				# the newest previews are the ones kept
+				os.utime(path, None)
+			except OSError:
+				pass
+			self.release_result_reader()
+			self.last_output = path
+			self.result_info = { 'preview': True, 'target': self.target_path, 'frame': frame, 'frame_index': self.target_card.current_frame_index(), 'tag': tag }
+			# the copy's name is its settings tag, it reads as the preview it is
+			self.target_card.set_result(path, 'preview of frame #%d, made before with these settings' % self.target_card.current_frame_index())
+			self.show_view('result')
+		self.refresh_made_check()
+		return True
+
+	def refresh_made_check(self) -> None:
+		"""the green check under the preview: the result on show was made with the settings, sources, target and frame
+		shown now. Any change takes it away until a result of those shows"""
+		info = self.result_info or {}
+		tag = info.get('tag')
+		made = bool(tag) and bool(self.last_output) and os.path.isfile(self.last_output) and tag == self.run_tag(bool(info.get('preview')))
+		self.target_card.made_check.setVisible(made and bool(info.get('preview')))
+		self.target_card.made_icon.setVisible(made and not info.get('preview'))
+
+	def preview_folder_file(self) -> str:
+		"""the kept preview of the frame on show with the settings shown now, or else the newest kept one"""
+		path = self.known_preview(self.run_tag(True))
+		if path:
+			return path
+		if self.result_info.get('preview') and self.last_output and os.path.dirname(os.path.normcase(self.last_output)) == os.path.normcase(KNOWN_DIR):
+			return self.last_output
+		return 
 
 	def on_busy_changed(self, busy : bool, task : str) -> None:
 		self.refresh_run_buttons()
@@ -2082,6 +2292,12 @@ class StudioPage(SourceSelection, QWidget):
 				# timed like the bar, a face mapping preview from its first step rather than from finding the people
 				self.session.remember_preview_seconds(self.preview_estimate, time.monotonic() - self.preview_started)
 			self.release_result_reader()
+			if self.preview_mode:
+				# the preview folder is emptied when the app closes, the kept copy is the one shown and opened
+				output_path = self.remember_preview(self.pending_info.get('tag'), output_path, self.pending_info) or output_path
+			else:
+				self.remember_output(self.pending_info.get('tag'), output_path, self.pending_info)
+			self.known_shown = self.pending_info.get('tag')
 			self.last_output = output_path
 			self.result_info = self.pending_info
 			if not self.preview_mode:
@@ -2100,6 +2316,10 @@ class StudioPage(SourceSelection, QWidget):
 					self.progress_bar.resume()
 			self.target_card.set_result(output_path, ('preview of frame #%d' % self.pending_info.get('frame_index', 0) if self.preview_mode else 'done') + ' in ' + format_seconds(elapsed))
 			self.show_view('result')
+			self.refresh_made_check()
+			if self.preview_mode and self.pending_info.get('tag') != self.run_tag(True):
+				# the settings changed while it was made, to ones made before: that one shows
+				self.show_known_result()
 			if not self.preview_mode:
 				self.session.notify.emit('success', 'Finished', 'Saved %s in %s' % (os.path.basename(output_path), format_seconds(elapsed)))
 				if self.session.config.get('open_output_when_done'):
@@ -2812,8 +3032,14 @@ class StudioPage(SourceSelection, QWidget):
 			self.session.config.set('output_dir', os.path.normpath(path))
 
 	def reveal_output(self) -> None:
-		if self.last_output and os.path.exists(self.last_output):
-			show_in_folder(self.last_output)
+		"""Open Preview in Explorer: the kept previews folder, with the preview of this frame and settings picked when
+		there is one. The output folder has its own button"""
+		path = self.preview_folder_file()
+		if path:
+			show_in_folder(path)
+		else:
+			os.makedirs(KNOWN_DIR, exist_ok = True)
+			self.open_folder(KNOWN_DIR)
 
 	@staticmethod
 	def open_path(path : str) -> None:
