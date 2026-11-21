@@ -18,7 +18,7 @@ from ffstudio.platforms import GPU_ONNXRUNTIME, IS_WINDOWS, PYTHON_NAME, conda_e
 from ffstudio.privacy import hide_private
 from ffstudio.session import MINIMUM_PYTHON, Session
 from ffstudio.updater import download_release, is_git_checkout, start_helper
-from ffstudio.widgets import ChoiceButton
+from ffstudio.widgets import ChoiceButton, PreviewView
 
 # minutes, 0 keeps them until the app closes
 KEEP_LOADED_CHOICES = [ (5, '5 minutes'), (10, '10 minutes'), (30, '30 minutes'), (60, '1 hour'), (0, 'Until the app closes') ]
@@ -1234,6 +1234,10 @@ class SetupPage(QWidget):
 		self.drives_switch.setChecked(bool(self.session.config.get('show_drives_in_title_bar')))
 		self.drives_switch.checkedChanged.connect(self.on_drives_toggled)
 		layout.addLayout(form_row('Hard drives', [ BodyLabel('Show the free space of the drives the output folders are on in the title bar (needs the system monitor)', card), self.drives_switch ], card))
+		self.divider_switch = SwitchButton(card)
+		self.divider_switch.setChecked(PreviewView.show_divider)
+		self.divider_switch.checkedChanged.connect(self.on_divider_toggled)
+		layout.addLayout(form_row('Compare slider', [ BodyLabel('Show the before / after slider over the preview in Studio and Batch (off shows only the result)', card), self.divider_switch ], card))
 		self.close_combo = ComboBox(card)
 		for key, text in CLOSE_CHOICES:
 			self.close_combo.addItem(text, userData = key)
@@ -1263,6 +1267,11 @@ class SetupPage(QWidget):
 		self.session.config.set('show_system_monitor', checked)
 		self.session.config.save()
 		self.monitor_toggled.emit(checked)
+
+	def on_divider_toggled(self, checked : bool) -> None:
+		self.session.config.set('preview_compare_divider', checked)
+		self.session.config.save()
+		PreviewView.set_show_divider(checked)
 
 	def on_drives_toggled(self, checked : bool) -> None:
 		self.session.config.set('show_drives_in_title_bar', checked)

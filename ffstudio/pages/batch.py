@@ -1,4 +1,6 @@
 import glob
+import hashlib
+import json
 import os
 import re
 import time
@@ -2099,6 +2101,8 @@ class BatchPage(SourceSelection, QWidget):
 		self.face_picker.set_chosen(position if self.reference_picks.get(target) == pick else self.default_position())
 		self.schedule_face_scan()
 		self.preview_settings_changed()
+		# a made output of this target was made with the other face, ✓ follows the pick
+		self.refresh_timer.start()
 
 	def default_position(self) -> int:
 		"""the face a target without a pick gets changed, the Position option counting largest first"""
@@ -2334,13 +2338,30 @@ class BatchPage(SourceSelection, QWidget):
 			taken.add(key)
 		return items
 
+	def made_with(self, item : Dict[str, Any]) -> Optional[str]:
+		"""a short tag of the settings an output is made with: Batch's options that change the file and the target's picked
+		face. None while facefusion's options are not read yet"""
+		schema = self.store.schema
+		if not schema:
+			return None
+		values = { dest: value for dest, value in self.store.values.items() if schema.options.get(dest, {}).get('group') not in SYSTEM_GROUPS }
+		if self.reference_mode():
+			values['reference_pick'] = self.reference_pick(item.get('target'))
+		return hashlib.sha1(json.dumps(values, sort_keys = True, default = str).encode('utf-8')).hexdigest()[:16]
+
+	def same_settings(self, item : Dict[str, Any], made_with : Optional[str]) -> bool:
+		"""an output made with the settings shown now, one made before its settings were kept counts as made with them"""
+		now = self.made_with(item)
+		return not made_with or not now or made_with == now
+
 	@staticmethod
 	def finished_key(item : Dict[str, Any]) -> str:
 		"""an output's face and target, as the key it is remembered by once made"""
 		return os.path.normcase('|'.join([ item.get('target') or '' ] + list(item.get('sources') or [])))
 
 	def remember_finished(self, item : Dict[str, Any]) -> None:
-		"""an output made by a batch, so the list shows it with ✓ again after a restart"""
+		"""an output made by a batch, so the list shows it with ✓ again after a restart, and with the settings it was made
+		with, so ✓ goes while other settings are chosen and comes back with those"""
 		try:
 			target_modified = os.path.getmtime(item.get('target'))
 		except OSError:
@@ -2348,7 +2369,7 @@ class BatchPage(SourceSelection, QWidget):
 		remembered = dict(self.session.config.get('batch_finished') or {})
 		key = self.finished_key(item)
 		remembered.pop(key, None)
-		remembered[key] = { 'output': item.get('output'), 'target_modified': target_modified }
+		remembered[key] = { 'output': item.get('output'), 'target_modified': target_modified, 'made_with': item.get('made_with') or self.made_with(item) }
 		# the newest are kept, the list does not grow without end
 		while len(remembered) > FINISHED_REMEMBERED:
 			remembered.pop(next(iter(remembered)))
@@ -2370,7 +2391,13 @@ class BatchPage(SourceSelection, QWidget):
 				made = item.get('replaces') and not item.get('repeated') and os.path.getmtime(item.get('output')) >= os.path.getmtime(item.get('target'))
 			except OSError:
 				made = False
-			return dict(item, status = 'done', guessed = True) if made else item
+			if not made:
+				return item
+			# its settings are not known, it counts as made with the ones shown now, other settings take ✓ away
+			made = dict(item, status = 'done', guessed = True)
+			if self.made_with(made):
+				self.remember_finished(made)
+			return made
 		output = entry.get('output') or ''
 		inside = os.path.normcase(os.path.normpath(output)).startswith(os.path.normcase(os.path.normpath(output_dir)) + os.sep)
 		try:
@@ -2379,7 +2406,13 @@ class BatchPage(SourceSelection, QWidget):
 			unchanged = False
 		if not inside or not unchanged or not os.path.isfile(output):
 			return item
-		return dict(item, output = output, name = os.path.relpath(output, output_dir), replaces = False, repeated = False, status = 'done')
+		if not entry.get('made_with') and self.made_with(item):
+			# remembered before settings were kept: it counts as made with the ones shown now
+			self.remember_finished(dict(item, output = output))
+		elif not self.same_settings(item, entry.get('made_with')):
+			# made with other settings, Run Batch makes it with these
+			return item
+		return dict(item, made_with = entry.get('made_with') or self.made_with(item), output = output, name = os.path.relpath(output, output_dir), replaces = False, repeated = False, status = 'done')
 
 	def refresh_matches(self, keep_results : bool = False, restore : bool = True) -> None:
 		"""plans the outputs again, keep_results leaves the runs that ended in the list with what they made. restore shows
@@ -2392,6 +2425,8 @@ class BatchPage(SourceSelection, QWidget):
 		self.save()
 		self.plan_items = self.plan()
 		finished = { self.run_key(item): item for item in self.items if item.get('status') in FINISHED } if keep_results else {}
+		# a made output whose settings were changed since plans anew, made_before shows it again with its own settings
+		finished = { key: item for key, item in finished.items() if item.get('status') != 'done' or self.same_settings(item, item.get('made_with')) }
 		self.items = [ finished.get(self.run_key(item), item) for item in self.plan_items ]
 		if restore:
 			self.items = [ self.made_before(item) for item in self.items ]
@@ -3072,6 +3107,7 @@ class BatchPage(SourceSelection, QWidget):
 		self.skipping = False
 		item = self.items[self.current]
 		item['status'] = 'running'
+		item['made_with'] = self.made_with(item)
 		self.refresh_item(self.current)
 		self.started_count += 1
 		args = [ 'run' ]

@@ -725,6 +725,8 @@ class PreviewView(QWidget):
 	face_menu_requested = Signal(int, QPoint)
 	# a left click on a face box: its index in faces
 	face_clicked = Signal(int)
+	# the Settings switch for every preview: off, a preview shows only the result, the swap button still shows the target
+	show_divider = True
 
 	def __init__(self, hint : str = '', parent : Optional[QWidget] = None) -> None:
 		super().__init__(parent)
@@ -775,7 +777,14 @@ class PreviewView(QWidget):
 		self.update()
 
 	def is_comparing(self) -> bool:
-		return not self.pixmap.isNull() and not self.compare_pixmap.isNull()
+		return PreviewView.show_divider and not self.pixmap.isNull() and not self.compare_pixmap.isNull()
+
+	@staticmethod
+	def set_show_divider(shown : bool) -> None:
+		PreviewView.show_divider = shown
+		for widget in QApplication.allWidgets():
+			if isinstance(widget, PreviewView):
+				widget.update()
 
 	def set_badge(self, text : str, right : bool = False) -> None:
 		self.badge = text
@@ -955,12 +964,16 @@ class PreviewView(QWidget):
 			painter.setFont(font)
 			painter.drawText(rect, Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap, self.hint)
 
-		if self.badge and not self.pixmap.isNull() and not self.is_comparing():
+		badge, badge_right = self.badge, self.badge_right
+		if not PreviewView.show_divider and not self.compare_pixmap.isNull():
+			# the compare slider is switched off in Settings, the result shows alone with its own label
+			badge, badge_right = self.compare_labels[1], True
+		if badge and not self.pixmap.isNull() and not self.is_comparing():
 			# a result sits top right, as in the compare view, the target top left
-			if self.badge_right:
-				self.paint_badge(painter, QPointF(self.width() - 10, 10), self.badge, align_right = True)
+			if badge_right:
+				self.paint_badge(painter, QPointF(self.width() - 10, 10), badge, align_right = True)
 			else:
-				self.paint_badge(painter, QPointF(10, 10), self.badge)
+				self.paint_badge(painter, QPointF(10, 10), badge)
 
 		if self.selected is False:
 			painter.fillPath(path, QColor(0, 0, 0, 150) if dark else QColor(255, 255, 255, 170))

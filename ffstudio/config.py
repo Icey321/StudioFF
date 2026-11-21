@@ -74,6 +74,8 @@ DEFAULT_CONFIG : Dict[str, Any] =\
 	'show_system_monitor': True,
 	# the drives the output folders are on, in the title bar after the memory (they update with the system monitor)
 	'show_drives_in_title_bar': False,
+	# the before / after divider over a preview in Studio and Batch, off shows only the result
+	'preview_compare_divider': True,
 	# what the window's X button does: close, minimize or tray
 	'close_action': 'close',
 	# look for a newer studioff release when the app opens, and say so with an Update Now button

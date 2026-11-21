@@ -9,6 +9,7 @@ from qfluentwidgets import CaptionLabel, DotInfoBadge, FluentIcon, FluentWindow,
 from ffstudio import APP_NAME, APP_VERSION, FACEFUSION_MANAGEMENT, splash
 from ffstudio.config import APP_DIR
 from ffstudio.session import Session
+from ffstudio.widgets import PreviewView
 
 THEMES = { 'auto': Theme.AUTO, 'light': Theme.LIGHT, 'dark': Theme.DARK }
 DEFAULT_ACCENT = '#7c5cff'
@@ -26,6 +27,7 @@ class MainWindow(FluentWindow):
 	def __init__(self, session : Session) -> None:
 		super().__init__()
 		self.session = session
+		PreviewView.show_divider = session.config.get('preview_compare_divider') is not False
 		self.tray : Optional[QSystemTrayIcon] = None
 		self.quitting = False
 		self.close_button_pressed = False
