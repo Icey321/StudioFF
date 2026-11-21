@@ -2765,6 +2765,7 @@ class BatchPage(SourceSelection, QWidget):
 			items = [ item for item in items if item.get('status') != 'done' ]
 			if not items:
 				self.session.notify.emit('info', 'Already made', '%s already made (✓). To make one again, press ▶ on its row, or select rows and press Run Selected.' % ('All (%d) outputs are' % len(made) if len(made) > 1 else 'This output is'))
+				self.status_label.setText('Nothing to run: %s already made (✓)' % ('all (%d) outputs are' % len(made) if len(made) > 1 else 'the output is'))
 				return
 			selected = { self.run_key(item) for item in items }
 		if not self.output_dir():
