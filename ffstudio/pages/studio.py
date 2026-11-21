@@ -808,6 +808,10 @@ class TargetCard(SimpleCardWidget):
 		self.result_label.setToolTip(path)
 		self.open_result_button.setEnabled(bool(path))
 		self.show_result_button.setEnabled(bool(path))
+		if path:
+			# a new result shows whole: the compare divider goes back to the far left
+			self.preview.split = 0.0
+			self.preview.update()
 
 	def set_blocked(self, text : str) -> None:
 		# a refused target replaces the result line until the target changes or a check finds nothing

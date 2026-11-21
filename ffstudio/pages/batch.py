@@ -1679,6 +1679,7 @@ class BatchPage(SourceSelection, QWidget):
 		self.shown_key = self.run_key(item)
 		self.preview_target = to_pixmap(frame)
 		self.preview_result = result
+		self.preview_view.split = 0.0
 		self.finished_shown = True
 		self.show_view('result')
 		target = item.get('target')
@@ -1983,6 +1984,8 @@ class BatchPage(SourceSelection, QWidget):
 			self.session.remember_preview_seconds(self.preview_estimate, elapsed)
 			self.preview_target = to_pixmap(self.preview_run_frame)
 			self.preview_result = to_pixmap(read_frame(output_path))
+			# a new preview shows whole: the compare divider goes back to the far left
+			self.preview_view.split = 0.0
 			self.show_view('result')
 			result = self.check_results.get(self.preview_run.get('target'))
 			if result and result.get('blocked'):
