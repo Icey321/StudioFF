@@ -19,7 +19,7 @@ from ffstudio.config import APP_DIR, DATA_DIR, PREVIEW_DIR, PREVIEW_IMAGE_QUALIT
 from ffstudio.face_mapping import FACE_PROCESSORS, FRAME_PROCESSORS, GROUP_PREFIX, LEAVE, PEOPLE_FILE, SELECTED, FaceMappingCard, box_overlap, face_map, group_images, group_value, is_kept, is_mapped, merge_people, people_dir, person_color, person_name, plan_passes
 from ffstudio.faces import FACE_CHECK_SAMPLES, FACE_GROUPS, MASK_GROUPS, FaceProbe, alike_faces, describe_faces, describe_landmarks, describe_mask, face_landmarks, face_tag, faces_text_color, no_face, read_mask
 from ffstudio.media import VideoReader, animation_extension, browse_dir, is_animated_webp, is_animation, format_length, format_seconds, format_timecode, media_kind, needs_conversion, read_frame, read_image, split_faces, thumbnail, to_pixmap, usable_path, write_image
-from ffstudio.nsfw import BLOCKED_STATUS, NsfwDialog, describe_result, show_blocked_bar
+from ffstudio.nsfw import BLOCKED_STATUS, NsfwDialog, describe_result, link_label, nsfw_link, show_blocked_bar
 from ffstudio.option_panel import FavoritesPanel, OptionPanel
 from ffstudio.option_widgets import FILTER_OPTIONS, KEEP_VALUE, setting_locks, unused_locks
 from ffstudio.output_name import AUTOMATIC_TEMPLATE, NAME_EXAMPLES, NAME_TAGS, build_output, build_output_path, unknown_tags
@@ -722,6 +722,8 @@ class TargetCard(SimpleCardWidget):
 		self.result_label = elastic(CaptionLabel(self.result_text, self))
 		self.result_label.setTextColor('#707070', '#9a9a9a')
 		self.result_label.installEventFilter(ToolTipFilter(self.result_label))
+		# a refused target's line is a link to the detector scores
+		link_label(self.result_label, lambda: self.page.show_blocked_scores())
 		# green like Batch's check: the result on show was made with the settings shown now
 		self.made_check = CaptionLabel('✓', self)
 		self.made_check.setTextColor('#0f7b0f', '#6ccb5f')
@@ -815,7 +817,7 @@ class TargetCard(SimpleCardWidget):
 
 	def set_blocked(self, text : str) -> None:
 		# a refused target replaces the result line until the target changes or a check finds nothing
-		self.result_label.setText(text or self.result_text)
+		self.result_label.setText(nsfw_link(text) if text else self.result_text)
 
 	def browse(self) -> None:
 		path, _ = QFileDialog.getOpenFileName(self, 'Choose target image or video', self.page.start_folder('target'), 'Images, videos and GIFs (*.jpg *.jpeg *.jfif *.png *.webp *.avif *.heic *.heif *.bmp *.tif *.tiff *.mp4 *.mov *.mkv *.avi *.webm *.m4v *.wmv *.mpg *.mpeg *.flv *.f4v *.gif);;All files (*)')
@@ -3033,6 +3035,13 @@ class StudioPage(SourceSelection, QWidget):
 	def show_content_result(self) -> None:
 		if self.content_result:
 			NsfwDialog(self.content_result, self.check_after_run, self.window(), self.jump_to_frame).exec()
+
+	def show_blocked_scores(self) -> None:
+		"""the red refused line was clicked: the check's result when there is one, else the check runs and opens it"""
+		if self.content_result and self.content_result.get('blocked'):
+			self.show_content_result()
+		else:
+			self.check_content(True, PREVIEW_FRAME if self.preview_mode else '')
 
 	def jump_to_frame(self, frame_index : int) -> None:
 		self.show_view('target')

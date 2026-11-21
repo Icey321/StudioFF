@@ -1,9 +1,10 @@
+import html
 import os
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from PySide6.QtCore import QRectF, Qt
 from PySide6.QtGui import QColor, QPainter, QPixmap
-from PySide6.QtWidgets import QGridLayout, QHBoxLayout, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QGridLayout, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 from qfluentwidgets import BodyLabel, CaptionLabel, IconWidget, ImageLabel, InfoBar, InfoBarIcon, InfoBarPosition, MessageBoxBase, PushButton, StrongBodyLabel, SubtitleLabel, isDarkTheme
 
 from ffstudio.media import format_timecode
@@ -46,6 +47,17 @@ def describe_result(result : Dict[str, Any], after_run : bool) -> Tuple[str, str
 	if flagged:
 		return 'Under the NSFW limit', "FaceFusion's NSFW filter flagged %d of the %d checked frames in %s (%.0f%%), which is under its 10%% limit. FaceFusion will process it." % (flagged, checked, name, result.get('rate') or 0)
 	return 'No NSFW content detected', "FaceFusion's NSFW filter found nothing in the %d checked frames of %s. FaceFusion will process it." % (checked, name)
+
+
+def nsfw_link(text : str) -> str:
+	"""a status line about a refused target as a red link, clicking it shows the detector scores"""
+	return '<a href="scores" style="color: %s;">%s</a>' % (FLAG_TEXT[1] if isDarkTheme() else FLAG_TEXT[0], html.escape(text))
+
+
+def link_label(label : QLabel, handler : Callable[[], None]) -> None:
+	"""makes the label's nsfw_link clickable"""
+	label.setTextInteractionFlags(Qt.TextInteractionFlag.LinksAccessibleByMouse)
+	label.linkActivated.connect(lambda _: handler())
 
 
 def share_percent(share : float) -> str:

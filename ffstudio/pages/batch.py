@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import time
 from collections import OrderedDict
 from typing import Any, Dict, List, Optional, Tuple
@@ -16,7 +17,7 @@ from qfluentwidgets import Action, BodyLabel, CaptionLabel, ComboBox, FluentIcon
 from ffstudio.config import APP_DIR, PREVIEW_DIR, PREVIEW_IMAGE_QUALITY
 from ffstudio.faces import FACE_CHECK_SAMPLES, FACE_GROUPS, MASK_GROUPS, FaceProbe, alike_faces, describe_faces, describe_landmarks, describe_mask, face_landmarks, face_tag, faces_text_color, no_face, read_mask
 from ffstudio.media import VideoReader, animation_extension, browse_dir, extension, is_animation, format_length, format_seconds, format_timecode, media_kind, needs_conversion, read_frame, thumbnail, to_pixmap, usable_path, video_length, write_image
-from ffstudio.nsfw import BLOCKED_TITLE, NsfwDialog, show_blocked_bar
+from ffstudio.nsfw import BLOCKED_TITLE, NsfwDialog, link_label, nsfw_link, show_blocked_bar
 from ffstudio.option_widgets import setting_locks, unused_locks
 from ffstudio.output_name import AUTOMATIC_TEMPLATE, build_output, unknown_tags
 from ffstudio.pages.models import format_size
@@ -32,6 +33,8 @@ DEFAULT_TEMPLATE = '{target}_{source}'
 OLD_PLACEHOLDERS = { '{target_name}': '{target}', '{source_name}': '{source}', '{target_extension}': '', '{index}': '{n}' }
 LIST_LIMIT = 500
 PREVIEW_RESULT = os.path.join(PREVIEW_DIR, 'batch_result.jpg')
+# the frame FaceFusion refused to preview, kept so clicking the red line can check it
+BLOCKED_FRAME = os.path.join(PREVIEW_DIR, 'batch_blocked_frame.jpg')
 # wide enough for the drive text under "Output folder"
 LABEL_WIDTH = 190
 TARGET_FILES_FILTER = 'Images, videos and GIFs (*.jpg *.jpeg *.jfif *.png *.webp *.avif *.heic *.heif *.bmp *.tif *.tiff *.mp4 *.mov *.mkv *.avi *.webm *.m4v *.wmv *.mpg *.mpeg *.flv *.f4v *.gif);;All files (*)'
@@ -1025,6 +1028,7 @@ class BatchPage(SourceSelection, QWidget):
 		session.runner.log.connect(self.on_log)
 		session.runner.finished.connect(self.on_finished)
 		session.content_checked.connect(self.on_content_checked)
+		session.content_checked.connect(self.on_blocked_checked)
 		self.store.value_changed.connect(self.on_value_changed)
 		self.store.schema_changed.connect(self.refresh_timer.start)
 		self.store.schema_changed.connect(self.preview_settings_changed)
@@ -1169,6 +1173,9 @@ class BatchPage(SourceSelection, QWidget):
 		self.preview_label = elastic(CaptionLabel('', card))
 		self.preview_label.setTextColor('#707070', '#9a9a9a')
 		self.preview_label.setWordWrap(True)
+		# a refused preview's line is a link to the detector scores
+		link_label(self.preview_label, self.show_blocked_scores)
+		self.blocked_preview : Optional[Dict[str, Any]] = None
 		column.addWidget(self.preview_label)
 		# what face detection found, and which setting to change when it found nothing usable, checked with the overlays off too
 		self.faces_label = CaptionLabel('', card)
@@ -1999,7 +2006,14 @@ class BatchPage(SourceSelection, QWidget):
 		elif self.session.nsfw_block_message(True):
 			self.forget_result()
 			self.preview_view.set_pixmap(to_pixmap(self.preview_run_frame))
-			self.preview_label.setText('⛔ %s in %s, FaceFusion refused to process it' % (BLOCKED_TITLE, name))
+			target = self.preview_run.get('target')
+			self.blocked_preview = { 'target': target, 'frame_index': self.preview_frame_index(target) if media_kind(target) == 'video' else None }
+			try:
+				shutil.copyfile(os.path.join(PREVIEW_DIR, 'batch_frame.jpg'), BLOCKED_FRAME)
+			except OSError:
+				self.blocked_preview = None
+			text = '%s in %s, FaceFusion refused to process it' % (BLOCKED_TITLE, name)
+			self.preview_label.setText('⛔ ' + (nsfw_link(text) if self.blocked_preview else text))
 		else:
 			status, _ = self.session.describe_run_error()
 			self.preview_label.setText(status if self.session.run_error() else 'Preview failed (exit code %d), see Console' % exit_code)
@@ -2767,6 +2781,36 @@ class BatchPage(SourceSelection, QWidget):
 		if jump and result.get('flagged'):
 			jump(result.get('flagged')[0])
 		NsfwDialog(result, item.get('status') == 'blocked', self.window(), jump).exec()
+
+	def show_blocked_scores(self) -> None:
+		"""the red refused-preview line was clicked: the nsfw check of that frame, run the first time"""
+		blocked = self.blocked_preview
+		if not blocked:
+			return
+		if blocked.get('result'):
+			NsfwDialog(blocked.get('result'), True, self.window()).exec()
+		else:
+			status = self.status_label.text()
+			if self.session.run_content_check('batch-scores', [ BLOCKED_FRAME ]):
+				blocked['status'] = status
+				self.status_label.setText('Checking the refused frame with the NSFW filter…')
+
+	def on_blocked_checked(self, owner : str, results : list, exit_code : int) -> None:
+		if owner != 'batch-scores':
+			return
+		blocked = self.blocked_preview
+		# the status goes back to what it said before the check
+		self.status_label.setText((blocked or {}).get('status') or 'Ready')
+		if exit_code != 0 or not results or not blocked:
+			if exit_code not in [ 0, -1 ]:
+				self.status_label.setText('NSFW check failed (exit code %d). See Console.' % exit_code)
+			return
+		# the dialog names the target and its frame, not the copy that was checked
+		result = dict(results[0], path = blocked.get('target'), kind = 'image')
+		if blocked.get('frame_index') is not None:
+			result['frame_label'] = blocked.get('frame_index')
+		blocked['result'] = result
+		NsfwDialog(result, True, self.window()).exec()
 
 	def show_preview_frame(self, target : str, index : int) -> None:
 		"""moves the timeline of the shown target to a frame, its preview follows like a picked one"""
