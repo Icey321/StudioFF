@@ -1517,6 +1517,16 @@ class FacePicker(QWidget):
 		self.row.addSpacing(6)
 		self.row.addWidget(self.hint, 1)
 		self.dots : List[FaceDot] = []
+		self.click_tip = 'Click to change this face'
+
+	def set_title(self, title : str) -> None:
+		self.title_label.setText(title)
+
+	def set_click_tip(self, tip : str) -> None:
+		"""what a click on a circle does, Many and One mode switch to Reference first"""
+		self.click_tip = tip
+		for dot in self.dots:
+			dot.setToolTip(tip)
 
 	def set_faces(self, faces : List[Tuple[int, QPixmap]], chosen : Union[int, Iterable[int], None]) -> None:
 		"""the faces as (position, picture), in the order given, chosen one position or several"""
@@ -1525,7 +1535,7 @@ class FacePicker(QWidget):
 		self.dots = []
 		for position, pixmap in faces:
 			dot = FaceDot(position, pixmap, self)
-			dot.setToolTip('Click to change this face')
+			dot.setToolTip(self.click_tip)
 			dot.installEventFilter(ToolTipFilter(dot))
 			dot.clicked.connect(self.picked.emit)
 			# after the title and its spacing, before the hint

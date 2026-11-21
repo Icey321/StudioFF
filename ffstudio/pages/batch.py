@@ -23,7 +23,7 @@ from ffstudio.output_name import AUTOMATIC_TEMPLATE, build_output, unknown_tags
 from ffstudio.pages.models import format_size
 from ffstudio.pages.setup import SYSTEM_GROUPS, form_row
 from ffstudio.platforms import show_in_folder
-from ffstudio.pages.studio import LOCK_DRIVERS, LIVE_IGNORED_GROUPS, PREVIEW_MAX_SIDE, NameTagsView, SettingsColumn, SourceCard, SourceSelection, StudioPage, elastic, face_crops, estimated_progress, preview_step_floor, run_tag_values, tool_button
+from ffstudio.pages.studio import LOCK_DRIVERS, LIVE_IGNORED_GROUPS, PREVIEW_MAX_SIDE, NameTagsView, SettingsColumn, SourceCard, SourceSelection, StudioPage, SWITCH_TIP, elastic, face_crops, selector_hint, estimated_progress, preview_step_floor, run_tag_values, tool_button
 from ffstudio.session import OptionStore, Session, describe_error, folder_is_writable
 from ffstudio.widgets import CollapsibleCard, DriveLabel, FacePicker, IconCountButton, PreviewView, Splitter, StatusLabel, SwapIcon, add_edit_button, attach_landmarks_cycle, collect_drop_paths, guard_wheel, landmarks_mode, with_drive_bar
 
@@ -1239,8 +1239,6 @@ class BatchPage(SourceSelection, QWidget):
 			self.schedule_face_scan()
 		if dest in LOCK_DRIVERS or dest.endswith('_model'):
 			self.refresh_locks()
-		if dest == 'face_selector_mode' and not self.reference_mode():
-			self.face_picker.hide()
 
 	def open_output_folder(self) -> None:
 		StudioPage.open_folder(self.output_dir())
@@ -2116,8 +2114,14 @@ class BatchPage(SourceSelection, QWidget):
 			return
 		target = item.get('target')
 		pick = [ self.preview_frame_index(target), position ]
+		switched = not self.reference_mode()
+		if switched:
+			# a click in Many or One mode: Reference mode with that face, an old pick of it must not unpick
+			self.store.set_value('face_selector_mode', 'reference')
+			self.face_picker.set_title('Reference Face')
+			self.face_picker.set_click_tip('Click to change this face')
 		# set again at the end, so the newest picks are the ones kept
-		if self.reference_picks.pop(target, None) != pick:
+		if self.reference_picks.pop(target, None) != pick or switched:
 			self.reference_picks[target] = pick
 		self.reference_matches = { key: value for key, value in self.reference_matches.items() if key[0] != target }
 		self.save()
@@ -2132,7 +2136,7 @@ class BatchPage(SourceSelection, QWidget):
 		return int(self.store.values.get('reference_face_position') or 0)
 
 	def on_preview_face_clicked(self, index : int) -> None:
-		if self.reference_mode() and 0 <= index < len(self.scanned_faces) and self.scanned_faces[index].get('position', -1) >= 0:
+		if self.face_picker.isVisible() and 0 <= index < len(self.scanned_faces) and self.scanned_faces[index].get('position', -1) >= 0:
 			self.pick_reference(self.scanned_faces[index].get('position'))
 
 	def refresh_face_picker(self, item : Dict[str, Any], result : dict) -> None:
@@ -2149,13 +2153,24 @@ class BatchPage(SourceSelection, QWidget):
 		if self.preview_waits_for_match:
 			self.preview_waits_for_match = False
 			self.schedule_preview()
-		if not self.reference_mode() or result.get('error'):
+		if result.get('error'):
 			self.face_picker.hide()
 			return
 		scanned = self.scanned_frame if self.scanned_frame and self.scanned_frame[0] == result.get('tag') else None
 		frame = scanned[1] if scanned else self.scaled_frame(item)
 		crops = face_crops(frame, result, [ (face.get('position'), face) for face in faces ])
 		name = os.path.basename(target)
+		if not self.reference_mode():
+			# Many and One: the ring shows the faces FaceFusion's selector changes, a click switches to Reference (Nik)
+			changed = [ face.get('position') for face in faces if face.get('selected') ]
+			self.face_picker.set_title('Changed Faces')
+			self.face_picker.set_click_tip(SWITCH_TIP)
+			self.face_picker.set_faces(crops, changed)
+			self.face_picker.set_hint(selector_hint(self.store.values.get('face_selector_mode'), self.store.values.get('face_selector_order'), len(crops), len(changed), name))
+			self.face_picker.show()
+			return
+		self.face_picker.set_title('Reference Face')
+		self.face_picker.set_click_tip('Click to change this face')
 		if pick and pick[0] == index:
 			ringed = pick[1]
 		elif pick:

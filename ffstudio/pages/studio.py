@@ -75,6 +75,25 @@ def elastic(label : CaptionLabel) -> CaptionLabel:
 	return label
 
 
+# a face circle in Many or One mode: the click makes it Reference mode with that face (Nik)
+SWITCH_TIP = 'Click to change only this face (switches the mode to Reference)'
+
+
+def selector_hint(mode : str, order : Optional[str], count : int, changed : int, name : str) -> str:
+	"""the line after the face circles in Many and One mode: which faces the ring marks and which setting decides it"""
+	if not count:
+		return 'No faces in this frame'
+	if not changed:
+		return 'No face is changed · Gender, Race or Age leaves none'
+	if count == 1:
+		return 'The only face in %s is changed' % name
+	if mode == 'one':
+		return 'One mode: the first face by Order (%s) is changed · click a face to change it instead' % (order or 'large-small')
+	if changed == count:
+		return 'Many mode changes all (%d) faces · click one to change only it' % count
+	return 'Many mode changes (%d) of (%d) faces · Gender, Race or Age skips the others' % (changed, count)
+
+
 def face_crops(frame, result : dict, faces : List[Tuple[int, dict]]) -> List[Tuple[int, QPixmap]]:
 	"""(key, picture) of each (key, face) of a face scan, the face with some room around it, cut from the scanned frame"""
 	crops = []
@@ -2532,20 +2551,31 @@ class StudioPage(SourceSelection, QWidget):
 		self.refresh_face_picker(result)
 
 	def refresh_face_picker(self, result : dict) -> None:
-		"""round crops of the faces in the shown frame in Reference mode: the ringed face is the one a run changes,
-		a click makes another one the reference. Many and One read no picked face and Face Mapping picks its own,
-		the row hides there"""
+		"""round crops of the faces in the shown frame, the ringed ones are those a run changes (FaceFusion's own
+		face selector marks them in the scan). In Reference mode a click makes another face the reference;
+		Many and One read no picked face, there the circles only show the ring. Face Mapping picks its own, the row hides there"""
 		card = self.target_card
 		picker = card.face_picker
 		# Face Mapping picks each face itself, a second row of faces there only confuses (Nik)
-		if result.get('error') or self.mapping_card.active_people() or (self.session.values.get('face_selector_mode') or 'reference') != 'reference':
+		if result.get('error') or self.mapping_card.active_people():
 			picker.hide()
 			return
+		mode = self.session.values.get('face_selector_mode') or 'reference'
 		frame = card.current_frame()
 		name = os.path.basename(self.target_path)
 		faces = sorted((face for face in result.get('faces') or [] if face.get('position', -1) >= 0), key = lambda face: face.get('position'))
 		crops = face_crops(frame, result, [ (face.get('position'), face) for face in faces ])
 		chosen = [ face.get('position') for face in faces if face.get('selected') ]
+		if mode != 'reference':
+			self.pending_pick = None
+			picker.set_title('Changed Faces')
+			picker.set_click_tip(SWITCH_TIP)
+			picker.set_faces(crops, chosen)
+			picker.set_hint(selector_hint(mode, self.session.values.get('face_selector_order'), len(crops), len(chosen), name))
+			picker.show()
+			return
+		picker.set_title('Reference Face')
+		picker.set_click_tip('Click to change this face')
 		pending = getattr(self, 'pending_pick', None)
 		if pending and pending[:2] == (self.target_path, card.current_frame_index()) and int(self.session.values.get('reference_face_position') or 0) == pending[2]:
 			if pending[2] not in chosen and pending[2] in [ face.get('position') for face in faces ]:
@@ -2575,8 +2605,13 @@ class StudioPage(SourceSelection, QWidget):
 		picker.show()
 
 	def on_face_picked(self, key : int) -> None:
-		"""a face circle: the face at that position becomes the reference, on the frame shown"""
+		"""a face circle: the face at that position becomes the reference, on the frame shown.
+		in Many or One mode the click switches to Reference first (Nik)"""
 		card = self.target_card
+		if (self.session.values.get('face_selector_mode') or 'reference') != 'reference':
+			self.session.set_value('face_selector_mode', 'reference')
+			card.face_picker.set_title('Reference Face')
+			card.face_picker.set_click_tip('Click to change this face')
 		if card.reader and int(self.session.values.get('reference_frame_index') or 0) != card.current_frame_index():
 			self.session.set_value('reference_frame_index', card.current_frame_index())
 		self.session.set_value('reference_face_position', key)
