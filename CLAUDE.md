@@ -5,8 +5,10 @@
   scratchpad. Nik's real settings (`%APPDATA%\StudioFF`) are NOT shielded from Claude: on
   2026-10-29 a test without it wiped his source faces, names and a face mapping.
 
-- StudioFF supports only FaceFusion's v4 branch from commit e7a2848 (2026-10-30, `--face-selector-map`)
-  on. Do not add or keep fallbacks for older FaceFusion commits (Nik, 2026-10-30).
+- StudioFF supports only FaceFusion's v4 branch from commit 4ad7a45 (2026-11-19, the new CLI output:
+  `cli.0 ┬ module  message` log lines, `•` progress lines in 38;5;250/244 colors, `│` tables) on.
+  Do not add or keep fallbacks for older FaceFusion commits (Nik, 2026-10-30; moved up 2026-11-21).
+  The runner turns each log line into `[module] message`; error, console and benchmark parsing read that.
 
 - FaceFusion Install and FaceFusion Updates (check, Use Tested Version, Update to Latest, Go Back)
   are hidden for now with `FACEFUSION_MANAGEMENT = False` in `ffstudio/__init__.py`. The code stays.

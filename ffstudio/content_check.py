@@ -30,7 +30,7 @@ def print_progress(title : str, done : int, total : int, status : str) -> None:
 	# the same shape as facefusion's own bar, so the ui parses it the same way
 	filled = int(BAR_WIDTH * done / total) if total else 0
 	# the closing erase-line code ends the status, the ui would read on into the next line without it
-	sys.stdout.write('\x1b[G%s \x1b[94m%s\x1b[90m%s\x1b[0m %s\x1b[K' % (title, '=' * filled, '=' * (BAR_WIDTH - filled), status))
+	sys.stdout.write('\x1b[G\x1b[K\x1b[38;5;250mcli.0   •\x1b[0m \x1b[38;5;244manalyse       \x1b[0m  %s \x1b[38;5;250m%s\x1b[0m\x1b[38;5;244m%s\x1b[0m %s\x1b[G\x1b[K' % (title, '=' * filled, '=' * (BAR_WIDTH - filled), status))
 	sys.stdout.flush()
 
 

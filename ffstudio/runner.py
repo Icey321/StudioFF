@@ -12,8 +12,17 @@ from ffstudio.config import APP_DIR
 from ffstudio.platforms import kill_process_tree, suspend_process_tree
 
 ANSI_PATTERN = re.compile(r'\x1b\[[0-9;?]*[A-Za-z]')
-# facefusion draws its bar as <active color>====<neutral color>====<reset>
-PROGRESS_PATTERN = re.compile(r'\x1b\[G(?P<title>.*?)\s*\x1b\[94m(?P<done>=*)\x1b\[90m(?P<todo>=*)\x1b\[0m\s*(?P<status>[^|\x1b]*)(?:\|\s*(?P<description>[^\x1b]*))?')
+# facefusion's progress line: <group> • <stage type>  <title> <white>====<reset><grey>====<reset> <status> | <description>
+PROGRESS_PATTERN = re.compile(r'\x1b\[38;5;250m[^\x1b•]*•\x1b\[0m \x1b\[38;5;244m(?P<type>[^\x1b]*)\x1b\[0m\s*(?P<title>[^\x1b]*?)\s*\x1b\[38;5;250m(?P<done>=*)\x1b\[0m\x1b\[38;5;244m(?P<todo>=*)\x1b\[0m\s*(?P<status>[^|\x1b]*)(?:\|\s*(?P<description>[^\x1b]*))?')
+# facefusion's log line, colors taken off: <group> ┬ or │ <module>  <message>, the group is left out under the first line of a group
+# not a row of facefusion's tables, those start with │ itself
+LOG_LINE_PATTERN = re.compile(r'^\S*\s+[┬│]\s(?P<module>\S+)\s+(?P<message>.*)$')
+
+
+def plain_log_line(line : str) -> str:
+	"""facefusion's log line as [module] message, the way the console and the error checks read it"""
+	match = LOG_LINE_PATTERN.match(line)
+	return '[%s] %s' % (match.group('module'), match.group('message')) if match else line
 # preview_worker.py ends each preview with this line
 WORKER_RESULT_PREFIX = 'PREVIEW_DONE '
 # the worker lets go of its models after this long without a preview, unless Settings say otherwise
@@ -179,7 +188,7 @@ class ProcessRunner(QObject):
 
 	def emit_line(self, text : str) -> None:
 		for part in text.replace('\r', '\n').split('\n'):
-			line = ANSI_PATTERN.sub('', part).rstrip()
+			line = plain_log_line(ANSI_PATTERN.sub('', part).rstrip())
 			if line.strip():
 				self.log.emit(line)
 

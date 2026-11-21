@@ -32,7 +32,7 @@ CONTENT_CHECK_DIR = os.path.join(PREVIEW_DIR, 'nsfw_check')
 GIF_VIDEO_DIR = os.path.join(PREVIEW_DIR, 'gif_video')
 # the last line of a python traceback, an error facefusion logs itself, or a command line mistake
 EXCEPTION_PATTERN = re.compile(r'^[\w.]*(Error|Exception)\b(:|$)')
-FACEFUSION_ERROR_PATTERN = re.compile(r'^\[FACEFUSION\.[\w.]+\] .*\b(failed|not found|not installed|not supported|could not be loaded|not implemented)\b')
+FACEFUSION_ERROR_PATTERN = re.compile(r'^\[[\w.]+\] .*\b(failed|not found|not installed|not supported|could not be loaded|not implemented)\b')
 USAGE_ERROR_PATTERN = re.compile(r'^\S+\.py: error: ')
 # what a preview takes before there is a time of its own to go by, a warm one runs on models the worker already loaded
 PREVIEW_SECONDS = { 'preview_seconds': 6.0, 'preview_seconds_warm': 2.0, 'batch_preview_seconds': 5.0, 'batch_preview_seconds_warm': 1.5 }
@@ -403,7 +403,7 @@ class Session(QObject):
 			except ValueError:
 				pass
 		# a preview that starts the worker gets its ready line too, it says nothing about the run
-		elif not re.match(r'\[FACEFUSION\.\w+\] processing step \d+ of \d+$', line) and line != WORKER_READY_LINE:
+		elif not re.match(r'\[\w+\] processing step \d+ of \d+$', line) and line != WORKER_READY_LINE:
 			self.run_messages.append(line)
 
 	def run_error(self) -> Optional[str]:

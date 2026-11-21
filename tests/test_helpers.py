@@ -24,6 +24,10 @@ from ffstudio.schema import Schema, build_option_args
 from ffstudio.session import load_values
 from ffstudio.updater import APP_ROOT, RETIRED_FILES, download_release
 
+# facefusion's progress line and log line, as clis/cli_progress.py and clis/cli_formatter.py write them
+BAR = '\x1b[G\x1b[K\x1b[38;5;250mcli.0   •\x1b[0m \x1b[38;5;244minfer         \x1b[0m  %s \x1b[38;5;250m%s\x1b[0m\x1b[38;5;244m%s\x1b[0m %s'
+LOG = '\x1b[G\x1b[K\x1b[38;5;250m%s\x1b[0m \x1b[38;5;244m%-14s\x1b[0m  %s'
+
 
 class FormatSecondsTest(unittest.TestCase):
 	def test_seconds_under_a_minute(self) -> None:
@@ -236,16 +240,16 @@ class ProgressParsingTest(unittest.TestCase):
 		self.assertEqual(progress, [])
 
 	def test_progress_bar(self) -> None:
-		# as facefusion's cli_progress.render writes it, ending in erase line
-		lines, progress = self.run_output('before\n\x1b[Gprocessing \x1b[94m===\x1b[90m=\x1b[0m 75% | 30/40 frames\x1b[K\nafter\n')
-		self.assertEqual(lines, [ 'before', 'after' ])
+		# as facefusion's cli_progress.render writes it, the next line starts with cursor start and erase line
+		lines, progress = self.run_output('before\n' + BAR % ('processing', '===', '=', '75% | 30/40 frames') + LOG % ('cli.0   ┬', 'to_video', 'after') + '\r\r\n')
+		self.assertEqual(lines, [ 'before', '[to_video] after' ])
 		self.assertEqual(progress, [ ('processing', 0.75, '75%  ·  30/40 frames') ])
 
 	def test_growing_status_waits(self) -> None:
 		runner = ProcessRunner()
 		progress = []
 		runner.progress.connect(lambda title, ratio, status: progress.append(ratio))
-		runner.buffer = '\x1b[Gprocessing \x1b[94m=\x1b[90m===\x1b[0m 25'
+		runner.buffer = BAR % ('processing', '=', '===', '25')
 		runner.flush_buffer(final = False)
 		self.assertEqual(progress, [])
 		runner.flush_buffer(final = True)
@@ -260,7 +264,7 @@ class WorkerOutputTest(unittest.TestCase):
 		output, done = [], []
 		worker.output.connect(output.append)
 		worker.done.connect(done.append)
-		bar = '\x1b[Gprocessing \x1b[94m==\x1b[90m==\x1b[0m 50%\x1b[K'
+		bar = BAR % ('processing', '==', '==', '50%')
 		# the result line arrives in two pieces, right after a progress bar
 		for chunk in [ 'log line\n' + bar, 'PREV', 'IEW_DONE {"id": 1, "code": 0}\nidle talk\n' ]:
 			worker.process.readAllStandardOutput.return_value.data.return_value = chunk.encode()

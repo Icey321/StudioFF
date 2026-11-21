@@ -19,8 +19,8 @@ from ffstudio.widgets import NumberBox, guard_wheel
 
 MODES = { 'warm': 'Warm — models are loaded before timing starts', 'cold': 'Cold — caches are cleared before every cycle' }
 DEFAULTS : Dict[str, Any] = { 'processors': [ 'face_swapper' ], 'resolutions': [ '240p', '540p', '1080p' ], 'mode': 'warm', 'cycles': 3, 'provider': None, 'threads': None }
-# facefusion prints its result table as | target_path | cycle_count | average_run | fastest_run | slowest_run | relative_fps |
-ROW_PATTERN = re.compile(r'\|\s*(?P<target>\S*target-(?P<resolution>\d+p)\.\w+)\s*\|\s*(?P<cycles>\d+)\s*\|\s*(?P<average>[\d.]+)\s*\|\s*(?P<fastest>[\d.]+)\s*\|\s*(?P<slowest>[\d.]+)\s*\|\s*(?P<fps>[\d.]+)\s*\|')
+# facefusion prints its result table as │ target_path │ cycle_count │ average_run │ fastest_run │ slowest_run │ relative_fps │
+ROW_PATTERN = re.compile(r'│\s*(?P<target>\S*target-(?P<resolution>\d+p)\.\w+)\s*│\s*(?P<cycles>\d+)\s*│\s*(?P<average>[\d.]+)\s*│\s*(?P<fastest>[\d.]+)\s*│\s*(?P<slowest>[\d.]+)\s*│\s*(?P<fps>[\d.]+)\s*│')
 COLUMNS = [ 'When', 'Resolution', 'FPS', 'Average (sec)', 'Fastest (sec)', 'Slowest (sec)', 'Processors', 'Provider', 'Threads', 'Mode', 'Cycles' ]
 NUMBER_COLUMNS = [ 'FPS', 'Average (sec)', 'Fastest (sec)', 'Slowest (sec)', 'Threads', 'Cycles' ]
 COLUMN_TIPS =\
