@@ -6,8 +6,8 @@ from typing import Dict, List
 
 from PySide6.QtCore import QThread, Signal
 
-from ffstudio.environment import CREATE_NO_WINDOW, create_process_environment
-from ffstudio.platforms import IS_WINDOWS, read_cpu_name, read_cpu_speed, read_memory_total
+from ffstudio.environment import CREATE_NO_WINDOW, create_process_environment, format_build, probe_python_version, read_facefusion_build, read_ffmpeg_version
+from ffstudio.platforms import IS_WINDOWS, read_cpu_name, read_cpu_speed, read_memory_total, read_os_version
 
 
 def run_text(command : List[str], timeout : int = 10, env = None) -> str:
@@ -61,9 +61,16 @@ def read_onnxruntime(python_path : str) -> str:
 	return '%s  ·  %s' % (output[0], output[1]) if len(output) >= 2 else ''
 
 
-def read_hardware(python_path : str) -> Dict[str, str]:
-	"""the Benchmark page reads CPU, Memory, GPU and ONNX Runtime; the FaceFusion page reads the rest too"""
+def read_hardware(python_path : str, facefusion_root : str = '') -> Dict[str, str]:
+	"""the Benchmark page reads Operating System, CPU, Memory, GPU, Python, ONNX Runtime, FFmpeg and FaceFusion; the FaceFusion page reads the rest too"""
 	info : Dict[str, str] = {}
+	info['Operating System'] = read_os_version()
+	if facefusion_root:
+		build = read_facefusion_build(facefusion_root)
+		info['FaceFusion'] = format_build(build['version'], build['branch'], build['commit'], build['date'])
+		# FaceFusion's own Python, and the ffmpeg it runs from PATH
+		info['Python'] = probe_python_version(python_path) or '' if os.path.isfile(python_path) else ''
+		info['FFmpeg'] = read_ffmpeg_version() or 'Not found'
 	cpu = read_cpu_name() or 'Unknown'
 	threads = os.cpu_count() or 0
 	info['CPU'] = '%s · %d threads' % (cpu, threads)
@@ -90,9 +97,10 @@ class HardwareProbe(QThread):
 	"""collects gpu, cpu, memory and onnxruntime details without blocking the window"""
 	probed = Signal(dict)
 
-	def __init__(self, python_path : str) -> None:
+	def __init__(self, python_path : str, facefusion_root : str = '') -> None:
 		super().__init__()
 		self.python_path = python_path
+		self.facefusion_root = facefusion_root
 
 	def run(self) -> None:
-		self.probed.emit(read_hardware(self.python_path))
+		self.probed.emit(read_hardware(self.python_path, self.facefusion_root))

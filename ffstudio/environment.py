@@ -89,6 +89,17 @@ def read_facefusion_build(root : str) -> Dict[str, str]:
 	return build
 
 
+def format_build(version : str, branch : str, commit : str, date : str) -> str:
+	parts = [ version or branch or 'unknown version' ]
+	if branch and branch not in (version, 'HEAD'):
+		parts.append('%s branch' % branch)
+	if commit:
+		parts.append('commit ' + commit[:7])
+	if date:
+		parts.append(date[:10])
+	return '  ·  '.join(parts)
+
+
 def fetch_github_json(path : str) -> Any:
 	request = urllib.request.Request('https://api.github.com/' + path, headers = { 'Accept': 'application/vnd.github+json', 'User-Agent': 'StudioFF' })
 	with urllib.request.urlopen(request, timeout = 15) as response:

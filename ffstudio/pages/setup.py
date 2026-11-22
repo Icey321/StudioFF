@@ -9,7 +9,7 @@ from PySide6.QtWidgets import QAbstractButton, QApplication, QButtonGroup, QFile
 from qfluentwidgets import BodyLabel, CaptionLabel, CheckBox, ColorPickerButton, ComboBox, EditableComboBox, FluentIcon, HyperlinkButton, IconWidget, InfoBarIcon, LineEdit, MessageBox, PrimaryPushButton, ProgressBar, PushButton, SearchLineEdit, SimpleCardWidget, SingleDirectionScrollArea, StrongBodyLabel, SubtitleLabel, SwitchButton, ToolTipFilter, TransparentToolButton, isDarkTheme
 
 from ffstudio import APP_REPOSITORY, APP_VERSION, FACEFUSION_MANAGEMENT, TESTED_FACEFUSION_COMMIT, TESTED_FACEFUSION_DATE
-from ffstudio.environment import PINNED_VERSIONS, PREREQUISITES, check_dependencies, compare_github_commits, create_process_environment, fetch_github_build, fetch_latest_release, find_conda, find_conda_base, find_facefusion_folders, find_missing_prerequisites, find_python_candidates, has_nvidia_gpu, is_facefusion_root, is_newer_version, probe_python_version, read_facefusion_build, read_ffmpeg_version, read_facefusion_version, switch_facefusion_commit, version_tuple, winget_install_args
+from ffstudio.environment import PINNED_VERSIONS, PREREQUISITES, check_dependencies, compare_github_commits, create_process_environment, fetch_github_build, fetch_latest_release, find_conda, format_build, find_conda_base, find_facefusion_folders, find_missing_prerequisites, find_python_candidates, has_nvidia_gpu, is_facefusion_root, is_newer_version, probe_python_version, read_facefusion_build, read_ffmpeg_version, read_facefusion_version, switch_facefusion_commit, version_tuple, winget_install_args
 from ffstudio.hardware import HardwareProbe
 from ffstudio.main_window import DEFAULT_ACCENT, apply_theme
 from ffstudio.option_panel import OptionPanel
@@ -108,17 +108,6 @@ def form_row(label : str, widgets : List[QWidget], parent : QWidget, label_width
 	if limited:
 		row.addStretch(1)
 	return row
-
-
-def format_build(version : str, branch : str, commit : str, date : str) -> str:
-	parts = [ version or branch or 'unknown version' ]
-	if branch and branch not in (version, 'HEAD'):
-		parts.append('%s branch' % branch)
-	if commit:
-		parts.append('commit ' + commit[:7])
-	if date:
-		parts.append(date[:10])
-	return '  ·  '.join(parts)
 
 
 def github_page(repository : str) -> str:
