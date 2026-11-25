@@ -407,7 +407,7 @@ class FaceMappingCard(CollapsibleCard):
 		self.status_label.setToolTip('\n'.join(summary))
 		passes = plan_passes(self.people, [ path for path in self.page.active_sources() if media_kind(path) == 'image' ], self.page.source_paths, 0.3, self.page.source_groups)
 		if not passes:
-			self.footer_label.setText('Pick a source for each face you want to change. With none picked, Start runs as usual.')
+			self.footer_label.setText('Every face is left unchanged. Pick a source for a face to change it, or turn Face Mapping off for a normal run.')
 		elif passes[0].get('many'):
 			self.footer_label.setText('Everyone gets the same source, so it runs once like a normal run.')
 		else:

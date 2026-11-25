@@ -1817,8 +1817,9 @@ class StudioPage(SourceSelection, QWidget):
 			return 'warning', 'No target', 'Choose a target image or video first.'
 		if not self.session.processors():
 			return 'warning', 'No processor', 'Switch on at least one processor.'
-		needs_source = any(processor in self.session.processors() for processor in [ 'face_swapper', 'deep_swapper', 'lip_syncer' ])
-		if needs_source and not self.active_sources() and 'deep_swapper' not in self.session.processors() and not self.mapping_passes():
+		processors = self.run_processors()
+		needs_source = any(processor in processors for processor in [ 'face_swapper', 'deep_swapper', 'lip_syncer' ])
+		if needs_source and not self.active_sources() and 'deep_swapper' not in processors and not self.mapping_passes():
 			if self.source_paths:
 				return 'warning', 'No source selected', 'Click a source thumbnail to use it.'
 			return 'warning', 'No source', 'Add at least one source face image.'
@@ -1907,6 +1908,9 @@ class StudioPage(SourceSelection, QWidget):
 		if self.session.batch_running:
 			self.session.notify.emit('warning', 'Busy', 'A Batch is running. Start once it is done.')
 			return
+		if self.leaves_everyone() and not self.run_processors():
+			self.session.notify.emit('warning', 'Nothing to change', 'Every face in Face Mapping is set to Leave unchanged, so the result would be the same as the target. Pick a source for a face, or turn Face Mapping off for a normal run.')
+			return
 		if self.mapping_passes() and not self.session.facefusion_video_ready(self.target_path):
 			# a gif's passes run on its video, made off the ui thread first
 			self.session.prepare_facefusion_video(self.target_path, self.start)
@@ -1942,13 +1946,15 @@ class StudioPage(SourceSelection, QWidget):
 		if self.active_sources():
 			args += [ '-s' ] + self.active_sources()
 		task = 'Processing ' + os.path.basename(self.target_path)
+		# Face Mapping leaving everyone unchanged keeps the face processors out of the run
+		values = dict(self.session.values, processors = self.run_processors())
 		if is_animation(self.target_path, output_path):
 			# facefusion has no gif or animated webp support, the helper converts to video and back around the run
 			work_dir = os.path.join(PREVIEW_DIR, 'gif')
-			args = [ self.target_path, output_path, work_dir, '--' ] + args + self.session.option_args()
+			args = [ self.target_path, output_path, work_dir, '--' ] + args + self.session.option_args(values)
 			script = os.path.join(APP_DIR, 'gif_run.py')
 		else:
-			args += [ '-t', self.target_path, '-o', output_path ] + self.session.option_args()
+			args += [ '-t', self.target_path, '-o', output_path ] + self.session.option_args(values)
 			script = 'facefusion.py'
 		self.whole_run = { 'task': task, 'args': args, 'script': script, 'output': output_path, 'info': info }
 		self.start_clock()
@@ -2128,9 +2134,13 @@ class StudioPage(SourceSelection, QWidget):
 		values = dict(self.session.values)
 		values.update({ 'reference_frame_index': 0, 'trim_frame_start': None, 'trim_frame_end': None, 'workflow_mode': 'auto', 'output_image_quality': PREVIEW_IMAGE_QUALITY })
 		# a single frame has no sound to sync lips to
-		processors = self.session.processors()
+		processors = self.run_processors()
 		values['processors'] = [ processor for processor in processors if processor != 'lip_syncer' ]
-		if processors and not values.get('processors'):
+		if not processors:
+			# Face Mapping leaves every face unchanged and no whole frame processor is on
+			self.show_unchanged_preview(output_path, frame_path, info, 'every face left unchanged')
+			return
+		if not values.get('processors'):
 			self.session.notify.emit('warning', 'Preview', 'Lip sync needs the whole video, a single frame has nothing to preview. Click Start instead.')
 			return
 		args = [ 'run' ]
@@ -2172,6 +2182,9 @@ class StudioPage(SourceSelection, QWidget):
 		data = { 'preview': preview, 'target': file_stamp(self.target_path), 'sources': [ file_stamp(path) for path in self.active_sources() ], 'values': values, 'passes': self.mapping_passes() }
 		if preview:
 			data['frame'] = self.target_card.current_frame_index()
+		if self.leaves_everyone():
+			# no passes either way, but this run keeps the face processors out
+			data['leave_everyone'] = True
 		return settings_tag(data)
 
 	@staticmethod
@@ -2824,6 +2837,26 @@ class StudioPage(SourceSelection, QWidget):
 		if not people:
 			self.session.notify.emit('info', 'Find people', 'No face was found in the target. Try a lower Face detector Score or another Model.')
 
+	def leaves_everyone(self) -> bool:
+		"""Face Mapping is on and every person in it is set to Leave unchanged, so the face processors change nobody"""
+		return bool(self.mapping_card.active_people()) and any(processor in FACE_PROCESSORS for processor in self.session.processors()) and not self.mapping_passes()
+
+	def run_processors(self) -> List[str]:
+		"""the processors a run without passes gets: no face processors while Face Mapping leaves everyone unchanged"""
+		processors = self.session.processors()
+		if self.leaves_everyone():
+			processors = [ processor for processor in processors if processor not in FACE_PROCESSORS ]
+		return processors
+
+	def show_unchanged_preview(self, output_path : str, target : str, info : dict, text : str) -> None:
+		"""a preview with no face to change shows the frame as it is"""
+		write_image(output_path, read_image(target))
+		self.release_result_reader()
+		self.last_output = output_path
+		self.result_info = info
+		self.target_card.set_result(output_path, 'preview of frame #%d, %s' % (info.get('frame_index', 0), text))
+		self.show_view('result')
+
 	def mapping_passes(self) -> List[dict]:
 		"""the runs a face mapping needs, none when there is no mapping or no processor follows the face selector"""
 		people = self.mapping_card.active_people()
@@ -2966,14 +2999,9 @@ class StudioPage(SourceSelection, QWidget):
 		output_path = chain.get('output')
 		if not passes:
 			# nobody mapped is in the previewed frame: show it as it is
-			write_image(output_path, read_image(chain.get('target')))
-			info = chain.get('info')
+			target, info = chain.get('target'), chain.get('info')
 			self.end_chain()
-			self.release_result_reader()
-			self.last_output = output_path
-			self.result_info = info
-			self.target_card.set_result(output_path, 'preview of frame #%d, no mapped face in it' % info.get('frame_index', 0))
-			self.show_view('result')
+			self.show_unchanged_preview(output_path, target, info, 'no mapped face in it')
 			return
 		if chain.get('animation'):
 			# the steps make a video, the last one turns it into the gif or animated webp
