@@ -10,10 +10,8 @@ from PySide6.QtGui import QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import QApplication, QFileDialog, QHBoxLayout, QTableWidgetItem, QVBoxLayout, QWidget
 from qfluentwidgets import BodyLabel, CaptionLabel, CheckBox, ComboBox, FlowLayout, FluentIcon, MessageBox, PrimaryPushButton, ProgressBar, PushButton, SingleDirectionScrollArea, StrongBodyLabel, SubtitleLabel, TableWidget
 
-from ffstudio import APP_VERSION
-from ffstudio.benchmark_report import RESOLUTIONS, best_earlier, estimate_cards, format_processors, render_report, run_key, sort_by_resolution
+from ffstudio.benchmark_report import RESOLUTIONS, best_earlier, format_processors, render_report, run_key, sort_by_resolution
 from ffstudio.benchmark_widgets import FrameGrabber, FrameView, ResolutionTile, ResultsChart, SpeedDial, read_still, video_frame_total
-from ffstudio.environment import read_facefusion_version
 from ffstudio.hardware import HardwareProbe
 from ffstudio.media import format_length
 from ffstudio.pages.setup import form_row, section_card
@@ -110,7 +108,7 @@ class BenchmarkPage(QWidget):
 		self.hardware_layout.setSpacing(6)
 		hardware_layout.addLayout(self.hardware_layout)
 		self.hardware_labels : Dict[str, BodyLabel] = {}
-		for name in [ 'Operating System', 'GPU', 'CPU', 'Memory', 'Python', 'ONNX Runtime', 'FFmpeg', 'FaceFusion', 'StudioFF' ]:
+		for name in [ 'Operating System', 'GPU', 'CPU', 'Memory', 'Python', 'ONNX Runtime', 'FFmpeg', 'FaceFusion' ]:
 			value = BodyLabel('…', hardware_card)
 			value.setWordWrap(True)
 			value.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
@@ -317,7 +315,6 @@ class BenchmarkPage(QWidget):
 			self.probe.start()
 
 	def on_probed(self, info : Dict[str, str]) -> None:
-		info = dict(info, StudioFF = 'v' + APP_VERSION)
 		self.hardware = { name: info.get(name) or 'Unknown' for name in self.hardware_labels }
 		for name, label in self.hardware_labels.items():
 			label.setText(self.hardware.get(name))
@@ -792,7 +789,7 @@ class BenchmarkPage(QWidget):
 		if not runs and history:
 			runs = [ [ entry for entry in history if run_key(entry) == run_key(history[0]) ] ]
 		if not runs:
-			self.chart.set_run([], {}, [])
+			self.chart.set_run([], {})
 			self.chart_title.setText('')
 			self.chart_note.setText('')
 			return
@@ -810,7 +807,7 @@ class BenchmarkPage(QWidget):
 		settings = [ format_processors(first), first.get('provider') or 'default', '%s threads' % first.get('threads') if first.get('threads') else '', first.get('mode') or '', first.get('when') or '' ]
 		self.chart_title.setText('  ·  '.join(part for part in settings if part))
 		self.chart_note.setText(note)
-		self.chart.set_run(rows, ghost, estimate_cards(rows, history))
+		self.chart.set_run(rows, ghost)
 
 	def export_entries(self) -> List[Dict[str, Any]]:
 		history = self.session.config.get('benchmark_history') or []
@@ -835,8 +832,7 @@ class BenchmarkPage(QWidget):
 		if not path.lower().endswith(('.jpg', '.jpeg')):
 			path += '.jpg'
 		hardware = self.hardware or { name: label.text() for name, label in self.hardware_labels.items() }
-		version = read_facefusion_version(self.session.facefusion_root) or (self.session.schema.version if self.session.schema else '')
-		image = render_report(hardware, version, entries)
+		image = render_report(hardware, entries)
 		if not image.save(path, 'JPG', 95):
 			self.session.notify.emit('error', 'Export failed', 'Could not write ' + path)
 			return

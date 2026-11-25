@@ -3,7 +3,7 @@ from typing import Any, Dict, List, Optional
 from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QFont, QFontMetricsF, QImage, QLinearGradient, QPainter, QPainterPath, QPen
 
-from ffstudio.media import format_seconds
+from ffstudio import APP_VERSION
 from ffstudio.platforms import UI_FONT
 
 
@@ -23,25 +23,23 @@ LINE = color('#2c303a')
 TEXT = color('#eceef2')
 MUTED = color('#9aa1ad')
 ACCENT = color('#4cc2ff')
-TABLE_COLUMNS = [ ('Resolution', 0.0), ('FPS', 0.14), ('Average (sec)', 0.43), ('Fastest (sec)', 0.57), ('Slowest (sec)', 0.71), ('1-min clip', 0.86) ]
+TABLE_COLUMNS = [ ('Resolution', 0.0), ('FPS', 0.14), ('Average (sec)', 0.52), ('Fastest (sec)', 0.68), ('Slowest (sec)', 0.84) ]
 # where the fps bar sits in the table, as parts of the table width
-FPS_BAR = (0.14, 0.25)
+FPS_BAR = (0.14, 0.32)
 
 
 RESOLUTIONS = [ '240p', '360p', '540p', '720p', '1080p', '1440p', '2160p' ]
-# a video plays in real time at 30 frames per second, the clips the estimates talk about are one minute of that
+# a video plays in real time at 30 frames per second
 REAL_TIME_FPS = 30.0
-CLIP_FRAMES = 60 * 30
 CHART_TOP = 22
 CHART_BAR = 28
 CHART_GAP = 10
 CHART_LABEL = 64
 CHART_VALUE = 130
-CARD_HEIGHT = 66
 CHART_COLORS =\
 {
-	'dark': { 'text': '#eceef2', 'muted': '#9aa1ad', 'track': '#ffffff10', 'bar': ('#2f7dd6', '#4cc2ff'), 'ghost': '#ffffff1c', 'ghost_line': '#ffffff70', 'real_time': '#ffb84c', 'up': '#3ddc84', 'down': '#ff6b6b', 'card': '#ffffff0d', 'good': '#2fa86b', 'badge': '#55595f', 'badge_text': '#e0e0e0' },
-	'light': { 'text': '#1b1b1b', 'muted': '#606060', 'track': '#0000000a', 'bar': ('#0067c0', '#3a9be0'), 'ghost': '#00000012', 'ghost_line': '#00000066', 'real_time': '#c47a00', 'up': '#0f7b0f', 'down': '#c42b1c', 'card': '#0000000a', 'good': '#0f7b0f', 'badge': '#d6d6d6', 'badge_text': '#303030' }
+	'dark': { 'text': '#eceef2', 'muted': '#9aa1ad', 'track': '#ffffff10', 'bar': ('#2f7dd6', '#4cc2ff'), 'ghost': '#ffffff1c', 'ghost_line': '#ffffff70', 'real_time': '#ffb84c', 'up': '#3ddc84', 'down': '#ff6b6b' },
+	'light': { 'text': '#1b1b1b', 'muted': '#606060', 'track': '#0000000a', 'bar': ('#0067c0', '#3a9be0'), 'ghost': '#00000012', 'ghost_line': '#00000066', 'real_time': '#c47a00', 'up': '#0f7b0f', 'down': '#c42b1c' }
 }
 
 
@@ -156,65 +154,6 @@ def draw_chart(painter : QPainter, left : float, top : float, width : float, row
 	painter.restore()
 
 
-def estimate_cards(rows : List[Dict[str, Any]], history : List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-	"""what the speeds mean in plain words: how long a one minute clip takes, and the best result so far"""
-	rows = sort_by_resolution(rows)
-	if not rows:
-		return []
-	by_resolution = { row.get('resolution'): row for row in rows }
-	picks = [ name for name in [ '1080p', '2160p' ] if name in by_resolution ]
-	for row in [ rows[-1], rows[0] ]:
-		if len(picks) < 2 and row.get('resolution') not in picks:
-			picks.append(row.get('resolution'))
-	picks = sorted(picks, key = lambda name: RESOLUTIONS.index(name) if name in RESOLUTIONS else len(RESOLUTIONS))
-	cards = []
-	for name in picks:
-		fps = float(by_resolution.get(name).get('fps') or 0)
-		if fps <= 0:
-			continue
-		seconds = CLIP_FRAMES / fps
-		badge = 'Real Time' if fps >= REAL_TIME_FPS else '%.1f× slower' % (REAL_TIME_FPS / fps)
-		cards.append({ 'title': 'A 1-minute %s clip' % name, 'value': '≈ ' + format_seconds(seconds), 'badge': badge, 'good': fps >= REAL_TIME_FPS })
-	largest = rows[-1]
-	same = [ entry for entry in history if entry.get('resolution') == largest.get('resolution') and same_setup(entry, largest) ] or [ largest ]
-	best = max(same, key = lambda entry: float(entry.get('fps') or 0))
-	cards.append({ 'title': 'Best %s result so far' % largest.get('resolution'), 'value': '%.1f fps' % float(best.get('fps') or 0), 'badge': '%s  ·  %s' % (best.get('provider') or 'default', (best.get('when') or '')[:10]), 'good': None })
-	return cards
-
-
-def draw_cards(painter : QPainter, left : float, top : float, width : float, cards : List[Dict[str, Any]], colors : Dict[str, Any]) -> None:
-	if not cards:
-		return
-	painter.save()
-	painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-	gap = 10.0
-	card_width = (width - gap * (len(cards) - 1)) / len(cards)
-	for index, card in enumerate(cards):
-		x = left + index * (card_width + gap)
-		fill_rounded(painter, QRectF(x, top, card_width, CARD_HEIGHT), color(colors.get('card')), 8)
-		painter.setFont(make_font(9))
-		painter.setPen(color(colors.get('muted')))
-		painter.drawText(QRectF(x + 12, top + 8, card_width - 24, 16), int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), card.get('title'))
-		painter.setFont(make_font(14, True))
-		painter.setPen(color(colors.get('text')))
-		value_width = QFontMetricsF(make_font(14, True)).horizontalAdvance(card.get('value'))
-		painter.drawText(QRectF(x + 12, top + 24, card_width - 24, 24), int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), card.get('value'))
-		badge = card.get('badge') or ''
-		if card.get('good') is None:
-			painter.setFont(make_font(8.5))
-			painter.setPen(color(colors.get('muted')))
-			painter.drawText(QRectF(x + 12, top + 46, card_width - 24, 16), int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), badge)
-			continue
-		font = make_font(8, True)
-		badge_width = QFontMetricsF(font).horizontalAdvance(badge) + 14
-		badge_rect = QRectF(min(x + 12 + value_width + 10, x + card_width - badge_width - 10), top + 28, badge_width, 17)
-		fill_rounded(painter, badge_rect, color(colors.get('good') if card.get('good') else colors.get('badge')), 8.5)
-		painter.setFont(font)
-		painter.setPen(color('#ffffff') if card.get('good') else color(colors.get('badge_text')))
-		painter.drawText(badge_rect, int(Qt.AlignmentFlag.AlignCenter), badge)
-	painter.restore()
-
-
 def fill_rounded(painter : QPainter, rect : QRectF, color : QColor, radius : float) -> None:
 	path = QPainterPath()
 	path.addRoundedRect(rect, radius, radius)
@@ -243,7 +182,7 @@ class ReportPainter:
 			path.addRoundedRect(rect, radius, radius)
 			self.painter.fillPath(path, color)
 
-	def draw(self, hardware : Dict[str, str], version : str, runs : List[List[Dict[str, Any]]]) -> float:
+	def draw(self, hardware : Dict[str, str], runs : List[List[Dict[str, Any]]]) -> float:
 		left = PADDING
 		width = WIDTH - PADDING * 2
 		self.y = PADDING
@@ -251,7 +190,7 @@ class ReportPainter:
 		when = runs[0][0].get('when') if runs and runs[0] else ''
 		self.text(QRectF(left, PADDING + 8, width, 0), when, make_font(10), MUTED, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
 		self.y += 2
-		self.y += self.text(QRectF(left, self.y, width, 0), 'FaceFusion %s · tested with StudioFF' % version, make_font(9.5), MUTED)
+		self.y += self.text(QRectF(left, self.y, width, 0), 'Tested with StudioFF v%s' % APP_VERSION, make_font(9.5), MUTED)
 		self.y += 18
 
 		# hardware
@@ -268,7 +207,7 @@ class ReportPainter:
 		for rows in runs:
 			self.draw_run(rows, left, width)
 
-		self.y += self.text(QRectF(left, self.y, width, 0), 'FPS: frames processed per second over all timed cycles, higher is faster. Average, fastest and slowest: seconds for one complete run of FaceFusion\'s example video, including reading frames, the processors and writing the video. 1-min clip: about how long a one minute, 30 fps video takes.', make_font(8.5), MUTED)
+		self.y += self.text(QRectF(left, self.y, width, 0), 'FPS: frames processed per second over all timed cycles, higher is faster. Average, fastest and slowest: seconds for one complete run of FaceFusion\'s example video, including reading frames, the processors and writing the video.', make_font(8.5), MUTED)
 		return self.y + PADDING
 
 	def hardware_height(self, hardware : Dict[str, str], width : float) -> float:
@@ -306,7 +245,7 @@ class ReportPainter:
 			bar_width = cell_width * FPS_BAR[1]
 			self.fill(QRectF(bar_left, self.y + 8, bar_width, row_height - 16), QColor(255, 255, 255, 12), 4)
 			self.fill(QRectF(bar_left, self.y + 8, max(4.0, bar_width * fps / best), row_height - 16), QColor(ACCENT.red(), ACCENT.green(), ACCENT.blue(), 70), 4)
-			cells = [ row.get('resolution') or '', '%.2f' % fps, '%.2f' % float(row.get('average') or 0), '%.2f' % float(row.get('fastest') or 0), '%.2f' % float(row.get('slowest') or 0), '≈ ' + format_seconds(CLIP_FRAMES / fps) if fps > 0 else '' ]
+			cells = [ row.get('resolution') or '', '%.2f' % fps, '%.2f' % float(row.get('average') or 0), '%.2f' % float(row.get('fastest') or 0), '%.2f' % float(row.get('slowest') or 0) ]
 			for column, (text, (_, position)) in enumerate(zip(cells, TABLE_COLUMNS)):
 				font = make_font(10.5, column in (0, 1))
 				self.text(QRectF(cell_left + cell_width * position + (8 if column == 1 else 0), self.y + 7, 140, 0), text, font, TEXT)
@@ -314,7 +253,7 @@ class ReportPainter:
 		self.y += 22
 
 
-def render_report(hardware : Dict[str, str], version : str, entries : List[Dict[str, Any]]) -> QImage:
+def render_report(hardware : Dict[str, str], entries : List[Dict[str, Any]]) -> QImage:
 	"""draws the given results as one image, grouped by run, ready to post"""
 	runs : List[List[Dict[str, Any]]] = []
 	keys : List[Any] = []
@@ -326,12 +265,12 @@ def render_report(hardware : Dict[str, str], version : str, entries : List[Dict[
 		runs[keys.index(key)].append(entry)
 	runs = [ sort_by_resolution(rows) for rows in runs ]
 
-	height = ReportPainter(None).draw(hardware, version, runs)
+	height = ReportPainter(None).draw(hardware, runs)
 	image = QImage(int(WIDTH * SCALE), int(height * SCALE), QImage.Format.Format_RGB32)
 	image.fill(BACKGROUND)
 	painter = QPainter(image)
 	painter.setRenderHints(QPainter.RenderHint.Antialiasing | QPainter.RenderHint.TextAntialiasing)
 	painter.scale(SCALE, SCALE)
-	ReportPainter(painter).draw(hardware, version, runs)
+	ReportPainter(painter).draw(hardware, runs)
 	painter.end()
 	return image

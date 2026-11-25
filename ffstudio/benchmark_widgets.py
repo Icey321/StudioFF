@@ -9,7 +9,7 @@ from PySide6.QtGui import QColor, QFontMetricsF, QImage, QPainter, QPainterPath,
 from PySide6.QtWidgets import QSizePolicy, QWidget
 from qfluentwidgets import isDarkTheme, themeColor
 
-from ffstudio.benchmark_report import CARD_HEIGHT, CHART_COLORS, REAL_TIME_FPS, chart_height, color, draw_cards, draw_chart, make_font
+from ffstudio.benchmark_report import CHART_COLORS, REAL_TIME_FPS, chart_height, color, draw_chart, make_font
 
 GRAB_COUNT = 12
 GRAB_WIDTH = 640
@@ -224,22 +224,20 @@ class FrameView(QWidget):
 
 
 class ResultsChart(QWidget):
-	"""the bar chart and plain words cards of one run, drawn by the same code as the exported image"""
+	"""the bar chart of one run"""
 
 	def __init__(self, parent : Optional[QWidget] = None) -> None:
 		super().__init__(parent)
 		self.rows : List[Dict[str, Any]] = []
 		self.ghost : Dict[str, float] = {}
-		self.cards : List[Dict[str, Any]] = []
 		self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 		self.setMinimumWidth(360)
 		self.setFixedHeight(0)
 
-	def set_run(self, rows : List[Dict[str, Any]], ghost : Dict[str, float], cards : List[Dict[str, Any]]) -> None:
+	def set_run(self, rows : List[Dict[str, Any]], ghost : Dict[str, float]) -> None:
 		self.rows = rows
 		self.ghost = ghost
-		self.cards = cards
-		self.setFixedHeight(int(chart_height(len(rows)) + 16 + CARD_HEIGHT + 4) if rows else 0)
+		self.setFixedHeight(int(chart_height(len(rows)) + 4) if rows else 0)
 		self.update()
 
 	def paintEvent(self, event) -> None:
@@ -248,7 +246,6 @@ class ResultsChart(QWidget):
 		painter = QPainter(self)
 		palette = dict(colors())
 		draw_chart(painter, 0, 0, self.width(), self.rows, self.ghost, palette)
-		draw_cards(painter, 0, chart_height(len(self.rows)) + 16, self.width(), self.cards, palette)
 
 
 def to_image(frame) -> QImage:
