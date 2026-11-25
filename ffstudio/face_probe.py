@@ -208,8 +208,7 @@ def scan(request : dict, model_keys : set) -> dict:
 			if distances.min() < state_manager.get_item('reference_face_distance'):
 				item['person'] = int(distances.argmin())
 		if reference_face is not None:
-			distance = face_selector.calculate_face_distance(face, reference_face)
-			item['distance'] = round(float(numpy.interp(distance, [ 0, 2 ], [ 0, 1 ])), 3)
+			item['distance'] = round(face_selector.calculate_face_distance(face, reference_face), 3)
 		result['faces'].append(item)
 
 	if request.get('mask'):
@@ -288,7 +287,7 @@ def find_people(request : dict, model_keys : set) -> dict:
 		pairs = []
 		for face_index, face in enumerate(faces):
 			for group_index, group in enumerate(groups):
-				distance = float(numpy.interp(face_selector.calculate_face_distance(face, group['face']), [ 0, 2 ], [ 0, 1 ]))
+				distance = face_selector.calculate_face_distance(face, group['face'])
 				if distance < limit:
 					pairs.append((distance, face_index, group_index))
 		matched = {}
@@ -324,7 +323,7 @@ def find_people(request : dict, model_keys : set) -> dict:
 			save_crop(crop_path, group['image'], group['box'])
 		face = group['face']
 		# how close the most similar other person is, a reference distance above it would swap both of them
-		distances = [ float(numpy.interp(face_selector.calculate_face_distance(face, other['face']), [ 0, 2 ], [ 0, 1 ])) for other in groups if other is not group ]
+		distances = [ face_selector.calculate_face_distance(face, other['face']) for other in groups if other is not group ]
 		result['people'].append(
 		{
 			'frame': group['frame'],
