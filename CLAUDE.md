@@ -5,12 +5,13 @@
   scratchpad. Nik's real settings (`%APPDATA%\StudioFF`) are NOT shielded from Claude: on
   2026-10-29 a test without it wiped his source faces, names and a face mapping.
 
-- StudioFF supports only FaceFusion's v4 branch from commit 4ad7a45 (2026-11-19, the new CLI output:
-  `cli.0 ┬ module  message` log lines, `•` progress lines in 38;5;250/244 colors, `│` tables) on.
-  Do not add or keep fallbacks for older FaceFusion commits (Nik, 2026-10-30; moved up 2026-11-21).
-  The runner turns each log line into `[module] message`; error, console and benchmark parsing read that.
-  From 67681a5 (2026-11-24) `face_selector.calculate_face_distance` already returns 0 to 1;
-  `face_probe.py` must not convert it again (older commits give half-size face distances).
+- StudioFF supports only the tested FaceFusion v4 commit (`TESTED_FACEFUSION_COMMIT`, now 67681a5,
+  2026-11-24) and newer. FaceFusion v4 is not released, so nobody has an older one installed: when
+  FaceFusion changes, change StudioFF to match and move the tested commit up. Never add or keep code
+  for older FaceFusion commits (Nik, 2026-10-30; restated 2026-11-24).
+  Facts StudioFF relies on: the CLI output (`cli.0 ┬ module  message` log lines, `•` progress lines in
+  38;5;250/244 colors, `│` tables; the runner turns each log line into `[module] message`, and error,
+  console and benchmark parsing read that), and `face_selector.calculate_face_distance` returning 0 to 1.
 
 - FaceFusion Install and FaceFusion Updates (check, Use Tested Version, Update to Latest, Go Back)
   are hidden for now with `FACEFUSION_MANAGEMENT = False` in `ffstudio/__init__.py`. The code stays.
