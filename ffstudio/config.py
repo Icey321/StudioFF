@@ -33,6 +33,24 @@ def replace_path_prefix(value : Any, old_prefix : str, new_prefix : str) -> Any:
 	return value
 
 
+# facefusion options that were renamed, the old name -> the new one, so saved values, presets and favorites carry over
+RENAMED_OPTIONS =\
+{
+	# facefusion v4 1ea5c3e, 2026-11-26
+	'reference_face_distance': 'reference_match_distance'
+}
+
+
+def rename_options(value : Any) -> Any:
+	if isinstance(value, str):
+		return RENAMED_OPTIONS.get(value, value)
+	if isinstance(value, list):
+		return [ rename_options(item) for item in value ]
+	if isinstance(value, dict):
+		return { RENAMED_OPTIONS.get(key, key): rename_options(item) for key, item in value.items() }
+	return value
+
+
 def migrate_data_dir(old_dir : str = LEGACY_DATA_DIR, new_dir : str = DATA_DIR) -> None:
 	"""moves the data folder of an older version to the new name once, and points the saved paths into it at the new folder"""
 	if os.environ.get('FFSTUDIO_DATA_DIR') or os.path.exists(new_dir) or not os.path.isdir(old_dir):
@@ -116,7 +134,7 @@ class AppConfig:
 				# a damaged file can hold valid json that is not a set of settings
 				if not isinstance(stored, dict):
 					raise ValueError('not a settings object')
-				self.data.update(stored)
+				self.data.update(rename_options(stored))
 				return
 			except (OSError, ValueError):
 				time.sleep(0.2)

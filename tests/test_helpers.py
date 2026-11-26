@@ -144,7 +144,7 @@ MAP_SELECTOR_SCHEMA = Schema(
 	'options':
 	{
 		'face_selector_maps': { 'dest': 'face_selector_maps', 'flag': '--face-selector-map', 'group': 'face_selector', 'default': [ 'to 0:0' ], 'multiple': True },
-		'reference_face_distance': { 'dest': 'reference_face_distance', 'flag': '--reference-face-distance', 'group': 'face_selector', 'default': 0.3 },
+		'reference_match_distance': { 'dest': 'reference_match_distance', 'flag': '--reference-match-distance', 'group': 'face_selector', 'default': 0.3 },
 		'keep_temp': { 'dest': 'keep_temp', 'flag': '--keep-temp', 'group': 'misc', 'type': 'bool', 'default': False }
 	}
 })
@@ -152,8 +152,8 @@ MAP_SELECTOR_SCHEMA = Schema(
 
 class FaceSelectorMapTest(unittest.TestCase):
 	def test_the_rows_come_back_in_place(self) -> None:
-		self.assertEqual(list(MAP_SELECTOR_SCHEMA.options), [ 'face_selector_maps', 'reference_face_position', 'reference_face_distance', 'reference_frame_index', 'keep_temp' ])
-		self.assertEqual([ option.get('dest') for option in MAP_SELECTOR_SCHEMA.group_options('face_selector') ], [ 'reference_face_position', 'reference_face_distance', 'reference_frame_index' ])
+		self.assertEqual(list(MAP_SELECTOR_SCHEMA.options), [ 'face_selector_maps', 'reference_face_position', 'reference_match_distance', 'reference_frame_index', 'keep_temp' ])
+		self.assertEqual([ option.get('dest') for option in MAP_SELECTOR_SCHEMA.group_options('face_selector') ], [ 'reference_face_position', 'reference_match_distance', 'reference_frame_index' ])
 
 	def test_frame_and_position_become_a_map(self) -> None:
 		self.assertEqual(build_option_args(MAP_SELECTOR_SCHEMA, { 'reference_frame_index': 0, 'reference_face_position': 0 }), [])
@@ -161,8 +161,8 @@ class FaceSelectorMapTest(unittest.TestCase):
 		self.assertEqual(build_option_args(MAP_SELECTOR_SCHEMA, { 'reference_frame_index': 12 }, [ 'misc' ]), [])
 
 	def test_given_maps_win(self) -> None:
-		values = { 'reference_frame_index': 12, 'face_selector_maps': [ '0:0 to 4:1', '1:0 2:0 to 9:0' ], 'reference_face_distance': 0.4 }
-		self.assertEqual(build_option_args(MAP_SELECTOR_SCHEMA, values), [ '--face-selector-map', '0:0 to 4:1', '1:0 2:0 to 9:0', '--reference-face-distance', '0.4' ])
+		values = { 'reference_frame_index': 12, 'face_selector_maps': [ '0:0 to 4:1', '1:0 2:0 to 9:0' ], 'reference_match_distance': 0.4 }
+		self.assertEqual(build_option_args(MAP_SELECTOR_SCHEMA, values), [ '--face-selector-map', '0:0 to 4:1', '1:0 2:0 to 9:0', '--reference-match-distance', '0.4' ])
 
 	def test_stored_maps_are_not_kept(self) -> None:
 		# facefusion's own 'to 0:0' left in the options would replace the picked face of every run
@@ -389,6 +389,17 @@ class AppConfigTest(unittest.TestCase):
 				self.assertEqual(file.read(), '{ "facefusion_root": ')
 			with open(config_file, encoding = 'utf-8') as file:
 				self.assertEqual(json.load(file)['theme'], 'dark')
+
+	def test_renamed_options_carry_over(self) -> None:
+		with tempfile.TemporaryDirectory() as data_dir:
+			config_file = os.path.join(data_dir, 'config.json')
+			with open(config_file, 'w', encoding = 'utf-8') as file:
+				json.dump({ 'options': { 'reference_face_distance': 0.45 }, 'favorites': [ 'reference_face_distance' ], 'presets': { 'Mine': { 'reference_face_distance': 0.2 } } }, file)
+			with mock.patch.object(config, 'CONFIG_FILE', config_file):
+				app_config = AppConfig()
+			self.assertEqual(app_config.get('options'), { 'reference_match_distance': 0.45 })
+			self.assertEqual(app_config.get('favorites'), [ 'reference_match_distance' ])
+			self.assertEqual(app_config.get('presets'), { 'Mine': { 'reference_match_distance': 0.2 } })
 
 
 class RetiredFilesTest(unittest.TestCase):

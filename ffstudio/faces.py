@@ -262,14 +262,14 @@ def describe_faces(result : Dict[str, Any], reference_index : Optional[int] = No
 			return found + ', but none will be processed: no face was found in the reference frame%s. Pick a frame with a clear face and click Use as reference frame.' % frame
 		distances = [ face.get('distance') for face in faces if face.get('distance') is not None ]
 		nearest = ' The closest is %.2f.' % min(distances) if distances else ''
-		return found + ', but none will be processed: none is closer to the face in reference frame%s than the Reference face Distance (%.2f).%s Raise the Distance or pick another reference frame.' % (frame, result.get('reference_distance') or 0, nearest)
+		return found + ', but none will be processed: none is closer to the face in reference frame%s than the Reference match Distance (%.2f).%s Raise the Distance or pick another reference frame.' % (frame, result.get('reference_distance') or 0, nearest)
 	return found + ', but none will be processed: the face selector Gender, Race or Age filter skips them.'
 
 
 def alike_faces(result : Dict[str, Any], schema = None) -> Tuple[int, str]:
-	"""how many faces Reference mode processes because they look alike, and how to process only one: a Reference face Distance
+	"""how many faces Reference mode processes because they look alike, and how to process only one: a Reference match Distance
 	below the second closest leaves only the reference itself, rounded down to the slider's steps. (0, '') with one face or none"""
-	option = schema.options.get('reference_face_distance', {}) if schema else {}
+	option = schema.options.get('reference_match_distance', {}) if schema else {}
 	step = (option.get('range') or {}).get('step') or 0.05
 	selected = [ face for face in result.get('faces') or [] if face.get('selected') ]
 	if result.get('error') or result.get('mode') != 'reference' or len(selected) < 2:

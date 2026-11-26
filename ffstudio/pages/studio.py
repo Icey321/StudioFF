@@ -1727,7 +1727,7 @@ class StudioPage(SourceSelection, QWidget):
 		else:
 			# everyone with the same sources is one run in many mode, otherwise reference runs (see launch_step)
 			mode = 'many' if passes[0].get('many') else 'reference'
-			unused = [ 'face_selector_order' ] + FILTER_OPTIONS + ([ 'reference_face_distance' ] if mode == 'many' else [])
+			unused = [ 'face_selector_order' ] + FILTER_OPTIONS + ([ 'reference_match_distance' ] if mode == 'many' else [])
 			locks = { dest: (KEEP_VALUE, 'Not used by Face Mapping') for dest in unused }
 			locks.update({ dest: (KEEP_VALUE, 'Face Mapping picks each face') for dest in [ 'reference_face_position', 'reference_frame_index' ] })
 			locks['face_selector_mode'] = (mode, 'Set by Face Mapping')
@@ -2863,7 +2863,7 @@ class StudioPage(SourceSelection, QWidget):
 		if not people or not any(processor in FACE_PROCESSORS for processor in self.session.processors()):
 			return []
 		images = [ path for path in self.active_sources() if media_kind(path) == 'image' ]
-		return plan_passes(people, images, self.source_paths, float(self.session.values.get('reference_face_distance') or 0.3), self.source_groups)
+		return plan_passes(people, images, self.source_paths, float(self.session.values.get('reference_match_distance') or 0.3), self.source_groups)
 
 	def start_chain(self, passes : List[dict], target : str, output_path : str, info : dict, preview : bool) -> None:
 		"""finds each mapped person in the target first, then runs the steps that swap them"""
@@ -3118,15 +3118,15 @@ class StudioPage(SourceSelection, QWidget):
 				sources = list(dict.fromkeys(path for other in step.get('items') for path in other.get('sources')))
 				values.update({ 'face_selector_mode': 'reference', 'face_selector_maps': [ face_map(other, sources, chain.get('video')) for other in step.get('items') ] })
 				if preview:
-					values['reference_face_distance'] = PREVIEW_MAP_DISTANCE
+					values['reference_match_distance'] = PREVIEW_MAP_DISTANCE
 			elif item.get('many'):
 				# everyone mapped, nobody filtered out, like the reference runs that never filter
 				values.update({ 'face_selector_mode': 'many', 'face_selector_gender': None, 'face_selector_race': None, 'face_selector_age_start': None, 'face_selector_age_end': None })
 			else:
-				values.update({ 'face_selector_mode': 'reference', 'reference_frame_index': item.get('frame') if chain.get('video') else 0, 'reference_face_position': item.get('position'), 'reference_face_distance': item.get('distance') })
+				values.update({ 'face_selector_mode': 'reference', 'reference_frame_index': item.get('frame') if chain.get('video') else 0, 'reference_face_position': item.get('position'), 'reference_match_distance': item.get('distance') })
 			if kind == 'base':
 				# a distance of 0 matches no face, the frames go through unchanged
-				values['reference_face_distance'] = 0.0
+				values['reference_match_distance'] = 0.0
 		values['processors'] = processors
 		args = [ 'run' ] + ([ '-s' ] + sources + audio if sources or audio else []) + [ '-t', target, '-o', step.get('output') ] + self.session.option_args(values)
 		return self.session.run_facefusion(self.chain_task(step), args, preview = preview)

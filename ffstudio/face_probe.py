@@ -15,7 +15,7 @@ usage: python face_probe.py
 
 	a people request finds who appears in a target instead:
 		{"id": 2, "people": <image or video path>, "start": <frame>, "end": <frame or null>, "samples": 48, "crops": <folder>, "args": [...]}
-	it looks at evenly spread frames, groups the faces by identity with the Reference face Distance and
+	it looks at evenly spread frames, groups the faces by identity with the Reference match Distance and
 	replies with one entry per person: the frame and box where they are seen best, their position there,
 	how many of the frames show them and a crop of the face. it prints PEOPLE <done> <total> while it works
 """
@@ -166,7 +166,7 @@ def scan(request : dict, model_keys : set) -> dict:
 	# get_static_faces keeps the faces in the store, so select_faces below reuses them instead of detecting again
 	faces = get_static_faces([ frame ])
 	# every reference face of the map is in the one reference frame the request gives
-	pointers = [ pointer for face_map in face_selector.decode_face_selector_maps(state_manager.get_item('face_selector_maps')) for pointer in face_map.get('reference_faces') ]
+	pointers = [ pointer for face_map in face_selector.decode_face_selector_maps(state_manager.get_item('face_selector_maps')) for pointer in face_map.get('reference_face_pointers') ]
 	selected = face_selector.select_faces([ reference_frame ] * len(pointers), source_frames, [ frame ])[1]
 	reference_position = pointers[0].get('face_position') if pointers else 0
 	mode = state_manager.get_item('face_selector_mode')
@@ -184,7 +184,7 @@ def scan(request : dict, model_keys : set) -> dict:
 		result['reference_faces'] = len(all_reference_faces)
 		result['reference_found'] = reference_face is not None
 		result['reference_position'] = reference_position
-		result['reference_distance'] = state_manager.get_item('reference_face_distance')
+		result['reference_distance'] = state_manager.get_item('reference_match_distance')
 
 	for face in faces:
 		item =\
@@ -203,9 +203,9 @@ def scan(request : dict, model_keys : set) -> dict:
 			'estimated': bool(numpy.array_equal(face.landmark_set.get('68'), face.landmark_set.get('68/5')))
 		}
 		if people is not None and len(people):
-			# the person this face belongs to, the closest one within the Reference face Distance
+			# the person this face belongs to, the closest one within the Reference match Distance
 			distances = numpy.interp(1 - people @ face.embedding_norm, [ 0, 2 ], [ 0, 1 ])
-			if distances.min() < state_manager.get_item('reference_face_distance'):
+			if distances.min() < state_manager.get_item('reference_match_distance'):
 				item['person'] = int(distances.argmin())
 		if reference_face is not None:
 			item['distance'] = round(face_selector.calculate_face_distance(face, reference_face), 3)
@@ -271,7 +271,7 @@ def find_people(request : dict, model_keys : set) -> dict:
 		indices = sorted({ int(start + (end - start) * (step + 0.5) / count) for step in range(count) })
 	else:
 		indices = [ 0 ]
-	limit = state_manager.get_item('reference_face_distance')
+	limit = state_manager.get_item('reference_match_distance')
 	groups = []
 	for done, frame_index in enumerate(indices):
 		print('PEOPLE %d %d' % (done, len(indices)), flush = True)

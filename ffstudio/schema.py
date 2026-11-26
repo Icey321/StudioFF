@@ -30,7 +30,7 @@ MANAGED_OPTIONS = [ 'config_path', 'source_paths', 'target_path', 'output_path',
 MAP_OPTIONS =\
 {
 	'reference_face_position': { 'help': 'specify the position used to create the reference face, counting the faces largest first', 'after': 'face_selector_maps' },
-	'reference_frame_index': { 'help': 'specify the frame used to create the reference face', 'after': 'reference_face_distance' }
+	'reference_frame_index': { 'help': 'specify the frame used to create the reference face', 'after': 'reference_match_distance' }
 }
 # split_label cuts these after the first word, the first two words would leave a name that says little
 SPLIT_AFTER_ONE = [ 'temp_frame_format', 'temp_pixel_format', 'reference_frame_index', 'target_frame_amount' ]

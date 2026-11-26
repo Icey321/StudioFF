@@ -2118,7 +2118,7 @@ class BatchPage(SourceSelection, QWidget):
 		match = self.reference_matches.get((target, index))
 		if match is None:
 			# no face is within the distance, a distance of 0 takes none
-			return { 'reference_frame_index': 0, 'reference_face_position': 0, 'reference_face_distance': 0.0 }
+			return { 'reference_frame_index': 0, 'reference_face_position': 0, 'reference_match_distance': 0.0 }
 		return { 'reference_frame_index': 0, 'reference_face_position': match }
 
 	def needs_match(self, item : Dict[str, Any]) -> bool:

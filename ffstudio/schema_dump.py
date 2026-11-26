@@ -86,11 +86,15 @@ def build_options(program_module, capability_store, extra_args):
 	program = program_module.create_program()
 	run_program = find_sub_program(program, 'run')
 	cli_set = capability_store.get_cli_capability_set()
+	api_set = capability_store.get_api_capability_set()
 	options = {}
 
 	for group in run_program._action_groups:
 		for action in group._group_actions:
 			if isinstance(action, (_HelpAction, _VersionAction)) or not action.option_strings:
+				continue
+			# only facefusion's web api uses these (the reference group distance groups faces there), a run ignores them
+			if action.dest in api_set and action.dest not in cli_set:
 				continue
 			capability = cli_set.get(action.dest) or capability_store.get_sys_capability_set().get(action.dest) or {}
 			group_name = (capability.get('groups') or [ group.title ])[0]

@@ -102,7 +102,7 @@ def merge_people(old : List[Dict[str, Any]], new : List[Dict[str, Any]]) -> List
 
 
 def pass_distance(person : Dict[str, Any], distance : float) -> float:
-	"""the reference face distance for one person's pass, below the distance to the most similar other person"""
+	"""the reference match distance for one person's pass, below the distance to the most similar other person"""
 	nearest = person.get('nearest')
 	if nearest is not None and nearest < distance:
 		# facefusion takes the distance in steps of 0.05, rounding down keeps it below nearest

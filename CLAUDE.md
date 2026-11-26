@@ -5,8 +5,8 @@
   scratchpad. Nik's real settings (`%APPDATA%\StudioFF`) are NOT shielded from Claude: on
   2026-10-29 a test without it wiped his source faces, names and a face mapping.
 
-- StudioFF supports only the tested FaceFusion v4 commit (`TESTED_FACEFUSION_COMMIT`, now 67681a5,
-  2026-11-24) and newer. FaceFusion v4 is not released, so nobody has an older one installed: when
+- StudioFF supports only the tested FaceFusion v4 commit (`TESTED_FACEFUSION_COMMIT`, now 1ea5c3e,
+  2026-11-26) and newer. FaceFusion v4 is not released, so nobody has an older one installed: when
   FaceFusion changes, change StudioFF to match and move the tested commit up. Never add or keep code
   for older FaceFusion commits (Nik, 2026-10-30; restated 2026-11-24).
   Facts StudioFF relies on: the CLI output (`cli.0 ┬ module  message` log lines, `•` progress lines in

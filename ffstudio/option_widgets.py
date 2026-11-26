@@ -69,7 +69,7 @@ GENDER_TIPS =\
 BUTTON_TIPS = { 'face_selector_gender': GENDER_TIPS, 'face_selector_mode': MODE_TIPS }
 # the face selector options each mode leaves unused: reference never sorts or filters, many and one never look at a
 # reference face, and many takes every face, so their order does not matter either. a pair is locked by its first option
-REFERENCE_OPTIONS = [ 'reference_face_position', 'reference_face_distance', 'reference_frame_index' ]
+REFERENCE_OPTIONS = [ 'reference_face_position', 'reference_match_distance', 'reference_frame_index' ]
 FILTER_OPTIONS = [ 'face_selector_gender', 'face_selector_race', 'face_selector_age_start' ]
 UNUSED_BY_MODE =\
 {
@@ -628,7 +628,7 @@ class OptionRow(QFrame):
 	puts the label above the control when the panel is too narrow for both side by side.
 	with info_icon set the help hides behind an (i) next to the label instead of showing under it.
 	with on_favorite set it gets a star in front of the label that shows on hover, or always once the option is a favorite.
-	with short_label set the label loses its group words (Face selector gender becomes Gender, Reference face distance
+	with short_label set the label loses its group words (Face selector gender becomes Gender, Reference match distance
 	becomes Distance) so most labels fit on one line, for rows inside their group's box.
 	with group_caption set the name of the option's group shows in small capitals underneath, for the favorites box where groups mix
 	"""
