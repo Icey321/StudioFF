@@ -22,21 +22,17 @@ FaceFusion itself is not included: install FaceFusion v4 separately, then point 
 
 ## Features
 
-- **Studio**: swap faces in one target. Drop in source faces and a target image, video or GIF, turn on processors and drag them into order. The preview tries your settings on one frame (automatically with **Auto**), and **Start** runs the full job. Models stay loaded between previews, so after the first one each takes about 2 seconds. The Settings page's **Preview models** setting picks how long they stay loaded after the last preview (5 minutes by default), and Start and Benchmark free them first. Batch keeps them loaded from one output to the next, so each file after the first starts sooner.
-- **Batch**: every source face × every target in a folder, with its own options (or copied from Studio in one click). Each planned output shows thumbnails and can be removed (removed outputs stay out after a restart until you restore them). A live preview tries the selected one, on the frame you pick for a video (remembered after a restart), and one failed target doesn't stop the rest. While a batch runs, Run Batch turns into **Pause**: the output being made freezes in place and goes on from the same frame on **Resume**, and the broom button beside Skip frees its memory instead, so Resume makes that one output again from the start. Copy Options from Studio asks first when it would replace options that differ.
-- **Webcam**: swaps the faces on your webcam live, with its own processors and options. The camera stays off until you press **Enable Camera** (it is off each time StudioFF starts). Enable Camera also starts FaceFusion and loads its models in the background, so **Swap Face** turns the swap on at once (a green border goes around the picture) and off again; turning the camera off lets FaceFusion go. As on Batch, **Copy Faces from Studio** brings in the Studio page's sources and **Hide Options** gives the camera the whole page. It runs FaceFusion's web API on its own, so Studio and Batch can still run. How fast it is depends on the graphics card: about one frame a second on integrated graphics, much more on an NVIDIA card. Reference mode and Face Mapping need a target file, so the webcam uses Many or One. FaceFusion runs its NSFW check on every camera frame and sends a flagged one back blurred; StudioFF notes "Blurred by FaceFusion's NSFW check" on the picture and in the status line. **Send to virtual camera** hands the swapped picture to Zoom, Discord, Teams or OBS. That needs the small `pyvirtualcam` package, which StudioFF offers to install into its own environment the first time, plus OBS Studio's virtual camera (press **Start Virtual Camera** in OBS once).
-- **Pages you don't use stay out**: Settings → **Pages** turns Batch and Webcam off. A page that is off is not built at startup, so StudioFF opens a few seconds faster (the change applies after **Restart Now**).
-- **Face mapping**: give each person in the target their own source face. Two people can even swap faces with each other. Works on images, videos, GIFs and animated WebPs.
-- **Source photos with several faces**: a source photo that shows more than one person gets one thumbnail per face, so you pick the one you want.
-- **GIF support**: GIF targets are converted for FaceFusion and saved back as looping GIFs (needs `ffmpeg`).
-- **AVIF and HEIC support**: AVIF and HEIC (iPhone) images work as sources and targets. StudioFF uses a PNG copy of each one, so the result is a PNG.
-- **More file types**: JFIF images run as a JPG copy. FLV and F4V (Flash) videos are moved into an MKV copy, so the result is an MKV. MPG and MPEG videos work as they are.
-- **Animated WebP support**: animated WebP targets run as a lossless video copy and are saved back as looping animated WebPs. Transparent parts stay transparent.
-- **Output names**: build file names from tags like `{source}`, `{target}`, `{date}` and `{n}`, with an optional sub-folder per source.
-- **Favorite Options and search**: star any option to pin it to Favorite Options, or filter all options with *Search options*. Open or closed option groups stay that way.
-- **Benchmark**: runs FaceFusion's benchmark on your hardware and exports the results as a shareable image.
-- **FaceFusion**: point the app at an existing FaceFusion v4 or install it from scratch, and check GitHub for FaceFusion updates. It shows whether your FaceFusion is the version StudioFF was tested with, and can switch to that version, to the latest one or back again.
-- **System monitor**: graphics card, processor and memory use in the title bar, read with FaceFusion's own libraries for NVIDIA and AMD cards, and on Windows from the same counters Task Manager uses for other cards (such as Intel Iris Xe). A bar under each reading goes from green to orange to red as it fills. It can be turned off in Settings.
+- **Studio**: swap faces in one image, video or GIF. Turn processors on, drag them into order, preview one frame (about 2 s once the models are loaded), then **Start**.
+- **Batch**: every source face × every target in a folder, with a live preview and **Pause** / **Resume**. One failed target doesn't stop the rest.
+- **Webcam**: live face swap on your camera, also as a virtual camera for Zoom, Discord, Teams or OBS. Runs alongside Studio and Batch. Speed depends on the graphics card.
+- **Face mapping**: give each person in the target their own face, or swap two people with each other.
+- **Group photos as sources**: one thumbnail per face, so you pick the one you want.
+- **More file types**: GIF, animated WebP, AVIF, HEIC, JFIF, FLV and MPG, converted for FaceFusion and back.
+- **Output names**: built from tags like `{source}`, `{target}`, `{date}` and `{n}`.
+- **Favorites and search**: star options to pin them at the top, or search all of them.
+- **Benchmark**: tests your hardware and exports the results as an image.
+- **System monitor**: graphics card, processor and memory use in the title bar (NVIDIA, AMD and Intel).
+- **Pages you don't use stay out**: turn off Batch or Webcam in Settings and StudioFF opens faster.
 
 ## Install
 

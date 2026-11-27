@@ -40,6 +40,9 @@
   An option group whose options are ALL grayed out hides until one applies (`OptionPanel.refresh_visibility`,
   `OptionRow.applies`) (Nik, 2026-11-02).
 
+- User-facing text (README, app) never says a feature "needs ffmpeg": install.ps1 installs it, so the note
+  only makes people think they must install something (Nik, 2026-11-27). The Linux/macOS manual steps may list it.
+
 - Times shown to the user (how long a run or preview took) read as seconds under a minute
   ("42.3 s") and as minutes:seconds from 60 s on ("1:24"). Use `format_seconds` from
   `ffstudio/media.py`; a running clock uses `format_length`.
