@@ -15,10 +15,10 @@ FaceFusion itself is not included: install FaceFusion v4 separately, then point 
 ## Screenshots
 
 | Before | After |
-| --- | --- |
+| :---: | :---: |
 | ![Before: target with the faces found](docs/images/before.webp) | ![After: result with a mapped face swapped](docs/images/after.webp) |
-| **Batch** | **Settings** |
-| ![Batch: every source face against every target, with a live preview](docs/images/batch.webp) | ![Settings: updates, starting folders, processors, appearance and performance](docs/images/settings.webp) |
+| **Batch** | **Webcam** |
+| ![Batch: every source face against every target, with a live preview](docs/images/batch.webp) | ![Webcam: live face swap on the camera, with its own processors and options](docs/images/webcam.webp) |
 
 ## Features
 
