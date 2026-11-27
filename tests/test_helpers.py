@@ -20,8 +20,10 @@ from ffstudio.face_mapping import SELECTED, face_map, pass_distance, plan_passes
 from ffstudio.media import VideoReader, format_seconds
 from ffstudio.output_name import build_output, build_output_path, clean_name, expand, unknown_tags
 from ffstudio.runner import PreviewWorker, ProcessRunner
-from ffstudio.schema import Schema, build_option_args
+from ffstudio.schema import Schema, build_option_args, effective_option_values
 from ffstudio.session import load_values
+from ffstudio.stream_client import FrameGate, allowed_api_keys, api_state_values, upload_ready_path
+from ffstudio.webcam_options import webcam_locks
 from ffstudio.updater import APP_ROOT, RETIRED_FILES, download_release
 
 # facefusion's progress line and log line, as clis/cli_progress.py and clis/cli_formatter.py write them
@@ -137,6 +139,65 @@ class BuildOptionArgsTest(unittest.TestCase):
 
 	def test_groups(self) -> None:
 		self.assertEqual(build_option_args(SCHEMA, { 'face_detector_score': 0.7, 'keep_temp': True }, [ 'misc' ]), [ '--keep-temp' ])
+
+
+class EffectiveOptionValuesTest(unittest.TestCase):
+	def test_same_filter_as_the_args(self) -> None:
+		values = { 'face_detector_score': 0.6, 'keep_temp': False, 'face_detector_size': '320x320', 'face_enhancer_blend': 50, 'processors': [ 'face_swapper' ] }
+		self.assertEqual(effective_option_values(SCHEMA, values), { 'face_detector_score': 0.6 })
+
+	def test_keep_defaults(self) -> None:
+		values = { 'face_detector_score': 0.5, 'keep_temp': False }
+		self.assertEqual(effective_option_values(SCHEMA, values, keep_defaults = True), { 'face_detector_score': 0.5, 'keep_temp': False })
+
+
+class StreamClientHelpersTest(unittest.TestCase):
+	def test_frame_gate_keeps_one_frame_in_flight(self) -> None:
+		gate = FrameGate()
+		self.assertEqual(gate.offer(b'1'), b'1')
+		self.assertIsNone(gate.offer(b'2'))
+		# a newer frame replaces the waiting one
+		self.assertIsNone(gate.offer(b'3'))
+		self.assertEqual(gate.answered(), b'3')
+		self.assertIsNone(gate.answered())
+		self.assertEqual(gate.offer(b'4'), b'4')
+
+	def test_allowed_keys_and_state(self) -> None:
+		capabilities = { 'arguments': { 'face_selector': { 'face_selector_mode': {}, 'face_detector_size': {} }, 'execution': { 'execution_providers': {}, 'face_selector_mode': {} } } }
+		allowed = allowed_api_keys(capabilities)
+		self.assertEqual(allowed, [ 'face_selector_mode', 'face_detector_size', 'execution_providers' ])
+		self.assertEqual(api_state_values({ 'face_selector_mode': 'many', 'keep_temp': True, 'face_detector_margin': (0, 0) }, allowed + [ 'face_detector_margin' ]), { 'face_selector_mode': 'many', 'face_detector_margin': [ 0, 0 ] })
+
+	def test_big_sources_are_scaled_down_for_the_api(self) -> None:
+		with tempfile.TemporaryDirectory() as folder:
+			small = os.path.join(folder, 'small.png')
+			big = os.path.join(folder, 'big face.png')
+			cv2.imwrite(small, numpy.zeros((100, 80, 3), numpy.uint8))
+			cv2.imwrite(big, numpy.zeros((5000, 200, 3), numpy.uint8))
+			self.assertEqual(upload_ready_path(small, os.path.join(folder, 'copies')), small)
+			copy = upload_ready_path(big, os.path.join(folder, 'copies'))
+			self.assertNotEqual(copy, big)
+			self.assertEqual(cv2.imread(copy).shape[:2], (4096, 163))
+
+
+class WebcamLocksTest(unittest.TestCase):
+	def test_reference_and_file_rows_are_grayed_out(self) -> None:
+		schema = Schema(
+		{
+			'options':
+			{
+				'face_selector_mode': { 'dest': 'face_selector_mode', 'group': 'face_selector', 'default': 'reference', 'choices': [ 'many', 'one', 'reference' ] },
+				'reference_match_distance': { 'dest': 'reference_match_distance', 'group': 'face_selector', 'default': 0.3 },
+				'output_video_quality': { 'dest': 'output_video_quality', 'group': 'output_creation', 'default': 80 },
+				'face_detector_score': { 'dest': 'face_detector_score', 'group': 'face_detector', 'default': 0.5 }
+			},
+			'processors': [ 'face_swapper' ]
+		})
+		locks = webcam_locks(schema, { 'face_selector_mode': 'one', 'processors': [ 'face_swapper' ] })
+		self.assertIn('reference_match_distance', locks)
+		self.assertIn('output_video_quality', locks)
+		self.assertNotIn('face_detector_score', locks)
+		self.assertNotIn('face_selector_mode', locks)
 
 
 MAP_SELECTOR_SCHEMA = Schema(

@@ -94,12 +94,16 @@ class MainWindow(FluentWindow):
 		from ffstudio.pages.setup import SetupPage
 		splash.step()
 		from ffstudio.pages.studio import StudioPage
+		splash.step()
+		from ffstudio.pages.webcam import WebcamPage
 		from ffstudio.widgets import FaceFusionIcon
 
 		splash.step('Building the Studio page…')
 		self.studio_page = StudioPage(session, self)
 		splash.step('Building the Batch page…')
 		self.batch_page = BatchPage(session, self)
+		splash.step('Building the Webcam page…')
+		self.webcam_page = WebcamPage(session, self)
 		splash.step('Building the Models page…')
 		self.models_page = ModelsPage(session, self)
 		splash.step('Building the Benchmark page…')
@@ -112,6 +116,7 @@ class MainWindow(FluentWindow):
 
 		self.addSubInterface(self.studio_page, FluentIcon.PHOTO, 'Studio')
 		self.addSubInterface(self.batch_page, FluentIcon.LIBRARY, 'Batch')
+		self.addSubInterface(self.webcam_page, FluentIcon.CAMERA, 'Webcam')
 		self.addSubInterface(self.models_page, FluentIcon.CLOUD_DOWNLOAD, 'Models')
 		self.addSubInterface(self.benchmark_page, FluentIcon.SPEED_HIGH, 'Benchmark')
 		self.addSubInterface(self.console_page, FluentIcon.COMMAND_PROMPT, 'Console')
@@ -344,6 +349,7 @@ class MainWindow(FluentWindow):
 			self.session.clear_facefusion_temp()
 		self.studio_page.release_result_reader()
 		self.studio_page.face_probe.stop()
+		self.webcam_page.shutdown()
 		self.system_monitor.stop()
 		self.session.preview_worker.stop()
 		self.session.clear_preview_files()

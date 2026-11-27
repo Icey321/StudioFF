@@ -181,13 +181,12 @@ def same_value(left : Any, right : Any) -> bool:
 	return format_value(left) == format_value(right)
 
 
-def build_option_args(schema : Schema, values : Dict[str, Any], groups : Optional[List[str]] = None) -> List[str]:
-	"""translates UI values into CLI flags, only passing values that differ from facefusion's own defaults"""
-	args : List[str] = []
+def effective_option_values(schema : Schema, values : Dict[str, Any], groups : Optional[List[str]] = None, keep_defaults : bool = False) -> Dict[str, Any]:
+	"""the UI values facefusion gets, by dest: no managed or mapped options, no options of processors that are off,
+	no empty values or choices the selected model lacks, and no values equal to facefusion's defaults unless keep_defaults"""
+	effective : Dict[str, Any] = {}
 	active_processors = values.get('processors') or schema.options.get('processors', {}).get('default') or []
 
-	if groups is None or 'face_selector' in groups:
-		args.extend(face_map_args(values))
 	for dest, option in schema.options.items():
 		if dest in MANAGED_OPTIONS or dest not in values or option.get('mapped'):
 			continue
@@ -202,8 +201,20 @@ def build_option_args(schema : Schema, values : Dict[str, Any], groups : Optiona
 			continue
 		if resolved.get('choices') and not option.get('multiple') and value not in resolved.get('choices'):
 			continue
-		if same_value(value, resolved.get('default')):
+		if not keep_defaults and same_value(value, resolved.get('default')):
 			continue
+		effective[dest] = value
+	return effective
+
+
+def build_option_args(schema : Schema, values : Dict[str, Any], groups : Optional[List[str]] = None) -> List[str]:
+	"""translates UI values into CLI flags, only passing values that differ from facefusion's own defaults"""
+	args : List[str] = []
+
+	if groups is None or 'face_selector' in groups:
+		args.extend(face_map_args(values))
+	for dest, value in effective_option_values(schema, values, groups).items():
+		option = schema.options.get(dest)
 		if option.get('type') == 'bool':
 			if value:
 				args.append(option.get('flag'))

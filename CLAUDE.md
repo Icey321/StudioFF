@@ -12,6 +12,10 @@
   Facts StudioFF relies on: the CLI output (`cli.0 ┬ module  message` log lines, `•` progress lines in
   38;5;250/244 colors, `│` tables; the runner turns each log line into `[module] message`, and error,
   console and benchmark parsing read that), and `face_selector.calculate_face_distance` returning 0 to 1.
+  The Webcam page relies on the web API (`facefusion.py api`, the `started API on` log line, `FACEFUSION_API_KEY`):
+  `POST/PUT/DELETE /session`, `GET /capabilities`, `PUT /state` (pixel boost is checked against the default model's
+  sizes), `POST /assets?type=source` (64 to 4096 px a side), and the `/stream` WebSocket (subprotocol
+  `access_token.<token>`, encoded image in, image out).
 
 - FaceFusion Install and FaceFusion Updates (check, Use Tested Version, Update to Latest, Go Back)
   are hidden for now with `FACEFUSION_MANAGEMENT = False` in `ffstudio/__init__.py`. The code stays.

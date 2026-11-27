@@ -17,7 +17,7 @@ from ffstudio.config import APP_DIR, DATA_DIR, PREVIEW_DIR, SCHEMA_FILE, AppConf
 from ffstudio.environment import create_process_environment, is_facefusion_root, probe_python_version, version_tuple
 from ffstudio.media import GIF_EXTENSIONS, extension, gif_as_video, gif_video_path, media_kind, needs_conversion, read_facefusion_frame, usable_path
 from ffstudio.runner import RED_LINES, PreviewWorker, ProcessRunner
-from ffstudio.schema import Schema, build_option_args, schema_is_stale
+from ffstudio.schema import Schema, build_option_args, effective_option_values, schema_is_stale
 
 MINIMUM_PYTHON = (3, 13)
 # facefusion's video content check reports its running result as "rate = <percent>", above 10 the target is blocked
@@ -522,6 +522,13 @@ class Session(QObject):
 		# no quiet stand-in, the run gets exactly the processors the buttons show
 		args = [ '--processors' ] + list(values.get('processors') or [])
 		return args + build_option_args(self.schema, values, groups)
+
+	def option_values(self, values : Optional[Dict[str, Any]] = None, keep_defaults : bool = False) -> Dict[str, Any]:
+		"""the values facefusion's api state gets, by dest, with the processors the buttons show"""
+		if not self.schema:
+			return {}
+		values = values if values is not None else self.values
+		return dict(effective_option_values(self.schema, values, keep_defaults = keep_defaults), processors = list(values.get('processors') or []))
 
 
 class OptionStore(QObject):

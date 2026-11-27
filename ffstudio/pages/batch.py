@@ -1213,19 +1213,6 @@ class BatchPage(SourceSelection, QWidget):
 		self.store.copy_from(self.session.values, order)
 		self.session.notify.emit('success', 'Options copied from Studio', 'Batch now uses the same processors and options as Studio. Later changes on either page stay on that page.')
 
-	def copy_studio_sources(self) -> None:
-		config = self.session.config
-		paths = [ path for path in config.get('source_paths') or [] if os.path.exists(path) ]
-		added = [ path for path in paths if path not in self.source_paths ]
-		if not added:
-			self.session.notify.emit('info', 'Nothing to copy', 'The Studio page has no sources that are not here already.' if paths else 'The Studio page has no sources yet.')
-			return
-		unused = config.get('unused_source_paths') or []
-		self.source_names.update({ path: name for path, name in (config.get('source_names') or {}).items() if path in added })
-		self.unused_sources = self.unused_sources + [ path for path in added if path in unused ]
-		self.set_sources(self.source_paths + added)
-		self.session.notify.emit('success', 'Copied from Studio', '%d source%s added.' % (len(added), '' if len(added) == 1 else 's'))
-
 	def run_values(self) -> Dict[str, Any]:
 		"""the options of a batch run: its own, with the system settings from Setup"""
 		schema = self.session.schema

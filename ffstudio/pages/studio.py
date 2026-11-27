@@ -235,6 +235,20 @@ class SourceSelection:
 		self.prune_groups()
 		self.source_anchor = ''
 
+	def copy_studio_sources(self) -> None:
+		"""the Copy Faces from Studio button of Batch and Webcam: adds the Studio page's sources with their names and which are used"""
+		config = self.session.config
+		paths = [ path for path in config.get('source_paths') or [] if os.path.exists(path) ]
+		added = [ path for path in paths if path not in self.source_paths ]
+		if not added:
+			self.session.notify.emit('info', 'Nothing to copy', 'The Studio page has no sources that are not here already.' if paths else 'The Studio page has no sources yet.')
+			return
+		unused = config.get('unused_source_paths') or []
+		self.source_names.update({ path: name for path, name in (config.get('source_names') or {}).items() if path in added })
+		self.unused_sources = self.unused_sources + [ path for path in added if path in unused ]
+		self.set_sources(self.source_paths + added)
+		self.session.notify.emit('success', 'Copied from Studio', '%d source%s added.' % (len(added), '' if len(added) == 1 else 's'))
+
 	def store_sources(self) -> None:
 		paths_key, unused_key, names_key, groups_key, removed_key = self.SOURCE_KEYS
 		self.session.config.set(paths_key, self.source_paths)
