@@ -640,9 +640,12 @@ class WebcamPage(SourceSelection, QWidget):
 			self.set_status('FaceFusion closed the stream')
 
 	def on_failed(self, text : str) -> None:
+		# a failed preload stays quiet, the next Swap Face starts over and shows its own failure
+		quiet = self.preloading
 		self.end_stream()
 		self.set_status('Failed: ' + text.splitlines()[0])
-		self.session.notify.emit('error', 'Webcam stopped', text)
+		if not quiet:
+			self.session.notify.emit('error', 'Webcam stopped', text)
 
 	def on_refused(self, keys : List[str]) -> None:
 		schema = self.store.schema
