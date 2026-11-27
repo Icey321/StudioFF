@@ -37,6 +37,10 @@ SWAP_BORDER_COLOR = QColor('#2ecc71')
 SWAP_BORDER_WIDTH = 4
 CAMERA_OFF_TEXT = 'The camera is off. Press Enable Camera to see it.'
 READY_TEXT = 'Ready · the models are loaded, Swap Face starts at once'
+OBSCURED_TEXT = "Blurred by FaceFusion's NSFW check"
+SHARPNESS_WIDTH = 320
+SHARPNESS_MIN = 1.0
+OBSCURED_RATIO = 0.15
 
 
 def encode_frame(image : QImage, size : int) -> bytes:
@@ -54,6 +58,20 @@ def scaled_frame(image : QImage, size : int) -> QImage:
 	return image
 
 
+def frame_sharpness(frame : numpy.ndarray) -> float:
+	"""how much fine detail a frame has, measured at one small width so sent and answered frames compare"""
+	height, width = frame.shape[:2]
+	if width > SHARPNESS_WIDTH:
+		frame = cv2.resize(frame, (SHARPNESS_WIDTH, max(1, round(height * SHARPNESS_WIDTH / width))), interpolation = cv2.INTER_AREA)
+	return float(cv2.Laplacian(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), cv2.CV_64F).var())
+
+
+def is_obscured(sent_sharpness : float, answer_sharpness : float) -> bool:
+	"""facefusion's nsfw check answers with the camera frame under a 99 px gaussian blur, which leaves a few percent
+	of its detail at most; a swapped frame keeps about all of it. a frame with almost no detail to lose is not judged"""
+	return sent_sharpness >= SHARPNESS_MIN and answer_sharpness < sent_sharpness * OBSCURED_RATIO
+
+
 def bgr_array(image : QImage) -> numpy.ndarray:
 	image = image.convertToFormat(QImage.Format.Format_BGR888)
 	rows = numpy.frombuffer(image.constBits(), numpy.uint8, image.sizeInBytes()).reshape(image.height(), image.bytesPerLine())
@@ -68,6 +86,8 @@ class FrameView(QWidget):
 		self.pixmap = QPixmap()
 		self.text = CAMERA_OFF_TEXT
 		self.border = False
+		# a line over the bottom of the picture
+		self.note = ''
 		self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 		self.setMinimumSize(320, 240)
 
@@ -84,6 +104,11 @@ class FrameView(QWidget):
 		self.border = border
 		self.update()
 
+	def set_note(self, note : str) -> None:
+		if note != self.note:
+			self.note = note
+			self.update()
+
 	def paintEvent(self, _) -> None:
 		painter = QPainter(self)
 		painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
@@ -96,6 +121,12 @@ class FrameView(QWidget):
 			scaled = self.pixmap.size().scaled(inner.size(), Qt.AspectRatioMode.KeepAspectRatio)
 			target = QRectF(inner.x() + (inner.width() - scaled.width()) / 2, inner.y() + (inner.height() - scaled.height()) / 2, scaled.width(), scaled.height())
 			painter.drawPixmap(target, self.pixmap, QRectF(self.pixmap.rect()))
+			if self.note:
+				height = painter.fontMetrics().height() * 2
+				band = QRectF(inner.x(), target.bottom() - height, inner.width(), height)
+				painter.fillRect(band, QColor(0, 0, 0, 170))
+				painter.setPen(Qt.GlobalColor.white)
+				painter.drawText(band, Qt.AlignmentFlag.AlignCenter, self.note)
 		if self.border:
 			pen = QPen(SWAP_BORDER_COLOR, SWAP_BORDER_WIDTH)
 			pen.setJoinStyle(Qt.PenJoinStyle.MiterJoin)
@@ -130,6 +161,9 @@ class WebcamPage(SourceSelection, QWidget):
 		# Enable Camera opens the stream ahead of Swap Face and sends one frame, so facefusion loads its models.
 		# its answers are not shown while preloading; the stream stays open, Swap Face only starts showing them
 		self.preloading = False
+		# the detail in the frame out, and whether the last answer came back blurred by facefusion's nsfw check
+		self.sent_sharpness = 0.0
+		self.obscured = False
 		# one frame goes out to load the models, again after a model or processor changed
 		self.warm_needed = False
 		self.models_ready = False
@@ -480,7 +514,10 @@ class WebcamPage(SourceSelection, QWidget):
 		if self.latest_image is not None and self.latest_is_new and self.client.wants_frame():
 			self.latest_is_new = False
 			self.warm_needed = False
-			self.client.send_frame(encode_frame(self.latest_image, self.frame_size()))
+			scaled = scaled_frame(self.latest_image, self.frame_size())
+			if not self.preloading:
+				self.sent_sharpness = frame_sharpness(bgr_array(scaled))
+			self.client.send_frame(encode_frame(scaled, self.frame_size()))
 
 	# running
 
@@ -586,11 +623,12 @@ class WebcamPage(SourceSelection, QWidget):
 		if self.last_answer and self.swapped_count > 1:
 			self.frame_times.append(now - self.last_answer)
 		self.last_answer = now
+		frame = cv2.imdecode(numpy.frombuffer(data, numpy.uint8), cv2.IMREAD_COLOR)
+		self.obscured = frame is not None and is_obscured(self.sent_sharpness, frame_sharpness(frame))
 		self.view.set_image(image)
-		if self.virtual_camera.running:
-			frame = cv2.imdecode(numpy.frombuffer(data, numpy.uint8), cv2.IMREAD_COLOR)
-			if frame is not None:
-				self.virtual_camera.send(frame)
+		self.view.set_note(OBSCURED_TEXT if self.obscured else '')
+		if self.virtual_camera.running and frame is not None:
+			self.virtual_camera.send(frame)
 		self.check_virtual_camera()
 		self.show_rate(elapsed)
 		self.send_latest()
@@ -598,9 +636,14 @@ class WebcamPage(SourceSelection, QWidget):
 	def show_rate(self, elapsed : float) -> None:
 		if self.frame_times:
 			fps = len(self.frame_times) / sum(self.frame_times)
-			self.set_status('Live · %.1f fps · %s a frame' % (fps, format_seconds(elapsed)) + (' · virtual camera on' if self.virtual_camera.running else ''))
+			text = 'Live · %.1f fps · %s a frame' % (fps, format_seconds(elapsed)) + (' · virtual camera on' if self.virtual_camera.running else '')
 		else:
-			self.set_status('Live · first frame took %s' % format_seconds(elapsed))
+			text = 'Live · first frame took %s' % format_seconds(elapsed)
+		self.set_status(text + (' · ' + OBSCURED_TEXT if self.obscured else ''))
+
+	def clear_obscured(self) -> None:
+		self.obscured = False
+		self.view.set_note('')
 
 	def stop(self) -> None:
 		"""Swap Face off: while the camera is on the stream stays open with the models loaded, so the next swap starts at once"""
@@ -609,6 +652,7 @@ class WebcamPage(SourceSelection, QWidget):
 			self.warm_needed = not self.models_ready
 			self.set_swap_button(False)
 			self.swapped_count = 0
+			self.clear_obscured()
 			self.refresh_buttons()
 			self.sync_camera()
 			if self.streaming:
@@ -629,6 +673,7 @@ class WebcamPage(SourceSelection, QWidget):
 		self.set_swap_button(False)
 		# the camera's own picture again, its next frame replaces the last swapped one
 		self.swapped_count = 0
+		self.clear_obscured()
 		self.refresh_buttons()
 		self.sync_camera()
 		if was_live and self.server.is_running():
