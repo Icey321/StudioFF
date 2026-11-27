@@ -23,6 +23,8 @@ from ffstudio.widgets import ChoiceButton, PreviewView
 # minutes, 0 keeps them until the app closes
 KEEP_LOADED_CHOICES = [ (5, '5 minutes'), (10, '10 minutes'), (30, '30 minutes'), (60, '1 hour'), (0, 'Until the app closes') ]
 CLOSE_CHOICES = [ ('close', 'Quit the app'), ('minimize', 'Minimize the window'), ('tray', 'Minimize to the system tray') ]
+# the pages that can be switched off: config key, label, what the switch does
+PAGE_CHOICES = [ ('show_batch_page', 'Batch', 'Show the Batch page, to make many outputs in one run'), ('show_webcam_page', 'Webcam', 'Show the Webcam page, for a live face swap of your camera') ]
 # the theme buttons: key, text, icon and tooltip
 THEME_CHOICES =[
 	('auto', 'Auto', FluentIcon.CONSTRACT, 'Follow the Windows light or dark setting'),
@@ -206,6 +208,8 @@ class SetupPage(QWidget):
 	build_read = Signal(str, object)
 	facefusion_switched = Signal(str, object)
 	monitor_toggled = Signal(bool)
+	# Restart Now on the Pages card, the window quits and opens again
+	restart_requested = Signal()
 
 	def __init__(self, session : Session, parent : Optional[QWidget] = None) -> None:
 		super().__init__(parent)
@@ -276,7 +280,7 @@ class SetupPage(QWidget):
 		# built either way, the rest of the page fills in its widgets
 		install_card.setVisible(FACEFUSION_MANAGEMENT)
 		self.facefusion_page.content_layout.addStretch(1)
-		self.section_cards = [ self.create_studio_update_card(content), self.create_folders_card(content), self.create_processors_card(content), self.create_appearance_card(content) ]
+		self.section_cards = [ self.create_studio_update_card(content), self.create_pages_card(content), self.create_folders_card(content),self.create_processors_card(content), self.create_appearance_card(content) ]
 		for card in self.section_cards:
 			layout.addWidget(card)
 		self.system_title = StrongBodyLabel('Performance & system', content)
@@ -1137,6 +1141,41 @@ class SetupPage(QWidget):
 		QApplication.quit()
 
 	# appearance
+
+	# pages
+
+	def create_pages_card(self, parent : QWidget) -> QWidget:
+		card, layout = section_card('Pages', 'Turn off the pages you do not use. A page that is off is not built when StudioFF starts, so it opens faster. Changes take effect after a restart.', parent)
+		self.page_switches : Dict[str, SwitchButton] = {}
+		# what each switch was at startup, the pages the window has now
+		self.pages_at_start = { key: self.session.config.get(key) is not False for key, _, _ in PAGE_CHOICES }
+		for key, label, text in PAGE_CHOICES:
+			switch = SwitchButton(card)
+			switch.setChecked(self.pages_at_start[key])
+			switch.checkedChanged.connect(lambda checked, key = key: self.on_page_switched(key, checked))
+			self.page_switches[key] = switch
+			layout.addLayout(form_row(label, [ BodyLabel(text, card), switch ], card))
+		restart_row = QHBoxLayout()
+		restart_row.setSpacing(12)
+		self.pages_note = CaptionLabel('Restart StudioFF to apply the change.', card)
+		self.pages_note.setTextColor('#606060', '#a0a0a0')
+		self.pages_restart_button = PushButton(FluentIcon.SYNC, 'Restart Now', card)
+		self.pages_restart_button.clicked.connect(self.restart_requested.emit)
+		restart_row.addWidget(self.pages_note, 1)
+		restart_row.addWidget(self.pages_restart_button)
+		layout.addLayout(restart_row)
+		self.refresh_pages_note()
+		return card
+
+	def on_page_switched(self, key : str, checked : bool) -> None:
+		self.session.config.set(key, checked)
+		self.session.config.save()
+		self.refresh_pages_note()
+
+	def refresh_pages_note(self) -> None:
+		changed = any(switch.isChecked() != self.pages_at_start[key] for key, switch in self.page_switches.items())
+		self.pages_note.setVisible(changed)
+		self.pages_restart_button.setVisible(changed)
 
 	def create_folders_card(self, parent : QWidget) -> QWidget:
 		card, layout = section_card('Starting Folders', 'Where the Add buttons for source faces and targets open, in Studio and Batch. Left empty, they open the folder you last added files from.', parent)

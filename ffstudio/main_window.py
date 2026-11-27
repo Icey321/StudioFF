@@ -82,8 +82,12 @@ class MainWindow(FluentWindow):
 		# the StudioFF update stops the run itself after asking, so closing does not ask again
 		self.update_closing = False
 		# small steps through the slow imports, so the bar keeps moving instead of stopping at 10%
+		# pages switched off in Settings are neither imported nor built
+		show_batch = session.config.get('show_batch_page') is not False
+		show_webcam = session.config.get('show_webcam_page') is not False
 		splash.step()
-		from ffstudio.pages.batch import BatchPage
+		if show_batch:
+			from ffstudio.pages.batch import BatchPage
 		splash.step()
 		from ffstudio.pages.benchmark import BenchmarkPage
 		splash.step()
@@ -95,15 +99,20 @@ class MainWindow(FluentWindow):
 		splash.step()
 		from ffstudio.pages.studio import StudioPage
 		splash.step()
-		from ffstudio.pages.webcam import WebcamPage
+		if show_webcam:
+			from ffstudio.pages.webcam import WebcamPage
 		from ffstudio.widgets import FaceFusionIcon
 
 		splash.step('Building the Studio page…')
 		self.studio_page = StudioPage(session, self)
-		splash.step('Building the Batch page…')
-		self.batch_page = BatchPage(session, self)
-		splash.step('Building the Webcam page…')
-		self.webcam_page = WebcamPage(session, self)
+		self.batch_page = None
+		self.webcam_page = None
+		splash.step('Building the Batch page…' if show_batch else None)
+		if show_batch:
+			self.batch_page = BatchPage(session, self)
+		splash.step('Building the Webcam page…' if show_webcam else None)
+		if show_webcam:
+			self.webcam_page = WebcamPage(session, self)
 		splash.step('Building the Models page…')
 		self.models_page = ModelsPage(session, self)
 		splash.step('Building the Benchmark page…')
@@ -115,8 +124,10 @@ class MainWindow(FluentWindow):
 		splash.step('Opening the window…')
 
 		self.addSubInterface(self.studio_page, FluentIcon.PHOTO, 'Studio')
-		self.addSubInterface(self.batch_page, FluentIcon.LIBRARY, 'Batch')
-		self.addSubInterface(self.webcam_page, FluentIcon.CAMERA, 'Webcam')
+		if self.batch_page:
+			self.addSubInterface(self.batch_page, FluentIcon.LIBRARY, 'Batch')
+		if self.webcam_page:
+			self.addSubInterface(self.webcam_page, FluentIcon.CAMERA, 'Webcam')
 		self.addSubInterface(self.models_page, FluentIcon.CLOUD_DOWNLOAD, 'Models')
 		self.addSubInterface(self.benchmark_page, FluentIcon.SPEED_HIGH, 'Benchmark')
 		self.addSubInterface(self.console_page, FluentIcon.COMMAND_PROMPT, 'Console')
@@ -128,7 +139,7 @@ class MainWindow(FluentWindow):
 		# just wide enough for the longest page name
 		self.navigationInterface.setExpandWidth(150)
 		# files dragged from Explorer over Studio or Batch in the side bar open that page, to drop them there
-		self.drag_opener = DragOpener(self, [ self.studio_page, self.batch_page ])
+		self.drag_opener = DragOpener(self, [ page for page in (self.studio_page, self.batch_page) if page ])
 		self.setWindowTitle(APP_NAME)
 		# the version sits right after the name in the title bar, a little dimmer
 		# only the X in the title bar minimizes or goes to the tray, the taskbar's Close window and Alt+F4 really quit
@@ -150,7 +161,7 @@ class MainWindow(FluentWindow):
 		# graphics card, processor and memory use, left of the window buttons
 		from ffstudio.monitor import MonitorBar, SystemMonitor
 		self.monitor_bar = MonitorBar(self.titleBar)
-		self.monitor_bar.drive_folders = lambda: [ self.studio_page.output_dir(), self.batch_page.output_dir() ] if self.session.config.get('show_drives_in_title_bar') else []
+		self.monitor_bar.drive_folders = lambda: [ page.output_dir() for page in (self.studio_page, self.batch_page) if page ] if self.session.config.get('show_drives_in_title_bar') else []
 		# the window buttons sit in the title bar's last layout
 		buttons_index = self.titleBar.hBoxLayout.count() - 1
 		self.titleBar.hBoxLayout.insertWidget(buttons_index, self.monitor_bar, 0, Qt.AlignmentFlag.AlignVCenter)
@@ -160,6 +171,7 @@ class MainWindow(FluentWindow):
 		self.system_monitor.stopped.connect(self.monitor_bar.clear)
 		session.schema_changed.connect(self.system_monitor.restart)
 		self.setup_page.monitor_toggled.connect(self.set_monitor_shown)
+		self.setup_page.restart_requested.connect(lambda: self.quit_app(restart = True))
 		# orange dot on the Setup gear while a newer StudioFF release is out
 		self.update_dot = self.add_update_dot(self.setup_page, 'A StudioFF update is available')
 		self.setup_page.studio_update_found.connect(self.update_dot.setVisible)
@@ -315,10 +327,11 @@ class MainWindow(FluentWindow):
 	def quit_question(self) -> Optional[tuple]:
 		"""the title and text of the question to ask before quitting, none when nothing is lost"""
 		# a run with its memory freed has no process left, but closing still loses the output it was making
-		freed = self.studio_page.freed or self.batch_page.running and self.batch_page.paused and self.batch_page.current < 0
+		batch = self.batch_page
+		freed = self.studio_page.freed or bool(batch) and batch.running and batch.paused and batch.current < 0
 		if not (self.session.runner.is_running() or freed) or self.update_closing:
 			return None
-		paused = self.studio_page.paused or self.batch_page.running and self.batch_page.paused
+		paused = self.studio_page.paused or bool(batch) and batch.running and batch.paused
 		if freed:
 			return 'A run is paused with its memory freed', 'Quit anyway? The output being made is lost and the run cannot be resumed.'
 		if paused:
@@ -349,7 +362,8 @@ class MainWindow(FluentWindow):
 			self.session.clear_facefusion_temp()
 		self.studio_page.release_result_reader()
 		self.studio_page.face_probe.stop()
-		self.webcam_page.shutdown()
+		if self.webcam_page:
+			self.webcam_page.shutdown()
 		self.system_monitor.stop()
 		self.session.preview_worker.stop()
 		self.session.clear_preview_files()

@@ -96,6 +96,9 @@ DEFAULT_CONFIG : Dict[str, Any] =\
 	'preview_compare_divider': True,
 	# processors switched off in Settings: no button or option group in Studio, Batch and Benchmark
 	'hidden_processors': [],
+	# pages switched off in Settings are not built at startup, StudioFF opens faster without them
+	'show_batch_page': True,
+	'show_webcam_page': True,
 	# what the window's X button does: close, minimize or tray
 	'close_action': 'close',
 	# look for a newer studioff release when the app opens, and say so with an Update Now button

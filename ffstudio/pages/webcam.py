@@ -240,17 +240,25 @@ class WebcamPage(SourceSelection, QWidget):
 		self.client.closed.connect(self.on_stream_closed)
 		self.store.value_changed.connect(self.on_value_changed)
 		self.store.schema_changed.connect(self.refresh_locks)
-		self.media_devices = QMediaDevices(self)
-		self.media_devices.videoInputsChanged.connect(self.refresh_cameras)
-		self.refresh_cameras(stored.get('camera') or '')
+		# listing the cameras makes windows open each one for a moment to read its sizes, and say Python is using the
+		# camera, so the list waits for the first Enable Camera. until then the box shows the camera picked last time
+		self.media_devices : Optional[QMediaDevices] = None
+		self.camera_box.addItem(stored.get('camera_name') or 'Default camera', userData = stored.get('camera') or '')
+		self.camera_box.setToolTip('The camera list is read when you press Enable Camera')
+		self.camera_box.installEventFilter(ToolTipFilter(self.camera_box))
+		self.camera_box.setEnabled(False)
 		self.camera_box.currentIndexChanged.connect(lambda _: self.on_camera_changed())
+		self.refresh_buttons()
 		self.source_card.refresh(self.source_paths)
 		self.refresh_locks()
 
 	# settings
 
 	def store_page(self) -> None:
-		self.session.config.set('webcam', { 'camera': self.camera_id(), 'size': self.size_box.currentData(), 'virtual_camera': self.virtual_box.isChecked() })
+		stored = self.session.config.get('webcam') or {}
+		# with no camera found (unplugged for now) the one picked before stays saved
+		camera = { 'camera': self.camera_id(), 'camera_name': self.camera_box.currentText() } if self.camera_id() else { 'camera': stored.get('camera') or '', 'camera_name': stored.get('camera_name') or '' }
+		self.session.config.set('webcam', { **camera, 'size': self.size_box.currentData(), 'virtual_camera': self.virtual_box.isChecked() })
 
 	def show_settings(self, shown : bool) -> None:
 		self.settings_column.setVisible(shown)
@@ -314,6 +322,18 @@ class WebcamPage(SourceSelection, QWidget):
 
 	# camera
 
+	def list_cameras(self) -> None:
+		"""reads the cameras the first time they are needed, and from then on follows cameras being plugged in or out"""
+		if self.media_devices is not None:
+			return
+		self.camera_box.setToolTip('')
+		self.media_devices = QMediaDevices(self)
+		self.media_devices.videoInputsChanged.connect(self.refresh_cameras)
+		self.refresh_cameras()
+		# the camera's name is kept for the box at the next start, an unplugged camera stays the saved one
+		if self.camera_id():
+			self.store_page()
+
 	def refresh_cameras(self, wanted : str = '') -> None:
 		wanted = wanted or self.camera_id()
 		self.camera_box.blockSignals(True)
@@ -345,12 +365,18 @@ class WebcamPage(SourceSelection, QWidget):
 			self.open_camera()
 
 	def on_camera_toggled(self, checked : bool) -> None:
+		if checked:
+			self.list_cameras()
+			if not self.camera_id():
+				# no camera after all, the button goes back off
+				self.camera_button.setChecked(False)
+				return
 		if not checked and (self.streaming or self.starting):
 			self.stop()
 		self.refresh_buttons()
 		self.sync_camera()
 		if not checked:
-			self.view.set_text(CAMERA_OFF_TEXT)
+			self.view.set_text(CAMERA_OFF_TEXT if self.camera_id() else 'No camera found')
 
 	def wants_camera(self) -> bool:
 		"""the camera runs while Enable Camera is on and the page shows, or its picture goes somewhere else: the swap or the virtual camera"""
@@ -536,7 +562,8 @@ class WebcamPage(SourceSelection, QWidget):
 		self.session.notify.emit('warning', 'Some options were not used', "FaceFusion's API did not take %s, it keeps its own value." % ', '.join(names))
 
 	def refresh_buttons(self) -> None:
-		self.camera_button.setEnabled(bool(self.camera_id()))
+		# before the list is read the box holds only the last camera, Enable Camera reads the list
+		self.camera_button.setEnabled(bool(self.camera_id()) or self.media_devices is None)
 		self.swap_button.setEnabled(bool(self.camera_id()) and self.camera_button.isChecked())
 
 	def set_status(self, text : str) -> None:
