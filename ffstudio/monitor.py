@@ -34,10 +34,17 @@ def describe_metrics(metrics : Dict[str, Any]) -> List[Dict[str, Any]]:
 	parts = []
 	for gpu in metrics.get('gpus') or []:
 		name = gpu.get('name') or 'Graphics card'
-		parts.append({ 'text': 'GPU %d%%' % gpu.get('load', 0), 'warn': gpu.get('load', 0) >= 100 * WARN_SHARE, 'share': gpu.get('load', 0) / 100, 'tip': '%s\nBusy %d%% · %d °C' % (name, gpu.get('load', 0), gpu.get('temperature', 0)) })
+		busy = 'Busy %d%%' % gpu.get('load', 0)
+		# windows does not count the temperature of an intel card
+		if gpu.get('temperature') is not None:
+			busy += ' · %d °C' % gpu.get('temperature')
+		parts.append({ 'text': 'GPU %d%%' % gpu.get('load', 0), 'warn': gpu.get('load', 0) >= 100 * WARN_SHARE, 'share': gpu.get('load', 0) / 100, 'tip': '%s\n%s' % (name, busy) })
 		used, total = gpu.get('used', 0), gpu.get('total', 0)
 		if total:
-			parts.append({ 'text': 'VRAM ' + format_gigabytes(used, total), 'warn': used >= total * WARN_SHARE, 'share': used / total, 'tip': '%s memory in use, by every program\nFaceFusion needs more of it for larger models and pixel boost' % name })
+			tip = '%s memory in use, by every program\nFaceFusion needs more of it for larger models and pixel boost' % name
+			if gpu.get('shared'):
+				tip += '\nThis card has almost no memory of its own, it borrows it from the system RAM'
+			parts.append({ 'text': 'VRAM ' + format_gigabytes(used, total), 'warn': used >= total * WARN_SHARE, 'share': used / total, 'tip': tip })
 	parts.append({ 'text': 'CPU %d%%' % round(metrics.get('cpu', 0)), 'warn': metrics.get('cpu', 0) >= 100 * WARN_SHARE, 'share': metrics.get('cpu', 0) / 100, 'tip': 'Processor busy, all cores together' })
 	used, total = metrics.get('ram_used', 0), metrics.get('ram_total', 0)
 	if total:

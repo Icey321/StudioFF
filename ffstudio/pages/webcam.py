@@ -36,6 +36,7 @@ FPS_WINDOW = 10
 SWAP_BORDER_COLOR = QColor('#2ecc71')
 SWAP_BORDER_WIDTH = 4
 CAMERA_OFF_TEXT = 'The camera is off. Press Enable Camera to see it.'
+READY_TEXT = 'Ready · the models are loaded, Swap Face starts at once'
 
 
 def encode_frame(image : QImage, size : int) -> bytes:
@@ -126,6 +127,12 @@ class WebcamPage(SourceSelection, QWidget):
 		self.latest_is_new = False
 		self.streaming = False
 		self.starting = False
+		# Enable Camera opens the stream ahead of Swap Face and sends one frame, so facefusion loads its models.
+		# its answers are not shown while preloading; the stream stays open, Swap Face only starts showing them
+		self.preloading = False
+		# one frame goes out to load the models, again after a model or processor changed
+		self.warm_needed = False
+		self.models_ready = False
 		self.swapped_count = 0
 		self.frame_times : Deque[float] = deque(maxlen = FPS_WINDOW)
 		self.last_answer = 0.0
@@ -211,7 +218,7 @@ class WebcamPage(SourceSelection, QWidget):
 		run_layout.setContentsMargins(16, 12, 16, 12)
 		# off each time StudioFF starts, so the camera never turns on before the user asks for it
 		self.camera_button = TogglePushButton(FluentIcon.CAMERA, 'Enable Camera', run_card)
-		self.camera_button.setToolTip('Turn the webcam on to see it here. Turning it off also ends the swap.')
+		self.camera_button.setToolTip('Turn the webcam on to see it here. FaceFusion starts and loads its models too, so Swap Face starts at once.\nTurning it off also ends the swap and lets FaceFusion go.')
 		self.camera_button.installEventFilter(ToolTipFilter(self.camera_button))
 		self.camera_button.toggled.connect(self.on_camera_toggled)
 		run_layout.addWidget(self.camera_button)
@@ -299,6 +306,12 @@ class WebcamPage(SourceSelection, QWidget):
 			return
 		values = { dest: value for dest, value in self.changed_values.items() if value is not None and value != '' }
 		self.changed_values = {}
+		if self.preloading and any(dest == 'processors' or dest.endswith('_model') for dest in values):
+			# the new model loads with the next frame, one goes out for it
+			self.warm_needed = True
+			self.models_ready = False
+			if self.streaming:
+				self.set_status('Loading the models…')
 		if self.sources_changed:
 			self.sources_changed = False
 			self.client.set_sources(self.upload_sources(), lambda: self.client.set_state(values))
@@ -306,9 +319,18 @@ class WebcamPage(SourceSelection, QWidget):
 			self.client.set_state(values)
 
 	def on_sources_changed(self, change : str) -> None:
-		if change in [ 'list', 'selection' ] and (self.streaming or self.starting):
+		if change not in [ 'list', 'selection' ]:
+			return
+		if self.preloading and not self.upload_sources():
+			# nothing to swap with any more, facefusion waits for the next face
+			self.end_stream()
+			self.set_status('Swap off')
+		elif self.streaming or self.starting:
 			self.sources_changed = True
 			self.state_timer.start()
+		else:
+			# the first face added while the camera is on
+			self.preload()
 
 	def find_source_faces(self, paths : List[str]) -> None:
 		# a photo of several people stays one source, facefusion takes its largest face
@@ -372,15 +394,25 @@ class WebcamPage(SourceSelection, QWidget):
 				self.camera_button.setChecked(False)
 				return
 		if not checked and (self.streaming or self.starting):
-			self.stop()
+			self.end_stream()
+			self.set_status('Swap off')
 		self.refresh_buttons()
 		self.sync_camera()
-		if not checked:
+		if checked:
+			self.preload()
+		else:
 			self.view.set_text(CAMERA_OFF_TEXT if self.camera_id() else 'No camera found')
 
 	def wants_camera(self) -> bool:
 		"""the camera runs while Enable Camera is on and the page shows, or its picture goes somewhere else: the swap or the virtual camera"""
-		return self.camera_button.isChecked() and bool(self.camera_id()) and (self.isVisible() or self.streaming or self.starting or self.virtual_camera.running)
+		return self.camera_button.isChecked() and bool(self.camera_id()) and (self.isVisible() or self.is_swapping() or self.virtual_camera.running)
+
+	def is_swapping(self) -> bool:
+		"""Swap Face is on, a preloading stream does not count"""
+		return (self.streaming or self.starting) and not self.preloading
+
+	def is_live(self) -> bool:
+		return self.streaming and not self.preloading
 
 	def sync_camera(self) -> None:
 		if self.wants_camera():
@@ -410,7 +442,7 @@ class WebcamPage(SourceSelection, QWidget):
 
 	def on_camera_error(self, _ : Any, text : str) -> None:
 		# the swap ends while the failed camera is still set, so ending it does not open the camera again
-		if self.streaming or self.starting:
+		if self.is_swapping():
 			self.on_failed('The camera did not start: ' + text)
 		self.close_camera()
 		self.view.set_text('The camera did not start: ' + text)
@@ -431,10 +463,10 @@ class WebcamPage(SourceSelection, QWidget):
 			return
 		self.latest_image = image
 		self.latest_is_new = True
-		if not self.streaming or not self.swapped_count:
+		if not self.is_live() or not self.swapped_count:
 			# the camera's own picture while the swap is off, and until the first swapped frame comes back
 			self.view.set_image(image)
-			if not self.streaming and self.virtual_camera.running:
+			if not self.is_live() and self.virtual_camera.running:
 				self.virtual_camera.send(bgr_array(scaled_frame(image, self.frame_size())))
 			self.check_virtual_camera()
 		self.send_latest()
@@ -443,8 +475,11 @@ class WebcamPage(SourceSelection, QWidget):
 		return int(self.size_box.currentData() or FRAME_SIZE_DEFAULT)
 
 	def send_latest(self) -> None:
+		if self.preloading and not self.warm_needed:
+			return
 		if self.latest_image is not None and self.latest_is_new and self.client.wants_frame():
 			self.latest_is_new = False
+			self.warm_needed = False
 			self.client.send_frame(encode_frame(self.latest_image, self.frame_size()))
 
 	# running
@@ -462,6 +497,9 @@ class WebcamPage(SourceSelection, QWidget):
 		self.view.set_border(checked)
 
 	def start(self) -> None:
+		if self.preloading:
+			self.show_swap()
+			return
 		if self.streaming or self.starting:
 			return
 		if not self.session.is_configured():
@@ -473,8 +511,36 @@ class WebcamPage(SourceSelection, QWidget):
 			self.session.notify.emit('warning', 'No source face', 'Add a face image to put on the webcam, and select it.')
 			return
 		self.set_swap_button(True)
+		self.begin()
+
+	def preload(self) -> None:
+		"""Enable Camera gets facefusion going and its models loaded, quietly: without facefusion or a face it waits for Swap Face"""
+		if self.streaming or self.starting or not self.camera_button.isChecked() or not self.session.is_configured() or not self.upload_sources():
+			return
+		self.preloading = True
+		self.begin()
+
+	def show_swap(self) -> None:
+		"""Swap Face on a preloaded stream: the frames sent from now on come back swapped and show"""
+		self.preloading = False
+		self.warm_needed = False
+		self.set_swap_button(True)
+		self.swapped_count = 0
+		self.frame_times.clear()
+		self.last_answer = 0.0
+		self.refresh_buttons()
+		self.sync_camera()
+		if self.streaming:
+			self.set_status('Swapping…' if self.models_ready else 'Loading the models, the first frame takes a while…')
+			self.latest_is_new = self.latest_image is not None
+			self.send_latest()
+
+	def begin(self) -> None:
+		"""opens the session and the stream, for the swap or to preload"""
 		self.session.save()
 		self.starting = True
+		self.warm_needed = True
+		self.models_ready = False
 		self.swapped_count = 0
 		self.frame_times.clear()
 		self.changed_values = {}
@@ -499,7 +565,7 @@ class WebcamPage(SourceSelection, QWidget):
 		self.starting = False
 		self.streaming = True
 		self.refresh_buttons()
-		self.set_status('Loading the models, the first frame takes a while…')
+		self.set_status('Loading the models…' if self.preloading else 'Loading the models, the first frame takes a while…')
 		self.latest_is_new = self.latest_image is not None
 		self.send_latest()
 
@@ -507,6 +573,14 @@ class WebcamPage(SourceSelection, QWidget):
 		image = QImage.fromData(data)
 		if image.isNull() or not self.streaming:
 			return
+		if self.preloading:
+			# the models are loaded, the frame itself is not shown
+			self.models_ready = True
+			if not self.warm_needed:
+				self.set_status(READY_TEXT)
+			self.send_latest()
+			return
+		self.models_ready = True
 		self.swapped_count += 1
 		now = time.monotonic()
 		if self.last_answer and self.swapped_count > 1:
@@ -529,6 +603,17 @@ class WebcamPage(SourceSelection, QWidget):
 			self.set_status('Live · first frame took %s' % format_seconds(elapsed))
 
 	def stop(self) -> None:
+		"""Swap Face off: while the camera is on the stream stays open with the models loaded, so the next swap starts at once"""
+		if self.camera_button.isChecked() and (self.streaming or self.starting):
+			self.preloading = True
+			self.warm_needed = not self.models_ready
+			self.set_swap_button(False)
+			self.swapped_count = 0
+			self.refresh_buttons()
+			self.sync_camera()
+			if self.streaming:
+				self.set_status(READY_TEXT if self.models_ready else 'Loading the models…')
+			return
 		self.end_stream()
 		self.set_status('Swap off')
 
@@ -536,6 +621,9 @@ class WebcamPage(SourceSelection, QWidget):
 		was_live = self.streaming or self.starting
 		self.starting = False
 		self.streaming = False
+		self.preloading = False
+		self.warm_needed = False
+		self.models_ready = False
 		self.state_timer.stop()
 		self.client.close()
 		self.set_swap_button(False)
@@ -605,11 +693,11 @@ class WebcamPage(SourceSelection, QWidget):
 		self.virtual_box.setEnabled(True)
 		if installed:
 			self.session.notify.emit('success', 'pyvirtualcam installed', 'Start the OBS virtual camera once if you have not, then pick "OBS Virtual Camera" in the other app.')
-			self.set_status('Live' if self.streaming else 'Swap off')
+			self.set_status('Live' if self.is_live() else READY_TEXT if self.preloading and self.models_ready else 'Swap off')
 			self.start_virtual_camera()
 		else:
 			self.virtual_box.setChecked(False)
-			self.set_status('Live' if self.streaming else 'Swap off')
+			self.set_status('Live' if self.is_live() else READY_TEXT if self.preloading and self.models_ready else 'Swap off')
 			self.session.notify.emit('error', 'pyvirtualcam did not install', error)
 
 	def shutdown(self) -> None:
