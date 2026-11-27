@@ -35,6 +35,7 @@ FPS_WINDOW = 10
 # the border around the picture while the faces are swapped
 SWAP_BORDER_COLOR = QColor('#2ecc71')
 SWAP_BORDER_WIDTH = 4
+CAMERA_OFF_TEXT = 'The camera is off. Press Enable Camera to see it.'
 
 
 def encode_frame(image : QImage, size : int) -> bytes:
@@ -64,7 +65,7 @@ class FrameView(QWidget):
 	def __init__(self, parent : Optional[QWidget] = None) -> None:
 		super().__init__(parent)
 		self.pixmap = QPixmap()
-		self.text = 'Starting the camera…'
+		self.text = CAMERA_OFF_TEXT
 		self.border = False
 		self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 		self.setMinimumSize(320, 240)
@@ -208,6 +209,12 @@ class WebcamPage(SourceSelection, QWidget):
 		run_card = SimpleCardWidget(self)
 		run_layout = QHBoxLayout(run_card)
 		run_layout.setContentsMargins(16, 12, 16, 12)
+		# off each time StudioFF starts, so the camera never turns on before the user asks for it
+		self.camera_button = TogglePushButton(FluentIcon.CAMERA, 'Enable Camera', run_card)
+		self.camera_button.setToolTip('Turn the webcam on to see it here. Turning it off also ends the swap.')
+		self.camera_button.installEventFilter(ToolTipFilter(self.camera_button))
+		self.camera_button.toggled.connect(self.on_camera_toggled)
+		run_layout.addWidget(self.camera_button)
 		# one button turns the swap on and off, the camera's own picture shows while it is off
 		self.swap_button = TogglePushButton(FluentIcon.PEOPLE, 'Swap Face', run_card)
 		self.swap_button.setToolTip('Put the source face on the webcam. Press again to see the camera as it is.')
@@ -337,9 +344,17 @@ class WebcamPage(SourceSelection, QWidget):
 		if self.camera is not None:
 			self.open_camera()
 
+	def on_camera_toggled(self, checked : bool) -> None:
+		if not checked and (self.streaming or self.starting):
+			self.stop()
+		self.refresh_buttons()
+		self.sync_camera()
+		if not checked:
+			self.view.set_text(CAMERA_OFF_TEXT)
+
 	def wants_camera(self) -> bool:
-		"""the camera runs while the page shows, and while its picture goes somewhere else: the swap or the virtual camera"""
-		return bool(self.camera_id()) and (self.isVisible() or self.streaming or self.starting or self.virtual_camera.running)
+		"""the camera runs while Enable Camera is on and the page shows, or its picture goes somewhere else: the swap or the virtual camera"""
+		return self.camera_button.isChecked() and bool(self.camera_id()) and (self.isVisible() or self.streaming or self.starting or self.virtual_camera.running)
 
 	def sync_camera(self) -> None:
 		if self.wants_camera():
@@ -521,7 +536,8 @@ class WebcamPage(SourceSelection, QWidget):
 		self.session.notify.emit('warning', 'Some options were not used', "FaceFusion's API did not take %s, it keeps its own value." % ', '.join(names))
 
 	def refresh_buttons(self) -> None:
-		self.swap_button.setEnabled(bool(self.camera_id()))
+		self.camera_button.setEnabled(bool(self.camera_id()))
+		self.swap_button.setEnabled(bool(self.camera_id()) and self.camera_button.isChecked())
 
 	def set_status(self, text : str) -> None:
 		self.status_label.setText(text)
